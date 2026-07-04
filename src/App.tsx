@@ -94,9 +94,11 @@ function App() {
   return (
     <div className="dashboard">
       <header className="dashboard-header">
-        <h1>3ie DEP Prompt Lab</h1>
+        <h1>3ie Prompt Lab</h1>
         <p className="muted">
-          Prompt optimization dashboard — extraction models, prompt lineage, and optimizer progress.
+          We test different AI models and prompts on evidence-synthesis tasks — like screening
+          studies for inclusion/exclusion and pulling structured details (authors, institutions,
+          sectors) out of research papers — to see which combinations work best.
         </p>
         <nav className="tab-nav">
           <button className={tab === "dashboard" ? "tab-btn active" : "tab-btn"} onClick={() => setTab("dashboard")}>
