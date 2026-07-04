@@ -20,15 +20,19 @@ export function IterationChart({ iterations }: { iterations: IterationLog[] }) {
   }));
   return (
     <ResponsiveContainer width="100%" height={220}>
-      <LineChart data={data} margin={{ top: 8, right: 16, bottom: 0, left: -16 }}>
+      <LineChart data={data} margin={{ top: 8, right: 16, bottom: 0, left: 8 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#333" />
         <XAxis dataKey="iteration" stroke="#999" label={{ value: "iteration", position: "insideBottom", offset: -2, fill: "#999" }} />
-        <YAxis domain={[0, 1]} stroke="#999" />
+        <YAxis
+          domain={[0, 1]}
+          stroke="#999"
+          label={{ value: "validation score (0-1)", angle: -90, position: "insideLeft", fill: "#999" }}
+        />
         <Tooltip
           contentStyle={{ background: "#1e1e1e", border: "1px solid #444" }}
           formatter={(value) => (typeof value === "number" ? value.toFixed(3) : value)}
         />
-        <Line type="monotone" dataKey="score" stroke="#61dafb" strokeWidth={2} dot={{ r: 4 }} />
+        <Line type="monotone" dataKey="score" name="validation score" stroke="#61dafb" strokeWidth={2} dot={{ r: 4 }} />
       </LineChart>
     </ResponsiveContainer>
   );

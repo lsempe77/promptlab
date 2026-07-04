@@ -34,8 +34,12 @@ export function ConfusionMatrix({ confusion }: { confusion: Confusion | null }) 
             <span className="stat-label">precision</span>
           </div>
           <div className="stat-card">
-            <span className="stat-value">{pct(confusion.recall)}</span>
-            <span className="stat-label">recall</span>
+            <span className="stat-value">{pct(confusion.sensitivity)}</span>
+            <span className="stat-label">sensitivity (recall)</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-value">{confusion.specificity === null ? "n/a" : pct(confusion.specificity)}</span>
+            <span className="stat-label">specificity</span>
           </div>
           <div className="stat-card">
             <span className="stat-value">{confusion.f1.toFixed(3)}</span>
@@ -46,6 +50,12 @@ export function ConfusionMatrix({ confusion }: { confusion: Confusion | null }) 
             <span className="stat-label">F2 (recall-weighted)</span>
           </div>
         </div>
+        {confusion.specificity === null && (
+          <p className="muted panel-caption">
+            Specificity is n/a here: this is an open-vocabulary field (no fixed list of possible
+            values), so there's no fixed set of "negatives" to measure it against.
+          </p>
+        )}
       </div>
     );
   }
@@ -60,7 +70,26 @@ export function ConfusionMatrix({ confusion }: { confusion: Confusion | null }) 
         Rows = ground truth, columns = predicted. Diagonal = correct. {confusion.n} runs, overall
         accuracy {pct(confusion.accuracy)}.
       </p>
+      <div className="stat-grid">
+        <div className="stat-card highlight">
+          <span className="stat-value">{pct(confusion.accuracy)}</span>
+          <span className="stat-label">accuracy</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-value">{pct(confusion.sensitivity)}</span>
+          <span className="stat-label">sensitivity (recall)</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-value">{pct(confusion.specificity)}</span>
+          <span className="stat-label">specificity</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-value">{confusion.f2.toFixed(3)}</span>
+          <span className="stat-label">F2 (recall-weighted)</span>
+        </div>
+      </div>
       <div className="confusion-scroll">
+
         <table className="confusion-table">
           <thead>
             <tr>

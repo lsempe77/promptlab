@@ -58,6 +58,9 @@ export interface CategoricalConfusion {
   pred_labels: string[];
   matrix: number[][];
   accuracy: number;
+  sensitivity: number;
+  specificity: number;
+  f2: number;
   n: number;
 }
 
@@ -68,6 +71,8 @@ export interface ListConfusion {
   fn: number;
   precision: number;
   recall: number;
+  sensitivity: number;
+  specificity: number | null;
   f1: number;
   f2: number;
   n: number;

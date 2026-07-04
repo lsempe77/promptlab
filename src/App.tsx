@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type FieldInfo, type ModelSummary, type Thresholds } from "./api";
 import { ModelComparisonTable } from "./components/ModelComparisonTable";
 import { ModelCard } from "./components/ModelCard";
+import { ModelFilter } from "./components/ModelFilter";
 import { Methodology } from "./components/Methodology";
 import { About } from "./components/About";
 import "./App.css";
@@ -14,6 +15,7 @@ function App() {
   const [thresholds, setThresholds] = useState<Thresholds | null>(null);
 
   const [summaries, setSummaries] = useState<ModelSummary[]>([]);
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [loadingField, setLoadingField] = useState(false);
 
   useEffect(() => {
@@ -35,6 +37,7 @@ function App() {
       .modelsSummary(selected)
       .then((s) => {
         setSummaries(s);
+        setSelectedModels(new Set(s.map((m) => m.model_id)));
         setApiError(null);
       })
       .catch((e) => setApiError(String(e)))
@@ -42,6 +45,15 @@ function App() {
   }, [selected]);
 
   const activeField = fields?.find((f) => f.name === selected) ?? null;
+
+  function toggleModel(modelId: string) {
+    setSelectedModels((prev) => {
+      const next = new Set(prev);
+      if (next.has(modelId)) next.delete(modelId);
+      else next.add(modelId);
+      return next;
+    });
+  }
 
   return (
     <div className="dashboard">
@@ -117,9 +129,20 @@ function App() {
                         {summaries.length === 0 ? (
                           <p className="muted">No runs logged yet for this field.</p>
                         ) : (
-                          summaries.map((s) => (
-                            <ModelCard key={s.model_id} fieldName={selected!} summary={s} />
-                          ))
+                          <>
+                            <ModelFilter
+                              models={summaries.map((s) => s.model_id)}
+                              selected={selectedModels}
+                              onToggle={toggleModel}
+                              onSelectAll={() => setSelectedModels(new Set(summaries.map((s) => s.model_id)))}
+                              onSelectNone={() => setSelectedModels(new Set())}
+                            />
+                            {summaries
+                              .filter((s) => selectedModels.has(s.model_id))
+                              .map((s) => (
+                                <ModelCard key={s.model_id} fieldName={selected!} summary={s} />
+                              ))}
+                          </>
                         )}
                       </>
                     )}

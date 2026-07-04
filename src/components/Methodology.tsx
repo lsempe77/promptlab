@@ -27,6 +27,39 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
           <strong>{thresholds ? thresholds.fuzzy_match_threshold : "…"}</strong>.
         </dd>
 
+        <dt>Sensitivity (recall)</dt>
+        <dd>
+          Of everything that should have been extracted, the share the model actually found (true
+          positives / (true positives + false negatives)). Low sensitivity means the model is
+          missing values it should be reporting — e.g. only catching the first author's country
+          when a paper has several.
+        </dd>
+
+        <dt>Specificity</dt>
+        <dd>
+          Of everything that should <em>not</em> be reported for a record, the share the model
+          correctly left out (true negatives / (true negatives + false positives)). For
+          single-value fields (sector, sub-sector) and closed-vocabulary list fields (country, from
+          a fixed taxonomy), this is well-defined and shown. For open-vocabulary list fields
+          (authors, institutions — free text, no fixed list of possible values) there's no fixed
+          set of "negatives" to measure against, so it shows as <strong>n/a</strong>.
+        </dd>
+
+        <dt>F2 score</dt>
+        <dd>
+          Like F1, but weights recall higher than precision (missing a value is penalized more
+          than an extra/wrong one) — useful here since under-reporting (e.g. missing a co-author's
+          country) is usually the more costly mistake for this database.
+        </dd>
+
+        <dt>Confusion matrix</dt>
+        <dd>
+          For single-value fields (sector, sub-sector): rows = ground truth, columns = predicted,
+          diagonal = correct. For list fields (authors, institutions, countries), a literal matrix
+          isn't meaningful (open-set, multi-label), so matched/extra/missing item counts are shown
+          instead. Computed per model — see each model's own card.
+        </dd>
+
         <dt>Prompt lineage</dt>
         <dd>
           Every prompt the optimizer tries gets a permanent version row. <strong>Accepted</strong>{" "}
@@ -37,9 +70,9 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
 
         <dt>Optimizer progress</dt>
         <dd>
-          Mean validation-set score of the best candidate at each optimizer iteration. A flat or
-          declining line after an iteration means the optimizer stopped improving and reverted to
-          the prior best prompt.
+          Validation-set score (y-axis, 0–1) of the best candidate prompt at each optimizer
+          iteration (x-axis) for that model. A flat or declining line after an iteration means the
+          optimizer stopped improving and reverted to the prior best prompt.
         </dd>
       </dl>
     </details>
