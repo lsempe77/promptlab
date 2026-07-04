@@ -49,6 +49,29 @@ export interface Thresholds {
   improvement_epsilon: number;
 }
 
+export interface CategoricalConfusion {
+  type: "categorical";
+  truth_labels: string[];
+  pred_labels: string[];
+  matrix: number[][];
+  accuracy: number;
+  n: number;
+}
+
+export interface ListConfusion {
+  type: "list";
+  tp: number;
+  fp: number;
+  fn: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  f2: number;
+  n: number;
+}
+
+export type Confusion = CategoricalConfusion | ListConfusion;
+
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`);
   if (!res.ok) {
@@ -63,4 +86,5 @@ export const api = {
   modelsSummary: (field: string) => getJson<ModelSummary[]>(`/api/fields/${field}/models-summary`),
   iterations: (field: string) => getJson<IterationLog[]>(`/api/fields/${field}/iterations`),
   thresholds: () => getJson<Thresholds>("/api/config/thresholds"),
+  confusion: (field: string) => getJson<Confusion>(`/api/fields/${field}/confusion`),
 };

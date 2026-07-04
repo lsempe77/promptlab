@@ -1,12 +1,23 @@
 import { useEffect, useState } from "react";
-import { api, type FieldInfo, type IterationLog, type ModelSummary, type PromptVersion, type Thresholds } from "./api";
+import {
+  api,
+  type Confusion,
+  type FieldInfo,
+  type IterationLog,
+  type ModelSummary,
+  type PromptVersion,
+  type Thresholds,
+} from "./api";
 import { ModelComparisonTable } from "./components/ModelComparisonTable";
 import { PromptLineage } from "./components/PromptLineage";
 import { IterationChart } from "./components/IterationChart";
 import { Methodology } from "./components/Methodology";
+import { ConfusionMatrix } from "./components/ConfusionMatrix";
+import { About } from "./components/About";
 import "./App.css";
 
 function App() {
+  const [tab, setTab] = useState<"dashboard" | "about">("dashboard");
   const [fields, setFields] = useState<FieldInfo[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -15,6 +26,7 @@ function App() {
   const [summaries, setSummaries] = useState<ModelSummary[]>([]);
   const [versions, setVersions] = useState<PromptVersion[]>([]);
   const [iterations, setIterations] = useState<IterationLog[]>([]);
+  const [confusion, setConfusion] = useState<Confusion | null>(null);
   const [loadingField, setLoadingField] = useState(false);
 
   useEffect(() => {
@@ -32,15 +44,18 @@ function App() {
   useEffect(() => {
     if (!selected) return;
     setLoadingField(true);
+    setConfusion(null);
     Promise.all([
       api.modelsSummary(selected),
       api.promptVersions(selected),
       api.iterations(selected),
+      api.confusion(selected),
     ])
-      .then(([s, v, it]) => {
+      .then(([s, v, it, c]) => {
         setSummaries(s);
         setVersions(v);
         setIterations(it);
+        setConfusion(c);
         setApiError(null);
       })
       .catch((e) => setApiError(String(e)))
@@ -56,70 +71,89 @@ function App() {
         <p className="muted">
           Prompt optimization dashboard — extraction models, prompt lineage, and optimizer progress.
         </p>
+        <nav className="tab-nav">
+          <button className={tab === "dashboard" ? "tab-btn active" : "tab-btn"} onClick={() => setTab("dashboard")}>
+            Dashboard
+          </button>
+          <button className={tab === "about" ? "tab-btn active" : "tab-btn"} onClick={() => setTab("about")}>
+            How it works
+          </button>
+        </nav>
       </header>
 
-      {apiError && (
-        <div className="api-error">
-          <strong>Can't reach the API</strong> ({apiError}). Is the backend running locally? Start it with{" "}
-          <code>python -m backend.scripts.serve</code> from the DEP project, then reload this page.
-        </div>
-      )}
+      {tab === "about" ? (
+        <About />
+      ) : (
+        <>
+          {apiError && (
+            <div className="api-error">
+              <strong>Can't reach the API</strong> ({apiError}). Is the backend running locally? Start it with{" "}
+              <code>python -m backend.scripts.serve</code> from the DEP project, then reload this page.
+            </div>
+          )}
 
-      {!apiError && !fields && <p className="muted">Loading fields…</p>}
+          {!apiError && !fields && <p className="muted">Loading fields…</p>}
 
-      <Methodology thresholds={thresholds} />
+          <Methodology thresholds={thresholds} />
 
-      {fields && fields.length > 0 && (
-        <div className="dashboard-body">
-          <nav className="field-nav">
-            {fields.map((f) => (
-              <button
-                key={f.name}
-                className={f.name === selected ? "field-btn active" : "field-btn"}
-                onClick={() => setSelected(f.name)}
-              >
-                {f.label}
-              </button>
-            ))}
-          </nav>
+          {fields && fields.length > 0 && (
+            <div className="dashboard-body">
+              <nav className="field-nav">
+                {fields.map((f) => (
+                  <button
+                    key={f.name}
+                    className={f.name === selected ? "field-btn active" : "field-btn"}
+                    onClick={() => setSelected(f.name)}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </nav>
 
-          <main className="field-detail">
-            {activeField && (
-              <>
-                <section className="panel">
-                  <h2>{activeField.label}</h2>
-                  <p className="muted">{activeField.description}</p>
-                </section>
-
-                {loadingField ? (
-                  <p className="muted">Loading…</p>
-                ) : (
+              <main className="field-detail">
+                {activeField && (
                   <>
                     <section className="panel">
-                      <h3>Model comparison</h3>
-                      {thresholds && (
-                        <p className="muted panel-caption">
-                          Accuracy = share of runs scoring ≥ {thresholds.correct_threshold.toFixed(2)}
-                        </p>
-                      )}
-                      <ModelComparisonTable summaries={summaries} />
+                      <h2>{activeField.label}</h2>
+                      <p className="muted">{activeField.description}</p>
                     </section>
 
-                    <section className="panel">
-                      <h3>Optimizer progress</h3>
-                      <IterationChart iterations={iterations} />
-                    </section>
+                    {loadingField ? (
+                      <p className="muted">Loading…</p>
+                    ) : (
+                      <>
+                        <section className="panel">
+                          <h3>Model comparison</h3>
+                          {thresholds && (
+                            <p className="muted panel-caption">
+                              Accuracy = share of runs scoring ≥ {thresholds.correct_threshold.toFixed(2)}
+                            </p>
+                          )}
+                          <ModelComparisonTable summaries={summaries} />
+                        </section>
 
-                    <section className="panel">
-                      <h3>Prompt lineage</h3>
-                      <PromptLineage versions={versions} />
-                    </section>
+                        <section className="panel">
+                          <h3>Confusion matrix / F-scores</h3>
+                          <ConfusionMatrix confusion={confusion} />
+                        </section>
+
+                        <section className="panel">
+                          <h3>Optimizer progress</h3>
+                          <IterationChart iterations={iterations} />
+                        </section>
+
+                        <section className="panel">
+                          <h3>Prompt lineage</h3>
+                          <PromptLineage versions={versions} />
+                        </section>
+                      </>
+                    )}
                   </>
                 )}
-              </>
-            )}
-          </main>
-        </div>
+              </main>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

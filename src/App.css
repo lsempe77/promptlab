@@ -24,6 +24,130 @@ body {
   font-size: 1.6rem;
 }
 
+.tab-nav {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #9a9a9a;
+  padding: 8px 4px;
+  margin-right: 16px;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.tab-btn:hover {
+  color: #d8d8d8;
+}
+
+.tab-btn.active {
+  color: #cfe4ff;
+  border-bottom-color: #3a5a86;
+}
+
+.about-steps {
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.about-list {
+  padding-left: 20px;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: #c8c8c8;
+}
+
+.stat-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.stat-card {
+  background: #1c1c1c;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 100px;
+}
+
+.stat-card.highlight {
+  border-color: #3a5a86;
+  background: #1c2636;
+}
+
+.stat-value {
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+
+.stat-label {
+  font-size: 0.72rem;
+  color: #9a9a9a;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-top: 2px;
+}
+
+.confusion-scroll {
+  overflow-x: auto;
+}
+
+.confusion-table {
+  border-collapse: collapse;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.confusion-table th,
+.confusion-table td {
+  border: 1px solid #2a2a2a;
+  padding: 4px 8px;
+  text-align: center;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.confusion-table thead th {
+  color: #9a9a9a;
+  font-weight: 500;
+}
+
+.confusion-table tbody th {
+  text-align: right;
+  color: #9a9a9a;
+  font-weight: 500;
+}
+
+.confusion-table td.diag {
+  background: #16241a;
+}
+
+.confusion-table td.diag-hit {
+  background: #1e3a26;
+  color: #7bd996;
+  font-weight: 600;
+}
+
+.confusion-table td.off-diag-hit {
+  background: #2a1c1c;
+  color: #d97b7b;
+}
+
 .muted {
   color: #9a9a9a;
 }
