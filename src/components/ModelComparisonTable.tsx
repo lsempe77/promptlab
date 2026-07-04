@@ -1,7 +1,13 @@
 import type { ModelSummary } from "../api";
 
-function pct(x: number) {
+function pct(x: number | null) {
+  if (x == null) return "—";
   return `${(x * 100).toFixed(1)}%`;
+}
+
+function score(x: number | null) {
+  if (x == null) return "—";
+  return x.toFixed(3);
 }
 
 function usd(x: number | null) {
@@ -36,7 +42,7 @@ export function ModelComparisonTable({ summaries }: { summaries: ModelSummary[] 
           <tr key={s.model_id}>
             <td className="model-id">{s.model_id}</td>
             <td>{s.n}</td>
-            <td>{s.mean_score.toFixed(3)}</td>
+            <td>{score(s.mean_score)}</td>
             <td>{pct(s.accuracy)}</td>
             <td className={s.n_errors > 0 ? "has-errors" : ""}>{s.n_errors}</td>
             <td>{ms(s.mean_latency_ms)}</td>

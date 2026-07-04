@@ -327,6 +327,56 @@ body {
   cursor: pointer;
 }
 
+.job-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #241c0c;
+  border: 1px solid #6b4f1a;
+  color: #f0d9a6;
+  padding: 10px 16px;
+  border-radius: 8px;
+  margin-bottom: 18px;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.job-spinner {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #6b4f1a;
+  border-top-color: #f0d9a6;
+  animation: job-spin 0.8s linear infinite;
+}
+
+@keyframes job-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.badge-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #241c0c;
+  color: #f0d9a6;
+  border: 1px solid #6b4f1a;
+  font-size: 0.72rem;
+  padding: 2px 10px;
+  border-radius: 10px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.badge-running .job-spinner {
+  width: 8px;
+  height: 8px;
+  border-width: 1.5px;
+}
+
 .methodology {
   margin-bottom: 20px;
 }

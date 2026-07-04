@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
-import { api, type FieldInfo, type ModelSummary, type Thresholds } from "./api";
+import { useEffect, useRef, useState } from "react";
+import { api, type FieldInfo, type Job, type ModelSummary, type Thresholds } from "./api";
 import { ModelComparisonTable } from "./components/ModelComparisonTable";
 import { ModelCard } from "./components/ModelCard";
 import { ModelFilter } from "./components/ModelFilter";
 import { Methodology } from "./components/Methodology";
 import { About } from "./components/About";
 import "./App.css";
+
+const JOBS_POLL_MS = 6000;
 
 function App() {
   const [tab, setTab] = useState<"dashboard" | "about">("dashboard");
@@ -17,6 +19,8 @@ function App() {
   const [summaries, setSummaries] = useState<ModelSummary[]>([]);
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [loadingField, setLoadingField] = useState(false);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const prevRunningCount = useRef(0);
 
   useEffect(() => {
     api
@@ -33,6 +37,7 @@ function App() {
   useEffect(() => {
     if (!selected) return;
     setLoadingField(true);
+    prevRunningCount.current = 0;
     api
       .modelsSummary(selected)
       .then((s) => {
@@ -44,7 +49,38 @@ function App() {
       .finally(() => setLoadingField(false));
   }, [selected]);
 
+  // Poll for running extraction/optimization jobs so the dashboard can show a
+  // "currently running" indicator even though the backend has no push/websocket
+  // mechanism — this is the only way to notice a job started after page load.
+  // When a job's running count drops back to zero (it just finished), also
+  // re-fetch the model summary so newly-logged runs show up without a reload.
+  useEffect(() => {
+    if (!selected) return;
+    let cancelled = false;
+    const poll = () => {
+      api
+        .jobs(selected)
+        .then((j) => {
+          if (cancelled) return;
+          setJobs(j);
+          const runningCount = j.filter((job) => job.status === "running" && !job.stale).length;
+          if (runningCount === 0 && prevRunningCount.current > 0) {
+            api.modelsSummary(selected).then(setSummaries).catch(() => {});
+          }
+          prevRunningCount.current = runningCount;
+        })
+        .catch(() => {});
+    };
+    poll();
+    const id = window.setInterval(poll, JOBS_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [selected]);
+
   const activeField = fields?.find((f) => f.name === selected) ?? null;
+  const runningJobs = jobs.filter((j) => j.status === "running" && !j.stale);
 
   function toggleModel(modelId: string) {
     setSelectedModels((prev) => {
@@ -109,6 +145,27 @@ function App() {
                       <p className="muted">{activeField.description}</p>
                     </section>
 
+                    {runningJobs.length > 0 && (
+                      <div className="job-banner">
+                        <span className="job-spinner" aria-hidden="true" />
+                        <span>
+                          {runningJobs.length === 1
+                            ? "1 model is"
+                            : `${runningJobs.length} models are`}{" "}
+                          currently running for this field:{" "}
+                          {runningJobs
+                            .map(
+                              (j) =>
+                                `${j.model_id} (${j.kind}${
+                                  j.total ? `, ${j.completed}/${j.total}` : ""
+                                })`,
+                            )
+                            .join(", ")}
+                          . The dashboard will update automatically once it finishes.
+                        </span>
+                      </div>
+                    )}
+
                     {loadingField ? (
                       <p className="muted">Loading…</p>
                     ) : (
@@ -140,7 +197,12 @@ function App() {
                             {summaries
                               .filter((s) => selectedModels.has(s.model_id))
                               .map((s) => (
-                                <ModelCard key={s.model_id} fieldName={selected!} summary={s} />
+                                <ModelCard
+                                  key={s.model_id}
+                                  fieldName={selected!}
+                                  summary={s}
+                                  jobs={jobs.filter((j) => j.model_id === s.model_id)}
+                                />
                               ))}
                           </>
                         )}

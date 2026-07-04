@@ -23,7 +23,7 @@ export interface PromptVersion {
 export interface ModelSummary {
   model_id: string;
   n: number;
-  mean_score: number;
+  mean_score: number | null;
   n_errors: number;
   mean_latency_ms: number | null;
   total_cost_usd: number | null;
@@ -80,6 +80,21 @@ export interface ListConfusion {
 
 export type Confusion = CategoricalConfusion | ListConfusion;
 
+export interface Job {
+  id: number;
+  field_name: string;
+  model_id: string;
+  kind: "extraction" | "optimization";
+  status: "running" | "completed" | "failed";
+  total: number | null;
+  completed: number;
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+  error: string | null;
+  stale: boolean;
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`);
   if (!res.ok) {
@@ -97,6 +112,7 @@ export const api = {
       `/api/fields/${field}/iterations${modelId ? `?model_id=${encodeURIComponent(modelId)}` : ""}`,
     ),
   thresholds: () => getJson<Thresholds>("/api/config/thresholds"),
+  jobs: (field: string) => getJson<Job[]>(`/api/fields/${field}/jobs`),
   confusion: (field: string, modelId?: string) =>
     getJson<Confusion>(
       `/api/fields/${field}/confusion${modelId ? `?model_id=${encodeURIComponent(modelId)}` : ""}`,
