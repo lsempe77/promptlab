@@ -17,8 +17,11 @@ export function About() {
         <ol className="about-steps">
           <li>
             <strong>Ground truth.</strong> A human-curated spreadsheet of ~7,700 studies is joined
-            against the QA'd paper corpus (markdown text per study). Every field (authors,
-            affiliation, country, sector, sub-sector) has a known-correct value per study.
+            against the QA'd paper corpus (markdown text per study), giving every field (authors,
+            affiliation, country, sector, sub-sector) a known-correct value per study. This
+            deployment runs against a fixed, deliberately-sampled 300-study subset (studies with
+            complete ground truth across all 5 fields) rather than the full ~7,700 — kept small on
+            purpose so the production dataset stays cheap to host and reproduce.
           </li>
           <li>
             <strong>Extraction run.</strong> For a chosen field, model, and prompt version, every
@@ -64,12 +67,11 @@ export function About() {
       <section className="panel">
         <h2>Architecture notes</h2>
         <ul className="about-list">
-          <li>Backend (FastAPI + SQLite, no ORM/task queue) runs locally on the developer's machine.</li>
-          <li>
-            This frontend is deployed to GitHub Pages, which only serves static files — it can't host
-            the backend. It shows live data whenever a local backend is running and reachable at
-            the configured API URL; otherwise it shows a "can't reach the API" message.
-          </li>
+          <li>Backend (FastAPI + SQLite, no ORM/task queue) is deployed on Fly.io as an always-on
+            read-only API, serving the fixed 300-study production dataset described above.</li>
+          <li>This frontend is deployed to GitHub Pages (static files only) and fetches from that
+            always-on backend, so the dashboard shows real data regardless of whether anyone's
+            laptop is on.</li>
           <li>Every prompt version, run, and optimizer iteration is preserved for full provenance/debugging.</li>
         </ul>
       </section>
