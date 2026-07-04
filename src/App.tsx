@@ -1,122 +1,118 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useEffect, useState } from "react";
+import { api, type FieldInfo, type IterationLog, type ModelSummary, type PromptVersion } from "./api";
+import { ModelComparisonTable } from "./components/ModelComparisonTable";
+import { PromptLineage } from "./components/PromptLineage";
+import { IterationChart } from "./components/IterationChart";
+import "./App.css";
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [fields, setFields] = useState<FieldInfo[] | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  const [summaries, setSummaries] = useState<ModelSummary[]>([]);
+  const [versions, setVersions] = useState<PromptVersion[]>([]);
+  const [iterations, setIterations] = useState<IterationLog[]>([]);
+  const [loadingField, setLoadingField] = useState(false);
+
+  useEffect(() => {
+    api
+      .fields()
+      .then((f) => {
+        setFields(f);
+        setApiError(null);
+        if (f.length > 0) setSelected(f[0].name);
+      })
+      .catch((e) => setApiError(String(e)));
+  }, []);
+
+  useEffect(() => {
+    if (!selected) return;
+    setLoadingField(true);
+    Promise.all([
+      api.modelsSummary(selected),
+      api.promptVersions(selected),
+      api.iterations(selected),
+    ])
+      .then(([s, v, it]) => {
+        setSummaries(s);
+        setVersions(v);
+        setIterations(it);
+        setApiError(null);
+      })
+      .catch((e) => setApiError(String(e)))
+      .finally(() => setLoadingField(false));
+  }, [selected]);
+
+  const activeField = fields?.find((f) => f.name === selected) ?? null;
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div className="dashboard">
+      <header className="dashboard-header">
+        <h1>3ie DEP Prompt Lab</h1>
+        <p className="muted">
+          Prompt optimization dashboard — extraction models, prompt lineage, and optimizer progress.
+        </p>
+      </header>
 
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+      {apiError && (
+        <div className="api-error">
+          <strong>Can't reach the API</strong> ({apiError}). Is the backend running locally? Start it with{" "}
+          <code>python -m backend.scripts.serve</code> from the DEP project, then reload this page.
         </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+      )}
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+      {!apiError && !fields && <p className="muted">Loading fields…</p>}
+
+      {fields && fields.length > 0 && (
+        <div className="dashboard-body">
+          <nav className="field-nav">
+            {fields.map((f) => (
+              <button
+                key={f.name}
+                className={f.name === selected ? "field-btn active" : "field-btn"}
+                onClick={() => setSelected(f.name)}
+              >
+                {f.label}
+              </button>
+            ))}
+          </nav>
+
+          <main className="field-detail">
+            {activeField && (
+              <>
+                <section className="panel">
+                  <h2>{activeField.label}</h2>
+                  <p className="muted">{activeField.description}</p>
+                </section>
+
+                {loadingField ? (
+                  <p className="muted">Loading…</p>
+                ) : (
+                  <>
+                    <section className="panel">
+                      <h3>Model comparison</h3>
+                      <ModelComparisonTable summaries={summaries} />
+                    </section>
+
+                    <section className="panel">
+                      <h3>Optimizer progress</h3>
+                      <IterationChart iterations={iterations} />
+                    </section>
+
+                    <section className="panel">
+                      <h3>Prompt lineage</h3>
+                      <PromptLineage versions={versions} />
+                    </section>
+                  </>
+                )}
+              </>
+            )}
+          </main>
+        </div>
+      )}
+    </div>
+  );
 }
 
-export default App
+export default App;
