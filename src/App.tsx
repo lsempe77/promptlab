@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
-import { api, type FieldInfo, type IterationLog, type ModelSummary, type PromptVersion } from "./api";
+import { api, type FieldInfo, type IterationLog, type ModelSummary, type PromptVersion, type Thresholds } from "./api";
 import { ModelComparisonTable } from "./components/ModelComparisonTable";
 import { PromptLineage } from "./components/PromptLineage";
 import { IterationChart } from "./components/IterationChart";
+import { Methodology } from "./components/Methodology";
 import "./App.css";
 
 function App() {
   const [fields, setFields] = useState<FieldInfo[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [thresholds, setThresholds] = useState<Thresholds | null>(null);
 
   const [summaries, setSummaries] = useState<ModelSummary[]>([]);
   const [versions, setVersions] = useState<PromptVersion[]>([]);
@@ -24,6 +26,7 @@ function App() {
         if (f.length > 0) setSelected(f[0].name);
       })
       .catch((e) => setApiError(String(e)));
+    api.thresholds().then(setThresholds).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -64,6 +67,8 @@ function App() {
 
       {!apiError && !fields && <p className="muted">Loading fields…</p>}
 
+      <Methodology thresholds={thresholds} />
+
       {fields && fields.length > 0 && (
         <div className="dashboard-body">
           <nav className="field-nav">
@@ -92,6 +97,11 @@ function App() {
                   <>
                     <section className="panel">
                       <h3>Model comparison</h3>
+                      {thresholds && (
+                        <p className="muted panel-caption">
+                          Accuracy = share of runs scoring ≥ {thresholds.correct_threshold.toFixed(2)}
+                        </p>
+                      )}
                       <ModelComparisonTable summaries={summaries} />
                     </section>
 

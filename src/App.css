@@ -103,6 +103,38 @@ body {
   color: #cfcfcf;
 }
 
+.methodology {
+  margin-bottom: 20px;
+}
+
+.methodology summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #cfcfcf;
+}
+
+.methodology dl {
+  margin: 14px 0 0;
+}
+
+.methodology dt {
+  font-weight: 600;
+  color: #d8d8d8;
+  margin-top: 10px;
+}
+
+.methodology dd {
+  margin: 2px 0 0;
+  color: #a7a7a7;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.panel-caption {
+  margin: -6px 0 10px;
+  font-size: 0.82rem;
+}
+
 .model-table {
   width: 100%;
   border-collapse: collapse;
