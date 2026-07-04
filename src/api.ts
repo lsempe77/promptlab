@@ -41,6 +41,9 @@ export interface IterationLog {
   feedback: string | null;
   accepted: number;
   created_at: string;
+  prompt_version: number;
+  prompt_template: string;
+  prompt_notes: string | null;
 }
 
 export interface Thresholds {
@@ -84,7 +87,13 @@ export const api = {
   fields: () => getJson<FieldInfo[]>("/api/fields"),
   promptVersions: (field: string) => getJson<PromptVersion[]>(`/api/fields/${field}/prompt-versions`),
   modelsSummary: (field: string) => getJson<ModelSummary[]>(`/api/fields/${field}/models-summary`),
-  iterations: (field: string) => getJson<IterationLog[]>(`/api/fields/${field}/iterations`),
+  iterations: (field: string, modelId?: string) =>
+    getJson<IterationLog[]>(
+      `/api/fields/${field}/iterations${modelId ? `?model_id=${encodeURIComponent(modelId)}` : ""}`,
+    ),
   thresholds: () => getJson<Thresholds>("/api/config/thresholds"),
-  confusion: (field: string) => getJson<Confusion>(`/api/fields/${field}/confusion`),
+  confusion: (field: string, modelId?: string) =>
+    getJson<Confusion>(
+      `/api/fields/${field}/confusion${modelId ? `?model_id=${encodeURIComponent(modelId)}` : ""}`,
+    ),
 };

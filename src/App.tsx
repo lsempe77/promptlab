@@ -1,18 +1,8 @@
 import { useEffect, useState } from "react";
-import {
-  api,
-  type Confusion,
-  type FieldInfo,
-  type IterationLog,
-  type ModelSummary,
-  type PromptVersion,
-  type Thresholds,
-} from "./api";
+import { api, type FieldInfo, type ModelSummary, type Thresholds } from "./api";
 import { ModelComparisonTable } from "./components/ModelComparisonTable";
-import { PromptLineage } from "./components/PromptLineage";
-import { IterationChart } from "./components/IterationChart";
+import { ModelCard } from "./components/ModelCard";
 import { Methodology } from "./components/Methodology";
-import { ConfusionMatrix } from "./components/ConfusionMatrix";
 import { About } from "./components/About";
 import "./App.css";
 
@@ -24,9 +14,6 @@ function App() {
   const [thresholds, setThresholds] = useState<Thresholds | null>(null);
 
   const [summaries, setSummaries] = useState<ModelSummary[]>([]);
-  const [versions, setVersions] = useState<PromptVersion[]>([]);
-  const [iterations, setIterations] = useState<IterationLog[]>([]);
-  const [confusion, setConfusion] = useState<Confusion | null>(null);
   const [loadingField, setLoadingField] = useState(false);
 
   useEffect(() => {
@@ -44,18 +31,10 @@ function App() {
   useEffect(() => {
     if (!selected) return;
     setLoadingField(true);
-    setConfusion(null);
-    Promise.all([
-      api.modelsSummary(selected),
-      api.promptVersions(selected),
-      api.iterations(selected),
-      api.confusion(selected),
-    ])
-      .then(([s, v, it, c]) => {
+    api
+      .modelsSummary(selected)
+      .then((s) => {
         setSummaries(s);
-        setVersions(v);
-        setIterations(it);
-        setConfusion(c);
         setApiError(null);
       })
       .catch((e) => setApiError(String(e)))
@@ -122,30 +101,26 @@ function App() {
                       <p className="muted">Loading…</p>
                     ) : (
                       <>
-                        <section className="panel">
-                          <h3>Model comparison</h3>
+                        <section className="panel panel-aggregate">
+                          <h3>All models — summary</h3>
                           {thresholds && (
                             <p className="muted panel-caption">
-                              Accuracy = share of runs scoring ≥ {thresholds.correct_threshold.toFixed(2)}
+                              Accuracy = share of runs scoring ≥ {thresholds.correct_threshold.toFixed(2)}. Every
+                              model is optimized and evaluated against its own prompt history — see the per-model
+                              cards below for each model's own iteration progress, prompt lineage, and confusion
+                              matrix.
                             </p>
                           )}
                           <ModelComparisonTable summaries={summaries} />
                         </section>
 
-                        <section className="panel">
-                          <h3>Confusion matrix / F-scores</h3>
-                          <ConfusionMatrix confusion={confusion} />
-                        </section>
-
-                        <section className="panel">
-                          <h3>Optimizer progress</h3>
-                          <IterationChart iterations={iterations} />
-                        </section>
-
-                        <section className="panel">
-                          <h3>Prompt lineage</h3>
-                          <PromptLineage versions={versions} />
-                        </section>
+                        {summaries.length === 0 ? (
+                          <p className="muted">No runs logged yet for this field.</p>
+                        ) : (
+                          summaries.map((s) => (
+                            <ModelCard key={s.model_id} fieldName={selected!} summary={s} />
+                          ))
+                        )}
                       </>
                     )}
                   </>

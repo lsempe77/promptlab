@@ -227,6 +227,49 @@ body {
   color: #cfcfcf;
 }
 
+.panel-aggregate {
+  background: #172436;
+  border: 1px solid #2f4a70;
+}
+
+.panel-aggregate h3 {
+  color: #cfe4ff;
+}
+
+.model-card {
+  border-left: 3px solid #4a4a4a;
+}
+
+.model-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.model-card-header h4 {
+  margin: 0;
+  font-family: "SF Mono", Consolas, monospace;
+  font-size: 0.95rem;
+  color: #e8e8e8;
+  flex-shrink: 0;
+}
+
+.model-card-section {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #262626;
+}
+
+.model-card-section h5 {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #9a9a9a;
+}
+
 .methodology {
   margin-bottom: 20px;
 }
