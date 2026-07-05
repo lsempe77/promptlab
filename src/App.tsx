@@ -22,31 +22,32 @@ import "./App.css";
 const JOBS_POLL_MS = 6000;
 
 function StageBadge({ s }: { s: StageStatus }) {
-  const gateKnown = s.llm_judged_accuracy != null;
-  const atFinal = s.references >= s.final_stage;
-  const cls = !gateKnown ? "stage-badge neutral" : s.gate_passed ? "stage-badge pass" : "stage-badge gated";
+  const judged = s.n_models_judged;
+  const passing = s.n_models_passing;
+  const gatePct = Math.round(s.gate_threshold * 100);
+  const cls =
+    judged === 0
+      ? "stage-badge neutral"
+      : passing === judged
+        ? "stage-badge pass"
+        : passing === 0
+          ? "stage-badge gated"
+          : "stage-badge partial";
   return (
     <div className={cls}>
       <span className="stage-pill">Stage {s.references}/{s.final_stage}</span>
-      {gateKnown ? (
+      {judged > 0 ? (
         <span>
-          gate {Math.round((s.llm_judged_accuracy ?? 0) * 100)}%{" "}
-          {s.gate_passed ? "✓ passed" : "✗ gated"}{" "}
-          <span className="muted">
-            (need ≥{Math.round(s.gate_threshold * 100)}%, judged n={s.n_judged})
-          </span>
+          {passing}/{judged} models pass gate{" "}
+          <span className="muted">(≥{gatePct}% llm-judged accuracy, per model)</span>
         </span>
       ) : (
-        <span className="muted">gate: not yet judged</span>
+        <span className="muted">gate (≥{gatePct}%): not yet judged</span>
       )}
       <span className="muted">
         · {s.prompt_versions} prompt version{s.prompt_versions === 1 ? "" : "s"}{" "}
         ({s.prompt_versions_accepted} accepted)
       </span>
-      {gateKnown && !s.gate_passed && !atFinal && (
-        <span className="muted">· optimizing prompt before advancing</span>
-      )}
-      {atFinal && s.gate_passed && <span className="muted">· complete</span>}
     </div>
   );
 }
@@ -297,6 +298,7 @@ function App() {
                                   crossAgreement={crossAgreement.find((c) => c.model_id === s.model_id) ?? null}
                                   selfConsistency={selfConsistency.find((c) => c.model_id === s.model_id) ?? null}
                                   calibration={calibration.find((c) => c.model_id === s.model_id) ?? null}
+                                  gateThreshold={stageStatus?.gate_threshold ?? null}
                                 />
                               ))}
                           </>

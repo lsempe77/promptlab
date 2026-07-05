@@ -191,6 +191,40 @@ body {
   color: var(--accent-strong);
 }
 
+.stage-badge.partial {
+  border-color: #b8860b;
+  background: rgba(184, 134, 11, 0.06);
+}
+
+/* Per-model quality-gate chip inside a model's llm-judged-accuracy stat card. */
+.gate-chip {
+  margin-top: 6px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.gate-chip.pass {
+  background: rgba(46, 125, 79, 0.14);
+  color: #1f6b41;
+}
+
+.gate-chip.gated {
+  background: rgba(184, 134, 11, 0.16);
+  color: #8a6200;
+}
+
+/* Reliability diagram scales to fill the card width (viewBox keeps aspect). */
+.reliability {
+  width: 100%;
+  max-width: 460px;
+  height: auto;
+  display: block;
+  margin-top: 6px;
+}
+
 .stat-card {
   background: var(--bg-elevated);
   border: 1px solid var(--border);

@@ -81,16 +81,26 @@ export interface Calibration {
   bins: CalibrationBin[];
 }
 
-// Derived staged-rollout / quality-gate status for a field.
+// Derived staged-rollout / quality-gate status for a field. The gate is
+// evaluated PER MODEL within the field (each model's own LLM-judged accuracy
+// vs. the threshold), not as a single field-level verdict.
+export interface StageModelGate {
+  model_id: string;
+  llm_judged_accuracy: number;
+  n_judged: number;
+  gate_passed: boolean;
+}
+
 export interface StageStatus {
   references: number;
   stages: number[];
   stage_target: number | null;
   final_stage: number;
-  llm_judged_accuracy: number | null;
-  n_judged: number;
   gate_threshold: number;
-  gate_passed: boolean;
+  models: StageModelGate[];
+  n_models_judged: number;
+  n_models_passing: number;
+  n_judged: number;
   prompt_versions: number;
   prompt_versions_accepted: number;
 }

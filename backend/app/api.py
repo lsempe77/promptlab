@@ -301,11 +301,11 @@ def calibration(project_slug: str, field_name: str) -> list[dict]:
 @app.get("/api/projects/{project_slug}/fields/{field_name}/stage-status")
 def stage_status(project_slug: str, field_name: str) -> dict:
     """Derived staged-rollout status for a field (no manual state): how many
-    references it has reached (= current stage), the field-level LLM-judged
-    accuracy averaged across models (the gate metric) vs. the gate threshold,
-    and how many prompt versions have been tried. Lets the dashboard show a
-    'Stage 30/100 - gated / passed' badge and whether the optimizer is still
-    working the field."""
+    references it has reached (= current stage), and the quality gate evaluated
+    PER MODEL within the field (each model's own LLM-judged accuracy vs. the
+    gate threshold), plus how many prompt versions have been tried. The gate is
+    per (field, model) -- a field is not uniformly 'passed'/'gated'; individual
+    models pass or fail it -- so the dashboard summarises as 'N/M models pass'."""
     _field_or_404(project_slug, field_name)
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
@@ -321,27 +321,40 @@ def stage_status(project_slug: str, field_name: str) -> dict:
             "WHERE r.project_id = ? AND r.field_name = ? GROUP BY r.model_id",
             (project_id, field_name),
         ).fetchall()
-        per_model = [jr["acc"] for jr in jrows if (jr["n"] or 0) > 0]
-        judged_acc = (sum(per_model) / len(per_model)) if per_model else None
-        n_judged = sum((jr["n"] or 0) for jr in jrows)
         pv = conn.execute(
             "SELECT COUNT(*) AS total, SUM(CASE WHEN accepted = 1 THEN 1 ELSE 0 END) AS accepted "
             "FROM prompt_versions WHERE project_id = ? AND field_name = ?",
             (project_id, field_name),
         ).fetchone()
 
+    models = []
+    for jr in jrows:
+        n = jr["n"] or 0
+        if n <= 0 or jr["acc"] is None:
+            continue
+        acc = jr["acc"]
+        models.append(
+            {
+                "model_id": jr["model_id"],
+                "llm_judged_accuracy": acc,
+                "n_judged": n,
+                "gate_passed": acc >= scoring.GATE_THRESHOLD,
+            }
+        )
+    models.sort(key=lambda m: m["llm_judged_accuracy"], reverse=True)
+
     stages = list(config.PRODUCTION_ROLLOUT_STAGES)
     next_target = next((s for s in stages if s > references), None)  # None = final stage reached
-    gate_passed = judged_acc is not None and judged_acc >= scoring.GATE_THRESHOLD
     return {
         "references": references,
         "stages": stages,
         "stage_target": next_target,
         "final_stage": stages[-1] if stages else references,
-        "llm_judged_accuracy": judged_acc,
-        "n_judged": n_judged,
         "gate_threshold": scoring.GATE_THRESHOLD,
-        "gate_passed": gate_passed,
+        "models": models,
+        "n_models_judged": len(models),
+        "n_models_passing": sum(1 for m in models if m["gate_passed"]),
+        "n_judged": sum(m["n_judged"] for m in models),
         "prompt_versions": (pv["total"] if pv else 0) or 0,
         "prompt_versions_accepted": (pv["accepted"] if pv else 0) or 0,
     }

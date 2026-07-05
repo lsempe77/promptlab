@@ -65,9 +65,9 @@ function ConfidenceWhisker({ accuracy, ci }: { accuracy: number; ci: { low: numb
 // confidence bin. The dashed diagonal is perfect calibration; points below it
 // = overconfident, above = underconfident.
 function ReliabilityDiagram({ calibration }: { calibration: Calibration }) {
-  const W = 300;
-  const H = 240;
-  const pad = 42;
+  const W = 360;
+  const H = 300;
+  const pad = 50;
   const x = (v: number) => pad + v * (W - 2 * pad);
   const y = (v: number) => H - pad - v * (H - 2 * pad);
   const ticks = [0, 0.25, 0.5, 0.75, 1];
@@ -75,7 +75,7 @@ function ReliabilityDiagram({ calibration }: { calibration: Calibration }) {
     (b) => b.n > 0 && b.mean_confidence != null && b.accuracy != null,
   );
   return (
-    <svg className="reliability" viewBox={`0 0 ${W} ${H}`} width={W} height={H} role="img"
+    <svg className="reliability" viewBox={`0 0 ${W} ${H}`} role="img"
          aria-label="Reliability diagram: stated confidence versus observed accuracy">
       {ticks.map((t) => (
         <g key={t}>
@@ -132,6 +132,7 @@ export function ModelCard({
   crossAgreement = null,
   selfConsistency = null,
   calibration = null,
+  gateThreshold = null,
 }: {
   projectSlug: string;
   fieldName: string;
@@ -141,6 +142,7 @@ export function ModelCard({
   crossAgreement?: CrossModelAgreement | null;
   selfConsistency?: SelfConsistency | null;
   calibration?: Calibration | null;
+  gateThreshold?: number | null;
 }) {
   const [iters, setIters] = useState<IterationLog[] | null>(null);
   const [confusion, setConfusion] = useState<Confusion | null>(null);
@@ -214,6 +216,17 @@ export function ModelCard({
             <span className="stat-label">
               llm-judged accuracy{llmJudge && llmJudge.n_judged > 0 ? ` (${llmJudge.n_judged})` : ""}
             </span>
+            {llmJudge && llmJudge.n_judged > 0 && gateThreshold != null && (
+              <span
+                className={`gate-chip ${
+                  llmJudge.llm_judged_accuracy >= gateThreshold ? "pass" : "gated"
+                }`}
+              >
+                {llmJudge.llm_judged_accuracy >= gateThreshold
+                  ? `✓ gate ≥${Math.round(gateThreshold * 100)}%`
+                  : `✗ gated (<${Math.round(gateThreshold * 100)}%)`}
+              </span>
+            )}
           </div>
         </div>
         <div className="stat-section-label">Honesty</div>
