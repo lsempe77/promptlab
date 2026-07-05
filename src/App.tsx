@@ -96,7 +96,7 @@ function App() {
   return (
     <div className="dashboard">
       <header className="dashboard-header">
-        <h1>3ie Prompt Lab</h1>
+        <h1>Agentic 3ie Prompt Lab</h1>
         <p className="muted">
           We test different AI models and prompts on evidence-synthesis tasks — like screening
           studies for inclusion/exclusion and pulling structured details (authors, institutions,
