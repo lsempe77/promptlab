@@ -255,6 +255,25 @@ body {
   white-space: pre-wrap;
 }
 
+/* Prompt-version selector under the field title. */
+.version-select {
+  margin-top: 10px;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.version-select select {
+  font: inherit;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
 .stat-card {
   background: var(--bg-elevated);
   border: 1px solid var(--border);

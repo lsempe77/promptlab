@@ -49,6 +49,28 @@ def _field_or_404(project_slug: str, field_name: str) -> None:
         raise HTTPException(status_code=404, detail=f"Unknown field: {field_name!r} in project {project_slug!r}")
 
 
+def _resolve_pvid(conn, project_id: int, field_name: str, requested_version: int | None) -> int | None:
+    """Which prompt_version_id the run-derived metrics should filter on. Default
+    (requested_version None) = the latest prompt version that actually has runs
+    -- the current 'best' in production. A specific version resolves to its id;
+    an unknown version returns -1 so the caller yields an empty result instead of
+    silently pooling every version together."""
+    if requested_version is not None:
+        row = conn.execute(
+            "SELECT id FROM prompt_versions WHERE project_id = ? AND field_name = ? AND version = ?",
+            (project_id, field_name, requested_version),
+        ).fetchone()
+        return row["id"] if row else -1
+    row = conn.execute(
+        "SELECT r.prompt_version_id AS pvid FROM runs r "
+        "JOIN prompt_versions pv ON pv.id = r.prompt_version_id "
+        "WHERE r.project_id = ? AND r.field_name = ? AND r.prompt_version_id IS NOT NULL "
+        "ORDER BY pv.version DESC LIMIT 1",
+        (project_id, field_name),
+    ).fetchone()
+    return row["pvid"] if row else None
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -90,11 +112,30 @@ def prompt_versions(project_slug: str, field_name: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-@app.get("/api/projects/{project_slug}/fields/{field_name}/models-summary")
-def models_summary(project_slug: str, field_name: str) -> list[dict]:
+@app.get("/api/projects/{project_slug}/fields/{field_name}/run-versions")
+def run_versions(project_slug: str, field_name: str) -> list[dict]:
+    """Prompt versions that actually have logged runs for this field, newest
+    first, so the dashboard's version selector only offers versions with data.
+    The first entry is the default the metric endpoints use."""
     _field_or_404(project_slug, field_name)
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
+        rows = conn.execute(
+            "SELECT pv.version AS version, pv.accepted AS accepted, COUNT(*) AS n_runs "
+            "FROM runs r JOIN prompt_versions pv ON pv.id = r.prompt_version_id "
+            "WHERE r.project_id = ? AND r.field_name = ? "
+            "GROUP BY pv.version, pv.accepted ORDER BY pv.version DESC",
+            (project_id, field_name),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/projects/{project_slug}/fields/{field_name}/models-summary")
+def models_summary(project_slug: str, field_name: str, prompt_version: int | None = None) -> list[dict]:
+    _field_or_404(project_slug, field_name)
+    with db.get_conn() as conn:
+        project_id = db.get_project_id(conn, project_slug)
+        pvid = _resolve_pvid(conn, project_id, field_name, prompt_version)
         rows = conn.execute(
             """
             SELECT
@@ -115,11 +156,11 @@ def models_summary(project_slug: str, field_name: str) -> list[dict]:
                 MAX(pv.version) AS prompt_version
             FROM runs
             LEFT JOIN prompt_versions pv ON pv.id = runs.prompt_version_id
-            WHERE runs.project_id = ? AND runs.field_name = ?
+            WHERE runs.project_id = ? AND runs.field_name = ? AND runs.prompt_version_id = ?
             GROUP BY model_id
             ORDER BY mean_score DESC
             """,
-            (project_id, field_name),
+            (project_id, field_name, pvid),
         ).fetchall()
     result = []
     for r in rows:
@@ -141,7 +182,7 @@ def models_summary(project_slug: str, field_name: str) -> list[dict]:
 
 
 @app.get("/api/projects/{project_slug}/fields/{field_name}/llm-judge-summary")
-def llm_judge_summary(project_slug: str, field_name: str) -> list[dict]:
+def llm_judge_summary(project_slug: str, field_name: str, prompt_version: int | None = None) -> list[dict]:
     """Per-model LLM-as-judge verdict summary: a posterior semantic
     true/false judgment per run (see scripts/llm_judge.py), independent of
     the automated string-matching scorer used for `models-summary.accuracy`.
@@ -149,6 +190,7 @@ def llm_judge_summary(project_slug: str, field_name: str) -> list[dict]:
     _field_or_404(project_slug, field_name)
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
+        pvid = _resolve_pvid(conn, project_id, field_name, prompt_version)
         rows = conn.execute(
             """
             SELECT
@@ -157,10 +199,10 @@ def llm_judge_summary(project_slug: str, field_name: str) -> list[dict]:
                 SUM(CASE WHEN j.verdict = 1 THEN 1 ELSE 0 END) AS n_correct
             FROM llm_judgments j
             JOIN runs r ON r.id = j.run_id
-            WHERE r.project_id = ? AND r.field_name = ?
+            WHERE r.project_id = ? AND r.field_name = ? AND r.prompt_version_id = ?
             GROUP BY r.model_id
             """,
-            (project_id, field_name),
+            (project_id, field_name, pvid),
         ).fetchall()
     result = []
     for r in rows:
@@ -172,7 +214,7 @@ def llm_judge_summary(project_slug: str, field_name: str) -> list[dict]:
 
 
 @app.get("/api/projects/{project_slug}/fields/{field_name}/cross-model-agreement")
-def cross_model_agreement(project_slug: str, field_name: str) -> list[dict]:
+def cross_model_agreement(project_slug: str, field_name: str, prompt_version: int | None = None) -> list[dict]:
     """Per-model cross-model agreement: for each record, how often this model's
     extracted value agrees with the OTHER models that answered the same record
     (agreement = scorer score >= CORRECT_THRESHOLD, so semantically-equal values
@@ -182,11 +224,13 @@ def cross_model_agreement(project_slug: str, field_name: str) -> list[dict]:
     _field_or_404(project_slug, field_name)
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
+        pvid = _resolve_pvid(conn, project_id, field_name, prompt_version)
         rows = conn.execute(
             "SELECT record_id, model_id, parsed_value_json, created_at FROM runs "
-            "WHERE project_id = ? AND field_name = ? AND parsed_value_json IS NOT NULL AND error IS NULL "
+            "WHERE project_id = ? AND field_name = ? AND prompt_version_id = ? "
+            "AND parsed_value_json IS NOT NULL AND error IS NULL "
             "ORDER BY created_at",
-            (project_id, field_name),
+            (project_id, field_name, pvid),
         ).fetchall()
 
     # latest parsed value per (record, model)
@@ -243,7 +287,7 @@ def self_consistency_summary(project_slug: str, field_name: str) -> list[dict]:
 
 
 @app.get("/api/projects/{project_slug}/fields/{field_name}/calibration")
-def calibration(project_slug: str, field_name: str) -> list[dict]:
+def calibration(project_slug: str, field_name: str, prompt_version: int | None = None) -> list[dict]:
     """Per-model calibration of the model's *verbalized* confidence (the 0-1
     self-reported probability it attached to each answer) against whether the
     answer was actually correct (`is_correct`). Reports the Brier score
@@ -255,11 +299,13 @@ def calibration(project_slug: str, field_name: str) -> list[dict]:
     _field_or_404(project_slug, field_name)
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
+        pvid = _resolve_pvid(conn, project_id, field_name, prompt_version)
         rows = conn.execute(
             "SELECT model_id, confidence, is_correct FROM runs "
-            "WHERE project_id = ? AND field_name = ? AND confidence IS NOT NULL AND is_correct IS NOT NULL "
+            "WHERE project_id = ? AND field_name = ? AND prompt_version_id = ? "
+            "AND confidence IS NOT NULL AND is_correct IS NOT NULL "
             "AND error IS NULL",
-            (project_id, field_name),
+            (project_id, field_name, pvid),
         ).fetchall()
 
     n_bins = 5
@@ -407,7 +453,7 @@ def runs(project_slug: str, field_name: str, model_id: str | None = None, limit:
 
 
 @app.get("/api/projects/{project_slug}/fields/{field_name}/confusion")
-def confusion(project_slug: str, field_name: str, model_id: str | None = None) -> dict:
+def confusion(project_slug: str, field_name: str, model_id: str | None = None, prompt_version: int | None = None) -> dict:
     """Confusion matrix (categorical fields) or micro precision/recall/F1/F2
     (list fields), computed live from logged runs + ground truth."""
     _field_or_404(project_slug, field_name)
@@ -420,6 +466,9 @@ def confusion(project_slug: str, field_name: str, model_id: str | None = None) -
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
         params: list = [project_id, field_name]
+        pvid = _resolve_pvid(conn, project_id, field_name, prompt_version)
+        q += " AND r.prompt_version_id = ?"
+        params.append(pvid)
         if model_id:
             q += " AND r.model_id = ?"
             params.append(model_id)

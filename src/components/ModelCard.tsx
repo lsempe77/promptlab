@@ -133,6 +133,7 @@ export function ModelCard({
   selfConsistency = null,
   calibration = null,
   gateThreshold = null,
+  promptVersion = undefined,
 }: {
   projectSlug: string;
   fieldName: string;
@@ -143,6 +144,7 @@ export function ModelCard({
   selfConsistency?: SelfConsistency | null;
   calibration?: Calibration | null;
   gateThreshold?: number | null;
+  promptVersion?: number;
 }) {
   const [iters, setIters] = useState<IterationLog[] | null>(null);
   const [confusion, setConfusion] = useState<Confusion | null>(null);
@@ -150,17 +152,20 @@ export function ModelCard({
   // Re-fetch this model's own iteration/confusion data once its running job
   // count drops back to zero, so a finished run shows up without a reload.
   const wasRunning = useRef(false);
+  const prevVersion = useRef(promptVersion);
 
   useEffect(() => {
     const isRunningNow = runningJobs.length > 0;
     const justFinished = wasRunning.current && !isRunningNow;
     wasRunning.current = isRunningNow;
-    if (iters !== null && !justFinished) return;
+    const versionChanged = prevVersion.current !== promptVersion;
+    prevVersion.current = promptVersion;
+    if (iters !== null && !justFinished && !versionChanged) return;
     setIters(null);
     setConfusion(null);
     Promise.all([
       api.iterations(projectSlug, fieldName, summary.model_id),
-      api.confusion(projectSlug, fieldName, summary.model_id),
+      api.confusion(projectSlug, fieldName, summary.model_id, promptVersion),
     ])
       .then(([it, c]) => {
         setIters(it);
@@ -171,7 +176,7 @@ export function ModelCard({
         setConfusion(null);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectSlug, fieldName, summary.model_id, runningJobs.length]);
+  }, [projectSlug, fieldName, summary.model_id, runningJobs.length, promptVersion]);
 
   const accepted = iters?.filter((i) => i.accepted).length ?? 0;
   const rejected = (iters?.length ?? 0) - accepted;

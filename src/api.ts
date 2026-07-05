@@ -106,6 +106,13 @@ export interface StageStatus {
   prompt_versions_accepted: number;
 }
 
+// A prompt version that has logged runs for a field (for the version selector).
+export interface RunVersion {
+  version: number;
+  accepted: number;
+  n_runs: number;
+}
+
 export interface IterationLog {
   id: number;
   field_name: string;
@@ -179,31 +186,49 @@ async function getJson<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// Build a `?a=1&b=2` query string, skipping undefined/null params.
+function qs(params: Record<string, string | number | undefined | null>): string {
+  const parts = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== null)
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`);
+  return parts.length ? `?${parts.join("&")}` : "";
+}
+
 export const api = {
   projects: () => getJson<ProjectInfo[]>("/api/projects"),
   fields: (project: string) => getJson<FieldInfo[]>(`/api/projects/${project}/fields`),
   promptVersions: (project: string, field: string) =>
     getJson<PromptVersion[]>(`/api/projects/${project}/fields/${field}/prompt-versions`),
-  modelsSummary: (project: string, field: string) =>
-    getJson<ModelSummary[]>(`/api/projects/${project}/fields/${field}/models-summary`),
+  modelsSummary: (project: string, field: string, promptVersion?: number) =>
+    getJson<ModelSummary[]>(
+      `/api/projects/${project}/fields/${field}/models-summary${qs({ prompt_version: promptVersion })}`,
+    ),
   iterations: (project: string, field: string, modelId?: string) =>
     getJson<IterationLog[]>(
-      `/api/projects/${project}/fields/${field}/iterations${modelId ? `?model_id=${encodeURIComponent(modelId)}` : ""}`,
+      `/api/projects/${project}/fields/${field}/iterations${qs({ model_id: modelId })}`,
     ),
   thresholds: () => getJson<Thresholds>("/api/config/thresholds"),
   jobs: (project: string, field: string) => getJson<Job[]>(`/api/projects/${project}/fields/${field}/jobs`),
-  confusion: (project: string, field: string, modelId?: string) =>
+  confusion: (project: string, field: string, modelId?: string, promptVersion?: number) =>
     getJson<Confusion>(
-      `/api/projects/${project}/fields/${field}/confusion${modelId ? `?model_id=${encodeURIComponent(modelId)}` : ""}`,
+      `/api/projects/${project}/fields/${field}/confusion${qs({ model_id: modelId, prompt_version: promptVersion })}`,
     ),
-  llmJudgeSummary: (project: string, field: string) =>
-    getJson<LlmJudgeSummary[]>(`/api/projects/${project}/fields/${field}/llm-judge-summary`),
-  crossModelAgreement: (project: string, field: string) =>
-    getJson<CrossModelAgreement[]>(`/api/projects/${project}/fields/${field}/cross-model-agreement`),
+  llmJudgeSummary: (project: string, field: string, promptVersion?: number) =>
+    getJson<LlmJudgeSummary[]>(
+      `/api/projects/${project}/fields/${field}/llm-judge-summary${qs({ prompt_version: promptVersion })}`,
+    ),
+  crossModelAgreement: (project: string, field: string, promptVersion?: number) =>
+    getJson<CrossModelAgreement[]>(
+      `/api/projects/${project}/fields/${field}/cross-model-agreement${qs({ prompt_version: promptVersion })}`,
+    ),
   selfConsistency: (project: string, field: string) =>
     getJson<SelfConsistency[]>(`/api/projects/${project}/fields/${field}/self-consistency`),
-  calibration: (project: string, field: string) =>
-    getJson<Calibration[]>(`/api/projects/${project}/fields/${field}/calibration`),
+  calibration: (project: string, field: string, promptVersion?: number) =>
+    getJson<Calibration[]>(
+      `/api/projects/${project}/fields/${field}/calibration${qs({ prompt_version: promptVersion })}`,
+    ),
+  runVersions: (project: string, field: string) =>
+    getJson<RunVersion[]>(`/api/projects/${project}/fields/${field}/run-versions`),
   stageStatus: (project: string, field: string) =>
     getJson<StageStatus>(`/api/projects/${project}/fields/${field}/stage-status`),
 };
