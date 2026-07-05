@@ -56,6 +56,20 @@ def _judge_prompt(field_name: str, predicted, truth) -> str:
     )
 
 
+# Cross-family judge: to avoid self-preference bias, a model's output must be
+# judged by a model from a DIFFERENT family (same rule as the optimizer's
+# reflector in optimize_all.py). Anthropic outputs are judged by GPT; every
+# other family (OpenAI, Google, DeepSeek, xAI, Qwen, ...) is judged by Claude.
+_GPT_JUDGE = "~openai/gpt-latest"
+_CLAUDE_JUDGE = "~anthropic/claude-opus-latest"
+
+
+def _judge_for(model_id: str) -> str:
+    m = model_id.lower()
+    is_anthropic = "anthropic" in m or "claude" in m
+    return _GPT_JUDGE if is_anthropic else _CLAUDE_JUDGE
+
+
 def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
@@ -69,14 +83,38 @@ def main() -> None:
     parser.add_argument("--field", required=True, choices=list(FIELDS.keys()))
     parser.add_argument("--n", type=int, default=40, help="Max number of un-judged runs to judge.")
     parser.add_argument("--judge-model", default="openai/gpt-4o")
+    parser.add_argument("--cross-family", action="store_true",
+                        help="judge each run with a different model family (Anthropic->GPT, others->Claude) "
+                             "to avoid self-preference bias; ignores --judge-model")
     parser.add_argument("--concurrency", type=int, default=gateway.DEFAULT_MAX_CONCURRENCY)
     args = parser.parse_args()
 
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, args.project)
-        runs = db.get_runs_without_judgment(conn, project_id, args.field, args.judge_model, limit=args.n)
+        if args.cross_family:
+            candidates = conn.execute(
+                "SELECT id, model_id, record_id, parsed_value_json FROM runs "
+                "WHERE project_id = ? AND field_name = ? AND parsed_value_json IS NOT NULL "
+                "ORDER BY id",
+                (project_id, args.field),
+            ).fetchall()
+            already = {
+                (row["run_id"], row["judge_model"])
+                for row in conn.execute(
+                    "SELECT j.run_id, j.judge_model FROM llm_judgments j "
+                    "JOIN runs r ON r.id = j.run_id WHERE r.project_id = ? AND r.field_name = ?",
+                    (project_id, args.field),
+                )
+            }
+            runs = [r for r in candidates if (r["id"], _judge_for(r["model_id"])) not in already][: args.n]
+        else:
+            runs = db.get_runs_without_judgment(conn, project_id, args.field, args.judge_model, limit=args.n)
+        judge_of = {
+            r["id"]: (_judge_for(r["model_id"]) if args.cross_family else args.judge_model) for r in runs
+        }
+
         if not runs:
-            print(f"No un-judged runs left for field={args.field!r} judge_model={args.judge_model!r}.")
+            print(f"No un-judged runs left for field={args.field!r}.")
         else:
             gt_cache: dict[int, object] = {}
             jobs = []
@@ -91,7 +129,7 @@ def main() -> None:
                 predicted = json.loads(r["parsed_value_json"])
                 jobs.append(
                     {
-                        "model_id": args.judge_model,
+                        "model_id": judge_of[r["id"]],
                         "system_prompt": _JUDGE_SYSTEM,
                         "user_prompt": _judge_prompt(args.field, predicted, truth),
                         "temperature": 0.0,
@@ -99,7 +137,8 @@ def main() -> None:
                     }
                 )
 
-            print(f"Judging {len(jobs)} runs with {args.judge_model}...")
+            judge_desc = "cross-family judges" if args.cross_family else args.judge_model
+            print(f"Judging {len(jobs)} runs with {judge_desc}...")
             results = gateway.call_model_batch(jobs, max_workers=args.concurrency)
 
             n_ok, n_err = 0, 0
@@ -115,17 +154,25 @@ def main() -> None:
                     n_err += 1
                     print(f"  run {r['id']}: could not parse judge response ({exc})")
                     continue
-                db.add_llm_judgment(conn, r["id"], args.judge_model, verdict, reasoning)
+                db.add_llm_judgment(conn, r["id"], judge_of[r["id"]], verdict, reasoning)
                 n_ok += 1
             print(f"Judged: {n_ok}, failed/unparsable: {n_err}")
 
         # --- Report: agreement + threshold sweep, over ALL judged runs for this field ---
-        judged = conn.execute(
-            "SELECT r.score, r.is_correct, j.verdict FROM runs r "
-            "JOIN llm_judgments j ON j.run_id = r.id AND j.judge_model = ? "
-            "WHERE r.project_id = ? AND r.field_name = ?",
-            (args.judge_model, project_id, args.field),
-        ).fetchall()
+        if args.cross_family:
+            judged = conn.execute(
+                "SELECT r.score, r.is_correct, j.verdict FROM runs r "
+                "JOIN llm_judgments j ON j.run_id = r.id "
+                "WHERE r.project_id = ? AND r.field_name = ?",
+                (project_id, args.field),
+            ).fetchall()
+        else:
+            judged = conn.execute(
+                "SELECT r.score, r.is_correct, j.verdict FROM runs r "
+                "JOIN llm_judgments j ON j.run_id = r.id AND j.judge_model = ? "
+                "WHERE r.project_id = ? AND r.field_name = ?",
+                (args.judge_model, project_id, args.field),
+            ).fetchall()
 
     if not judged:
         print("No judged runs available for a report yet.")
@@ -133,7 +180,8 @@ def main() -> None:
 
     n = len(judged)
     agree = sum(1 for row in judged if bool(row["is_correct"]) == bool(row["verdict"]))
-    print(f"\n=== Report for field={args.field!r}, judge={args.judge_model!r}, n={n} ===")
+    judge_label = "cross-family" if args.cross_family else args.judge_model
+    print(f"\n=== Report for field={args.field!r}, judge={judge_label!r}, n={n} ===")
     print(f"Agreement between scorer.is_correct and LLM judge: {agree}/{n} ({agree / n:.1%})")
 
     print("\nThreshold sweep (scorer correct if score >= T, vs LLM judge as ground truth):")
