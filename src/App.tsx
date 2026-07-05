@@ -9,6 +9,7 @@ import {
   type ModelSummary,
   type ProjectInfo,
   type SelfConsistency,
+  type StageStatus,
   type Thresholds,
 } from "./api";
 import { ModelComparisonTable } from "./components/ModelComparisonTable";
@@ -19,6 +20,36 @@ import { About } from "./components/About";
 import "./App.css";
 
 const JOBS_POLL_MS = 6000;
+
+function StageBadge({ s }: { s: StageStatus }) {
+  const gateKnown = s.llm_judged_accuracy != null;
+  const atFinal = s.references >= s.final_stage;
+  const cls = !gateKnown ? "stage-badge neutral" : s.gate_passed ? "stage-badge pass" : "stage-badge gated";
+  return (
+    <div className={cls}>
+      <span className="stage-pill">Stage {s.references}/{s.final_stage}</span>
+      {gateKnown ? (
+        <span>
+          gate {Math.round((s.llm_judged_accuracy ?? 0) * 100)}%{" "}
+          {s.gate_passed ? "✓ passed" : "✗ gated"}{" "}
+          <span className="muted">
+            (need ≥{Math.round(s.gate_threshold * 100)}%, judged n={s.n_judged})
+          </span>
+        </span>
+      ) : (
+        <span className="muted">gate: not yet judged</span>
+      )}
+      <span className="muted">
+        · {s.prompt_versions} prompt version{s.prompt_versions === 1 ? "" : "s"}{" "}
+        ({s.prompt_versions_accepted} accepted)
+      </span>
+      {gateKnown && !s.gate_passed && !atFinal && (
+        <span className="muted">· optimizing prompt before advancing</span>
+      )}
+      {atFinal && s.gate_passed && <span className="muted">· complete</span>}
+    </div>
+  );
+}
 
 function App() {
   const [tab, setTab] = useState<"dashboard" | "about">("dashboard");
@@ -34,6 +65,7 @@ function App() {
   const [crossAgreement, setCrossAgreement] = useState<CrossModelAgreement[]>([]);
   const [selfConsistency, setSelfConsistency] = useState<SelfConsistency[]>([]);
   const [calibration, setCalibration] = useState<Calibration[]>([]);
+  const [stageStatus, setStageStatus] = useState<StageStatus | null>(null);
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [loadingField, setLoadingField] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -82,6 +114,7 @@ function App() {
     api.crossModelAgreement(selectedProject, selected).then(setCrossAgreement).catch(() => setCrossAgreement([]));
     api.selfConsistency(selectedProject, selected).then(setSelfConsistency).catch(() => setSelfConsistency([]));
     api.calibration(selectedProject, selected).then(setCalibration).catch(() => setCalibration([]));
+    api.stageStatus(selectedProject, selected).then(setStageStatus).catch(() => setStageStatus(null));
   }, [selectedProject, selected]);
 
   // Poll for running extraction/optimization jobs so the dashboard can show a
@@ -196,6 +229,7 @@ function App() {
                     <section className="panel">
                       <h2>{activeField.label}</h2>
                       <p className="muted">{activeField.description}</p>
+                      {stageStatus && <StageBadge s={stageStatus} />}
                     </section>
 
                     {runningJobs.length > 0 && (

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import analytics, db, scoring
+from . import analytics, config, db, scoring
 from .projects import PROJECTS
 
 app = FastAPI(title="Agentic 3ie Prompt Lab API")
@@ -296,6 +296,55 @@ def calibration(project_slug: str, field_name: str) -> list[dict]:
         })
     result.sort(key=lambda d: d["brier"])  # lower Brier = better calibrated
     return result
+
+
+@app.get("/api/projects/{project_slug}/fields/{field_name}/stage-status")
+def stage_status(project_slug: str, field_name: str) -> dict:
+    """Derived staged-rollout status for a field (no manual state): how many
+    references it has reached (= current stage), the field-level LLM-judged
+    accuracy averaged across models (the gate metric) vs. the gate threshold,
+    and how many prompt versions have been tried. Lets the dashboard show a
+    'Stage 30/100 - gated / passed' badge and whether the optimizer is still
+    working the field."""
+    _field_or_404(project_slug, field_name)
+    with db.get_conn() as conn:
+        project_id = db.get_project_id(conn, project_slug)
+        row = conn.execute(
+            "SELECT COUNT(DISTINCT record_id) AS recs FROM runs "
+            "WHERE project_id = ? AND field_name = ? AND error IS NULL",
+            (project_id, field_name),
+        ).fetchone()
+        references = (row["recs"] if row else 0) or 0
+        jrows = conn.execute(
+            "SELECT r.model_id, AVG(CASE WHEN j.verdict = 1 THEN 1.0 ELSE 0.0 END) AS acc, "
+            "COUNT(*) AS n FROM llm_judgments j JOIN runs r ON r.id = j.run_id "
+            "WHERE r.project_id = ? AND r.field_name = ? GROUP BY r.model_id",
+            (project_id, field_name),
+        ).fetchall()
+        per_model = [jr["acc"] for jr in jrows if (jr["n"] or 0) > 0]
+        judged_acc = (sum(per_model) / len(per_model)) if per_model else None
+        n_judged = sum((jr["n"] or 0) for jr in jrows)
+        pv = conn.execute(
+            "SELECT COUNT(*) AS total, SUM(CASE WHEN accepted = 1 THEN 1 ELSE 0 END) AS accepted "
+            "FROM prompt_versions WHERE project_id = ? AND field_name = ?",
+            (project_id, field_name),
+        ).fetchone()
+
+    stages = list(config.PRODUCTION_ROLLOUT_STAGES)
+    next_target = next((s for s in stages if s > references), None)  # None = final stage reached
+    gate_passed = judged_acc is not None and judged_acc >= scoring.GATE_THRESHOLD
+    return {
+        "references": references,
+        "stages": stages,
+        "stage_target": next_target,
+        "final_stage": stages[-1] if stages else references,
+        "llm_judged_accuracy": judged_acc,
+        "n_judged": n_judged,
+        "gate_threshold": scoring.GATE_THRESHOLD,
+        "gate_passed": gate_passed,
+        "prompt_versions": (pv["total"] if pv else 0) or 0,
+        "prompt_versions_accepted": (pv["accepted"] if pv else 0) or 0,
+    }
 
 
 @app.get("/api/projects/{project_slug}/fields/{field_name}/iterations")

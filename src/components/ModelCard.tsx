@@ -65,21 +65,35 @@ function ConfidenceWhisker({ accuracy, ci }: { accuracy: number; ci: { low: numb
 // confidence bin. The dashed diagonal is perfect calibration; points below it
 // = overconfident, above = underconfident.
 function ReliabilityDiagram({ calibration }: { calibration: Calibration }) {
-  const W = 160;
-  const H = 160;
-  const pad = 22;
+  const W = 300;
+  const H = 240;
+  const pad = 42;
   const x = (v: number) => pad + v * (W - 2 * pad);
   const y = (v: number) => H - pad - v * (H - 2 * pad);
+  const ticks = [0, 0.25, 0.5, 0.75, 1];
   const pts = calibration.bins.filter(
     (b) => b.n > 0 && b.mean_confidence != null && b.accuracy != null,
   );
   return (
-    <svg className="reliability" width={W} height={H} role="img"
+    <svg className="reliability" viewBox={`0 0 ${W} ${H}`} width={W} height={H} role="img"
          aria-label="Reliability diagram: stated confidence versus observed accuracy">
-      <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="currentColor" strokeOpacity={0.3} />
-      <line x1={pad} y1={pad} x2={pad} y2={H - pad} stroke="currentColor" strokeOpacity={0.3} />
-      <line x1={x(0)} y1={y(0)} x2={x(1)} y2={y(1)} stroke="currentColor" strokeOpacity={0.25}
-            strokeDasharray="3 3" />
+      {ticks.map((t) => (
+        <g key={t}>
+          <line x1={x(t)} y1={y(0)} x2={x(t)} y2={y(1)} stroke="currentColor" strokeOpacity={0.08} />
+          <line x1={x(0)} y1={y(t)} x2={x(1)} y2={y(t)} stroke="currentColor" strokeOpacity={0.08} />
+          <text x={x(t)} y={y(0) + 15} textAnchor="middle" fontSize={9} fill="currentColor" opacity={0.6}>
+            {t * 100}
+          </text>
+          <text x={x(0) - 8} y={y(t) + 3} textAnchor="end" fontSize={9} fill="currentColor" opacity={0.6}>
+            {t * 100}
+          </text>
+        </g>
+      ))}
+      <line x1={x(0)} y1={y(0)} x2={x(1)} y2={y(0)} stroke="currentColor" strokeOpacity={0.35} />
+      <line x1={x(0)} y1={y(0)} x2={x(0)} y2={y(1)} stroke="currentColor" strokeOpacity={0.35} />
+      <line x1={x(0)} y1={y(0)} x2={x(1)} y2={y(1)} stroke="#8a9bb0" strokeOpacity={0.75} strokeDasharray="4 3" />
+      <text x={x(0.62)} y={y(0.30)} fontSize={9} fill="currentColor" opacity={0.35}>overconfident</text>
+      <text x={x(0.04)} y={y(0.9)} fontSize={9} fill="currentColor" opacity={0.35}>underconfident</text>
       {pts.length > 1 && (
         <polyline
           points={pts.map((b) => `${x(b.mean_confidence!)},${y(b.accuracy!)}`).join(" ")}
@@ -88,14 +102,22 @@ function ReliabilityDiagram({ calibration }: { calibration: Calibration }) {
       )}
       {pts.map((b, i) => (
         <circle key={i} cx={x(b.mean_confidence!)} cy={y(b.accuracy!)}
-                r={Math.min(6, 2 + Math.sqrt(b.n))} fill="#0067b1" fillOpacity={0.75} />
+                r={Math.min(7, 3 + Math.sqrt(b.n))} fill="#0067b1" fillOpacity={0.75}>
+          <title>
+            confidence {(b.mean_confidence! * 100).toFixed(0)}% → accuracy{" "}
+            {(b.accuracy! * 100).toFixed(0)}% (n={b.n})
+          </title>
+        </circle>
       ))}
-      <text x={W / 2} y={H - 4} textAnchor="middle" fontSize={8} fill="currentColor" opacity={0.6}>
-        stated confidence
+      <text x={(x(0) + x(1)) / 2} y={H - 6} textAnchor="middle" fontSize={10} fill="currentColor" opacity={0.7}>
+        stated confidence (%)
       </text>
-      <text x={8} y={H / 2} textAnchor="middle" fontSize={8} fill="currentColor" opacity={0.6}
-            transform={`rotate(-90 8 ${H / 2})`}>
-        accuracy
+      <text x={13} y={(y(0) + y(1)) / 2} textAnchor="middle" fontSize={10} fill="currentColor" opacity={0.7}
+            transform={`rotate(-90 13 ${(y(0) + y(1)) / 2})`}>
+        actual accuracy (%)
+      </text>
+      <text x={x(1)} y={y(1) - 5} textAnchor="end" fontSize={9} fill="#8a9bb0">
+        perfect calibration
       </text>
     </svg>
   );
@@ -163,6 +185,7 @@ export function ModelCard({
             {j.kind} running{j.total ? ` (${j.completed}/${j.total})` : ""}
           </span>
         ))}
+        <div className="stat-section-label">Accuracy</div>
         <div className="stat-grid">
           <div className="stat-card">
             <span className="stat-value">{summary.n}</span>
@@ -193,6 +216,7 @@ export function ModelCard({
             </span>
           </div>
         </div>
+        <div className="stat-section-label">Honesty</div>
         <div className="stat-grid">
           <div className="stat-card">
             <span className="stat-value">
@@ -213,6 +237,7 @@ export function ModelCard({
             <span className="stat-label">wrong rate</span>
           </div>
         </div>
+        <div className="stat-section-label">Confidence signals</div>
         <div className="stat-grid">
           <div className="stat-card">
             <span className="stat-value">
@@ -245,9 +270,12 @@ export function ModelCard({
         <div className="model-card-section">
           <h5>Confidence calibration</h5>
           <p className="muted panel-caption">
-            Brier score {calibration.brier.toFixed(3)} (lower is better) &middot; avg stated
-            confidence {pct(calibration.mean_confidence)} vs {pct(calibration.accuracy)} actual
-            accuracy &middot; n={calibration.n_scored}
+            Brier score {calibration.brier.toFixed(3)}{" "}
+            <span className="muted">
+              (0 = perfect · ≤0.10 well-calibrated · ~0.25 ≈ no better than guessing; lower is better)
+            </span>{" "}
+            &middot; avg stated confidence {pct(calibration.mean_confidence)} vs{" "}
+            {pct(calibration.accuracy)} actual accuracy &middot; n={calibration.n_scored}
           </p>
           <ReliabilityDiagram calibration={calibration} />
         </div>

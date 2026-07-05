@@ -81,6 +81,20 @@ export interface Calibration {
   bins: CalibrationBin[];
 }
 
+// Derived staged-rollout / quality-gate status for a field.
+export interface StageStatus {
+  references: number;
+  stages: number[];
+  stage_target: number | null;
+  final_stage: number;
+  llm_judged_accuracy: number | null;
+  n_judged: number;
+  gate_threshold: number;
+  gate_passed: boolean;
+  prompt_versions: number;
+  prompt_versions_accepted: number;
+}
+
 export interface IterationLog {
   id: number;
   field_name: string;
@@ -179,4 +193,6 @@ export const api = {
     getJson<SelfConsistency[]>(`/api/projects/${project}/fields/${field}/self-consistency`),
   calibration: (project: string, field: string) =>
     getJson<Calibration[]>(`/api/projects/${project}/fields/${field}/calibration`),
+  stageStatus: (project: string, field: string) =>
+    getJson<StageStatus>(`/api/projects/${project}/fields/${field}/stage-status`),
 };
