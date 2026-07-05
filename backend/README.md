@@ -247,6 +247,17 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
 
 ## Known issues / follow-ups
 
+- **Ground-truth noise on `author_affiliation` and `sub_sector` (found in the n=30 rollout, 2026-07-05)**:
+  the low LLM-judged accuracy on these two fields is largely a *ground-truth quality* problem, not a
+  model/prompt failure. For `author_affiliation` the curated GT is inconsistent (sparse entries like
+  `"Not specified"`, coarser than what models extract, and outdated institution names — e.g. GT
+  `"Centre for Health and Population Research"` vs the model's correct `"ICDDR,B"`, which are the same
+  org). For `sub_sector`, models often pick a *valid* WB sub-sector (e.g. `"Livestock"` for an
+  animal-health paper) that disagrees with an odd GT label (`"Other - Industry, trade and services"`).
+  The baseline prompts were tightened (report the parent institution / treat name variants as one;
+  choose the WB sub-sector hierarchically) and the optimizer can refine further, but chasing 0.80
+  against noisy labels has a ceiling — these fields may warrant a GT clean-up pass before their scores
+  can be trusted at face value.
 - **Free-tier upstream rate-limiting**: some free-tier models (seen with `meta-llama/llama-3.3-70b-instruct:free`, `qwen/qwen3-coder:free`, occasionally `google/gemma-4-26b-a4b-it:free`) can get 100% 429-rate-limited by their upstream provider for a period, independent of anything in this codebase. `gateway.call_model()` already retries 3x with backoff on 429, but once a call fails all 3 retries it's logged as a permanent error row for that batch — there's no automatic later re-attempt. Use `python -m backend.scripts.retry_failed_runs --field <field> [--models a,b]` afterwards to re-run just the `(record, model)` pairs that have no successful run yet, once the outage clears.
 - **Scoring thresholds not empirically derived**: `scoring.CORRECT_THRESHOLD` (0.9) and
   `scoring.FUZZY_MATCH_THRESHOLD` (95) are hand-picked. `scripts/llm_judge.py` runs a posterior

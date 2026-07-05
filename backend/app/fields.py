@@ -38,10 +38,15 @@ FIELDS: dict[str, FieldSpec] = {
         value_type="list_text",
         taxonomy_key=None,
         description=(
-            "All institution(s)/organization(s) that ANY author is affiliated with (e.g. university, "
-            "research center, government agency, NGO) \u2014 check every co-author's affiliation, not just the "
-            "first author's. List each distinct institution once, using its full name and abbreviation in "
-            "brackets if the paper gives one (e.g. 'International Initiative for Impact Evaluation (3ie)')."
+            "The institution(s)/organization(s) that authors are affiliated with (university, research "
+            "center, government agency, NGO). Report the PRIMARY parent institution for each author "
+            "(e.g. 'Cornell University'), NOT its internal departments, schools, centers or programs "
+            "(e.g. do not list 'Atkinson Center for a Sustainable Future' or 'Master of Public Health "
+            "Program' separately from their parent university). List each distinct parent institution "
+            "once, using its full name with any abbreviation in brackets (e.g. 'International Initiative "
+            "for Impact Evaluation (3ie)'). Treat known name variants of the same organization as one "
+            "(e.g. 'ICDDR,B' and 'Centre for Health and Population Research' are the same institution). "
+            "If an author's affiliation is not stated in the paper, do not invent one."
         ),
     ),
     "author_country": FieldSpec(
@@ -72,6 +77,11 @@ FIELDS: dict[str, FieldSpec] = {
         label="Sub-sector",
         value_type="single_categorical",
         taxonomy_key="sub_sectors_flat",
-        description="The single sub-sector (within the chosen sector) that best matches the paper's subject.",
+        description=(
+            "The single World Bank sub-sector that best matches the paper's subject, chosen ONLY from the "
+            "allowed list. First decide the paper's main sector, then pick the sub-sector that falls under "
+            "that sector; if several could apply, choose the most specific one the paper's intervention is "
+            "actually about. Use an 'Other - ...' option only when no specific sub-sector fits."
+        ),
     ),
 }
