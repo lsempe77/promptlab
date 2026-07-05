@@ -1,24 +1,24 @@
 :root {
-  color-scheme: dark;
-  --bg: #0e0f12;
-  --bg-elevated: #17181d;
-  --bg-elevated-2: #1d1f26;
-  --border: #2a2c34;
-  --border-strong: #3a3d48;
-  --text: #edeef2;
-  --text-muted: #9a9da8;
-  --accent: #5b9dff;
-  --accent-soft: #223350;
-  --accent-strong: #7ab3ff;
-  --good: #4fd980;
-  --good-soft: #163a24;
-  --bad: #ff6b6b;
-  --bad-soft: #3a1a1a;
-  --warn: #f0b93d;
-  --warn-soft: #2e2408;
+  color-scheme: light;
+  --bg: #f4f8fc;
+  --bg-elevated: #ffffff;
+  --bg-elevated-2: #eaf1f9;
+  --border: #d5e2f0;
+  --border-strong: #b6cce4;
+  --text: #12283b;
+  --text-muted: #57697c;
+  --accent: #0067b1;
+  --accent-soft: #dcebf8;
+  --accent-strong: #004b8d;
+  --good: #1f9d57;
+  --good-soft: #dcf3e6;
+  --bad: #d23b3b;
+  --bad-soft: #fbe3e3;
+  --warn: #b9791a;
+  --warn-soft: #fbeecb;
   --radius: 12px;
   --radius-sm: 8px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.55);
+  --shadow: 0 1px 2px rgba(16, 40, 70, 0.08), 0 8px 24px -14px rgba(16, 40, 70, 0.22);
   --mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
 }
 
@@ -29,8 +29,8 @@
 body {
   margin: 0;
   background:
-    radial-gradient(1200px 600px at 15% -10%, rgba(91, 157, 255, 0.08), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgba(79, 217, 128, 0.05), transparent 55%),
+    radial-gradient(1200px 600px at 15% -10%, rgba(0, 103, 177, 0.10), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(0, 75, 141, 0.06), transparent 55%),
     var(--bg);
   color: var(--text);
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -51,7 +51,7 @@ body {
   font-weight: 800;
   letter-spacing: -0.02em;
   overflow: visible;
-  background: linear-gradient(90deg, var(--text) 40%, var(--accent-strong));
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent));
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -103,7 +103,7 @@ body {
   padding-left: 20px;
   font-size: 0.92rem;
   line-height: 1.6;
-  color: #c8c8c8;
+  color: var(--text-muted);
 }
 
 .stat-grid {
@@ -148,6 +148,18 @@ body {
   margin-top: 3px;
 }
 
+.ci-whisker {
+  margin-top: 6px;
+  color: var(--text-muted);
+}
+
+.stat-ci {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  margin-top: 2px;
+}
+
 .confusion-scroll {
   overflow-x: auto;
 }
@@ -181,7 +193,7 @@ body {
 }
 
 .confusion-table td.diag {
-  background: rgba(79, 217, 128, 0.06);
+  background: var(--good-soft);
 }
 
 .confusion-table td.diag-hit {
@@ -201,15 +213,15 @@ body {
 
 .api-error {
   background: var(--bad-soft);
-  border: 1px solid #6b2b2b;
-  color: #f2c4c4;
+  border: 1px solid var(--bad);
+  color: var(--bad);
   padding: 12px 16px;
   border-radius: var(--radius-sm);
   margin: 16px 0;
 }
 
 .api-error code {
-  background: #201010;
+  background: var(--bad-soft);
   padding: 1px 6px;
   border-radius: 4px;
 }
@@ -297,7 +309,7 @@ body {
 
 .panel-aggregate {
   background: linear-gradient(160deg, var(--accent-soft), var(--bg-elevated) 65%);
-  border: 1px solid #2f4a70;
+  border: 1px solid var(--border-strong);
 }
 
 .panel-aggregate h3 {
@@ -410,7 +422,7 @@ body {
   align-items: center;
   gap: 10px;
   background: var(--warn-soft);
-  border: 1px solid #6b4f1a;
+  border: 1px solid var(--warn);
   color: var(--warn);
   padding: 12px 18px;
   border-radius: var(--radius-sm);
@@ -425,8 +437,8 @@ body {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  border: 2px solid #6b4f1a;
-  border-top-color: #f0d9a6;
+  border: 2px solid var(--warn);
+  border-top-color: transparent;
   animation: job-spin 0.8s linear infinite;
 }
 
@@ -442,7 +454,7 @@ body {
   gap: 6px;
   background: var(--warn-soft);
   color: var(--warn);
-  border: 1px solid #6b4f1a;
+  border: 1px solid var(--warn);
   font-size: 0.72rem;
   font-weight: 600;
   padding: 3px 10px;
@@ -464,7 +476,7 @@ body {
 .methodology summary {
   cursor: pointer;
   font-weight: 600;
-  color: #cfcfcf;
+  color: var(--text);
 }
 
 .methodology dl {
@@ -473,13 +485,13 @@ body {
 
 .methodology dt {
   font-weight: 600;
-  color: #d8d8d8;
+  color: var(--text);
   margin-top: 10px;
 }
 
 .methodology dd {
   margin: 2px 0 0;
-  color: #a7a7a7;
+  color: var(--text-muted);
   font-size: 0.9rem;
   line-height: 1.5;
 }
@@ -561,7 +573,7 @@ body {
 }
 
 .lineage-item.rejected {
-  border-left-color: #555;
+  border-left-color: var(--border-strong);
   opacity: 0.75;
 }
 
@@ -609,7 +621,7 @@ body {
 .lineage-notes {
   margin: 4px 0 0;
   font-size: 0.82rem;
-  color: #9a9a9a;
+  color: var(--text-muted);
   font-style: italic;
 }
 

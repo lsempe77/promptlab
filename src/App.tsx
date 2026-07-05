@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type FieldInfo, type Job, type LlmJudgeSummary, type ModelSummary, type Thresholds } from "./api";
+import {
+  api,
+  type Calibration,
+  type CrossModelAgreement,
+  type FieldInfo,
+  type Job,
+  type LlmJudgeSummary,
+  type ModelSummary,
+  type SelfConsistency,
+  type Thresholds,
+} from "./api";
 import { ModelComparisonTable } from "./components/ModelComparisonTable";
 import { ModelCard } from "./components/ModelCard";
 import { ModelFilter } from "./components/ModelFilter";
@@ -18,6 +28,9 @@ function App() {
 
   const [summaries, setSummaries] = useState<ModelSummary[]>([]);
   const [llmJudge, setLlmJudge] = useState<LlmJudgeSummary[]>([]);
+  const [crossAgreement, setCrossAgreement] = useState<CrossModelAgreement[]>([]);
+  const [selfConsistency, setSelfConsistency] = useState<SelfConsistency[]>([]);
+  const [calibration, setCalibration] = useState<Calibration[]>([]);
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [loadingField, setLoadingField] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -49,6 +62,9 @@ function App() {
       .catch((e) => setApiError(String(e)))
       .finally(() => setLoadingField(false));
     api.llmJudgeSummary(selected).then(setLlmJudge).catch(() => setLlmJudge([]));
+    api.crossModelAgreement(selected).then(setCrossAgreement).catch(() => setCrossAgreement([]));
+    api.selfConsistency(selected).then(setSelfConsistency).catch(() => setSelfConsistency([]));
+    api.calibration(selected).then(setCalibration).catch(() => setCalibration([]));
   }, [selected]);
 
   // Poll for running extraction/optimization jobs so the dashboard can show a
@@ -210,6 +226,9 @@ function App() {
                                   summary={s}
                                   jobs={jobs.filter((j) => j.model_id === s.model_id)}
                                   llmJudge={llmJudge.find((j) => j.model_id === s.model_id) ?? null}
+                                  crossAgreement={crossAgreement.find((c) => c.model_id === s.model_id) ?? null}
+                                  selfConsistency={selfConsistency.find((c) => c.model_id === s.model_id) ?? null}
+                                  calibration={calibration.find((c) => c.model_id === s.model_id) ?? null}
                                 />
                               ))}
                           </>

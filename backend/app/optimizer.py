@@ -86,6 +86,7 @@ def evaluate_instruction(
 
     usable_records: list[dict] = []
     jobs: list[dict[str, Any]] = []
+    sources: list[str] = []  # truncated md text the model saw, for excerpt verification
     for rec in records:
         try:
             md_text = read_md(rec["md_path"])
@@ -93,11 +94,12 @@ def evaluate_instruction(
             continue
         system_prompt, user_prompt = prompts.build_prompt(field_name, rec["title"] or "", md_text, instruction=instruction)
         usable_records.append(rec)
+        sources.append(md_text[: prompts.MAX_CHARS])
         jobs.append({"model_id": model_id, "system_prompt": system_prompt, "user_prompt": user_prompt})
 
     responses = gateway.call_model_batch(jobs, max_workers=max_workers)
 
-    for rec, resp in zip(usable_records, responses):
+    for rec, source, resp in zip(usable_records, sources, responses):
         run_kwargs = dict(
             prompt_version_id=prompt_version_id, model_id=model_id, record_id=rec["id"],
             field_name=field_name, batch_id=batch_id,
@@ -124,8 +126,14 @@ def evaluate_instruction(
                            completion_tokens=resp.completion_tokens, cost_usd=resp.cost_usd, error=str(exc))
             continue
 
-        result = scoring.score_field(field_name, value, rec["ground_truth"])
-        scores.append(result.score)
+        verified = scoring.verify_excerpt(meta.get("excerpt"), source)
+        result = scoring.score_field(field_name, value, rec["ground_truth"], excerpt_verified=verified)
+        # The optimizer optimizes the honesty-adjusted score (partial credit for
+        # honest abstention, and a penalty for a value cited with a fabricated
+        # excerpt), not the raw score, so it prefers calibrated honesty over
+        # confident wrong guesses. Raw `score` is still stored for
+        # display/aggregates.
+        scores.append(result.honesty_score)
         if not result.is_correct:
             failures.append({
                 "id": rec["id"],
@@ -136,6 +144,10 @@ def evaluate_instruction(
             })
         if conn is not None and prompt_version_id is not None:
             db.add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=value,
+                       excerpt=meta.get("excerpt"), notes=meta.get("notes"),
+                       excerpt_verified=(None if verified is None else int(verified)),
+                       confidence=meta.get("confidence"),
+                       outcome=result.outcome, honesty_score=result.honesty_score,
                        score=result.score, is_correct=int(result.is_correct), latency_ms=resp.latency_ms,
                        prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
                        cost_usd=resp.cost_usd, error=None)

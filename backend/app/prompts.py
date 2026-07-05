@@ -32,11 +32,14 @@ RESPOND IN VALID JSON FORMAT:
 {
     "excerpt": "<the sentence/line the value(s) come from, verbatim, or null if not found>",
     "values": [<string>, ...] or [],
+    "confidence": <a number from 0.0 to 1.0 = your probability that these values are correct and complete>,
     "notes": "<anything ambiguous or uncertain, or null>"
 }
 
 Rules: if the paper does not report this field, return "values": [] and "excerpt": null — never
-invent a value. List each distinct value once (no duplicates).
+invent a value. List each distinct value once (no duplicates). Set "confidence" honestly: use a
+low number when the paper is unclear or you are guessing, a high number only when the evidence is
+explicit.
 """
 
 _SINGLE_JSON_CONTRACT = """
@@ -44,11 +47,14 @@ RESPOND IN VALID JSON FORMAT:
 {
     "excerpt": "<the sentence/line the value comes from, verbatim, or null if not found>",
     "value": "<string or null>",
+    "confidence": <a number from 0.0 to 1.0 = your probability that this value is correct>,
     "notes": "<anything ambiguous or uncertain, or null>"
 }
 
 Rules: if the paper does not clearly support one of the allowed values, return "value": null —
-never invent or guess a value outside the allowed list.
+never invent or guess a value outside the allowed list. Set "confidence" honestly: use a low
+number when the paper is unclear or you are guessing, a high number only when the evidence is
+explicit.
 """
 
 # The v1 baseline instruction per field — also the starting point ("generation 0")

@@ -13,6 +13,7 @@ or:
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException
@@ -82,7 +83,14 @@ def models_summary(field_name: str) -> list[dict]:
                 model_id,
                 COUNT(*) AS n,
                 AVG(score) AS mean_score,
+                AVG(honesty_score) AS mean_honesty_score,
+                AVG(logprob_confidence) AS mean_logprob_confidence,
                 SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) AS n_correct,
+                SUM(CASE WHEN outcome = 'abstain_miss' THEN 1 ELSE 0 END) AS n_abstain,
+                SUM(CASE WHEN outcome = 'hallucination' THEN 1 ELSE 0 END) AS n_hallucination,
+                SUM(CASE WHEN outcome = 'wrong' THEN 1 ELSE 0 END) AS n_wrong,
+                SUM(CASE WHEN excerpt_verified = 1 THEN 1 ELSE 0 END) AS n_excerpt_verified,
+                SUM(CASE WHEN excerpt_verified IS NOT NULL THEN 1 ELSE 0 END) AS n_excerpt_cited,
                 SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) AS n_errors,
                 AVG(latency_ms) AS mean_latency_ms,
                 SUM(cost_usd) AS total_cost_usd
@@ -98,6 +106,16 @@ def models_summary(field_name: str) -> list[dict]:
         d = dict(r)
         n = d["n"] or 0
         d["accuracy"] = (d.pop("n_correct") / n) if n else 0.0
+        # Rates are over all runs for the model (same denominator as accuracy);
+        # error rows have a NULL outcome and so fall into none of these buckets.
+        d["abstention_rate"] = (d.pop("n_abstain") / n) if n else 0.0
+        d["hallucination_rate"] = (d.pop("n_hallucination") / n) if n else 0.0
+        d["wrong_rate"] = (d.pop("n_wrong") / n) if n else 0.0
+        # Of the answers that cited an excerpt, the share whose excerpt was
+        # actually found in the source text (None if none cited one -- e.g. an
+        # extraction run done before excerpt-verification existed).
+        n_cited = d.pop("n_excerpt_cited") or 0
+        d["excerpt_verified_rate"] = (d.pop("n_excerpt_verified") / n_cited) if n_cited else None
         result.append(d)
     return result
 
@@ -131,6 +149,131 @@ def llm_judge_summary(field_name: str) -> list[dict]:
         result.append(d)
     return result
 
+
+@app.get("/api/fields/{field_name}/cross-model-agreement")
+def cross_model_agreement(field_name: str) -> list[dict]:
+    """Per-model cross-model agreement: for each record, how often this model's
+    extracted value agrees with the OTHER models that answered the same record
+    (agreement = scorer score >= CORRECT_THRESHOLD, so semantically-equal values
+    count as agreeing). A model whose answers are usually backed by the pack is a
+    higher-confidence signal than a lone dissenter. Computed from existing runs —
+    no extra API calls. Uses the latest run per (record, model)."""
+    _field_or_404(field_name)
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT record_id, model_id, parsed_value_json, created_at FROM runs "
+            "WHERE field_name = ? AND parsed_value_json IS NOT NULL AND error IS NULL "
+            "ORDER BY created_at",
+            (field_name,),
+        ).fetchall()
+
+    # latest parsed value per (record, model)
+    latest: dict[tuple[int, str], object] = {}
+    for r in rows:
+        latest[(r["record_id"], r["model_id"])] = json.loads(r["parsed_value_json"])
+
+    by_record: dict[int, dict[str, object]] = defaultdict(dict)
+    for (rid, mid), val in latest.items():
+        by_record[rid][mid] = val
+
+    agree_sum: dict[str, float] = defaultdict(float)
+    agree_n: dict[str, int] = defaultdict(int)
+    for model_vals in by_record.values():
+        models = list(model_vals.keys())
+        if len(models) < 2:
+            continue  # need at least one peer to agree/disagree with
+        for m in models:
+            others = [o for o in models if o != m]
+            agreed = sum(
+                1 for o in others
+                if scoring.score_field(field_name, model_vals[m], model_vals[o]).score
+                >= scoring.CORRECT_THRESHOLD
+            )
+            agree_sum[m] += agreed / len(others)
+            agree_n[m] += 1
+
+    result = [
+        {"model_id": m, "n_records": agree_n[m], "agreement_rate": agree_sum[m] / agree_n[m]}
+        for m in agree_n
+    ]
+    result.sort(key=lambda d: d["agreement_rate"], reverse=True)
+    return result
+
+
+@app.get("/api/fields/{field_name}/self-consistency")
+def self_consistency_summary(field_name: str) -> list[dict]:
+    """Per-model self-consistency: mean agreement across the repeat-sampling
+    validation study (see scripts/self_consistency.py). Empty if the study
+    hasn't been run for this field."""
+    _field_or_404(field_name)
+    with db.get_conn() as conn:
+        try:
+            rows = conn.execute(
+                "SELECT model_id, COUNT(*) AS n_records, AVG(agreement) AS mean_agreement, "
+                "AVG(n_samples) AS mean_samples FROM self_consistency "
+                "WHERE field_name = ? GROUP BY model_id",
+                (field_name,),
+            ).fetchall()
+        except db.sqlite3.OperationalError:
+            return []  # table not present on this (older) DB yet
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/fields/{field_name}/calibration")
+def calibration(field_name: str) -> list[dict]:
+    """Per-model calibration of the model's *verbalized* confidence (the 0-1
+    self-reported probability it attached to each answer) against whether the
+    answer was actually correct (`is_correct`). Reports the Brier score
+    (mean squared error between stated confidence and correctness -- lower is
+    better, a proper scoring rule that rewards honest probabilities) plus
+    reliability-diagram bins (stated confidence vs. observed accuracy per
+    confidence band). This is a posterior diagnostic only -- confidence is NOT
+    folded into the per-run score."""
+    _field_or_404(field_name)
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT model_id, confidence, is_correct FROM runs "
+            "WHERE field_name = ? AND confidence IS NOT NULL AND is_correct IS NOT NULL "
+            "AND error IS NULL",
+            (field_name,),
+        ).fetchall()
+
+    n_bins = 5
+    by_model: dict[str, list[tuple[float, int]]] = defaultdict(list)
+    for r in rows:
+        by_model[r["model_id"]].append((float(r["confidence"]), int(r["is_correct"])))
+
+    result = []
+    for mid, pairs in by_model.items():
+        n = len(pairs)
+        if n == 0:
+            continue
+        brier = sum((c - y) ** 2 for c, y in pairs) / n
+        bins = []
+        for b in range(n_bins):
+            lo, hi = b / n_bins, (b + 1) / n_bins
+            members = [
+                (c, y) for c, y in pairs
+                if c >= lo and (c < hi or (b == n_bins - 1 and c <= hi))
+            ]
+            if members:
+                bins.append({
+                    "lo": lo, "hi": hi, "n": len(members),
+                    "mean_confidence": sum(c for c, _ in members) / len(members),
+                    "accuracy": sum(y for _, y in members) / len(members),
+                })
+            else:
+                bins.append({"lo": lo, "hi": hi, "n": 0, "mean_confidence": None, "accuracy": None})
+        result.append({
+            "model_id": mid,
+            "n_scored": n,
+            "brier": brier,
+            "mean_confidence": sum(c for c, _ in pairs) / n,
+            "accuracy": sum(y for _, y in pairs) / n,
+            "bins": bins,
+        })
+    result.sort(key=lambda d: d["brier"])  # lower Brier = better calibrated
+    return result
 
 
 @app.get("/api/fields/{field_name}/iterations")

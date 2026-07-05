@@ -40,7 +40,18 @@ cd ..
   injection guard).
 - **Scorer** (`app/scoring.py`): field-type aware — exact/fuzzy match for single categorical
   fields (sector, sub-sector), set-based F1 with fuzzy name matching for list fields (authors,
-  institutions), exact set match for list-categorical (countries).
+  institutions), exact set match for list-categorical (countries). Each run is also tagged with
+  an `outcome` (`hit` / `correct_abstain` / `abstain_miss` / `wrong` / `hallucination`) and a
+  separate `honesty_score`. The raw `score`/`is_correct`/accuracy numbers are unchanged (so
+  historical aggregates stay comparable); the honesty-adjusted score gives partial credit
+  (`ABSTENTION_CREDIT`, default 0.5) for an *honest abstention* — the model returning null/empty
+  ("I don't know") when a value existed, or for list fields under-reporting without inventing
+  wrong extras — so a confident wrong guess and a hallucination score strictly worse than honest
+  uncertainty. It also runs an **excerpt-verification** check (`verify_excerpt`): the cited
+  verbatim `excerpt` is looked for in the source text (normalized substring, then fuzzy
+  `partial_ratio` >= `EXCERPT_MATCH_THRESHOLD`); if a value was given with an excerpt that isn't
+  in the source (fabricated evidence), its `honesty_score` is docked by `EXCERPT_PENALTY` (0.5) —
+  raw accuracy untouched, so the optimizer is pushed toward prompts that quote real text.
 - **Run harness** (`scripts/run_extraction.py`): samples N ground-truthed records, runs every
   configured model (`models.yaml`) against the current baseline/accepted prompt, scores + stores
   every run in SQLite, prints a comparison table. Example:
@@ -56,11 +67,28 @@ cd ..
   `scripts/optimize_all.py` (sweeps every field x model combination in one run, picking a
   cross-family reflector automatically — Anthropic models are reflected on by `~openai/gpt-latest`,
   everything else by `~anthropic/claude-opus-latest`, so a model is never self-critiqued by a
-  same-family model; one failing pair doesn't stop the sweep).
+  same-family model; one failing pair doesn't stop the sweep). The optimizer's objective is the
+  **honesty-adjusted** mean score (see Scorer above), so it is steered to prefer calibrated
+  abstention over confident wrong guesses; the raw score is still stored per run for display.
 - **FastAPI app** (`app/api.py`, read-only): `/api/fields`, `/api/fields/{f}/prompt-versions`,
   `/api/fields/{f}/models-summary`, `/api/fields/{f}/runs`, `/api/fields/{f}/iterations`,
-  `/api/fields/{f}/confusion`, `/api/fields/{f}/jobs`, `/api/config/thresholds`. Run with
+  `/api/fields/{f}/confusion`, `/api/fields/{f}/jobs`, `/api/fields/{f}/llm-judge-summary`,
+  `/api/fields/{f}/cross-model-agreement`, `/api/fields/{f}/self-consistency`,
+  `/api/fields/{f}/calibration`, `/api/config/thresholds`. Run with
   `python -m backend.scripts.serve` (http://127.0.0.1:8000).
+- **Confidence signals** (how *sure* an answer is, separate from whether it's correct): (1)
+  **token confidence** — `run_extraction.py --logprobs` requests per-token logprobs and stores a
+  per-run `logprob_confidence` (mean token probability; null for providers that don't expose it);
+  (2) **cross-model agreement** — the `cross-model-agreement` endpoint computes, from existing
+  runs, how often each model's value matches the other models on the same record (no extra API
+  calls); (3) **self-consistency** — `scripts/self_consistency.py` samples the same (record, model)
+  prompt N times at temperature>0 and records the modal-answer agreement rate into the
+  `self_consistency` table (opt-in validation study, N× calls, surfaced via the `self-consistency`
+  endpoint); (4) **verbalized confidence + calibration** — the JSON contract asks each model for a
+  0-1 `confidence` (stored on every run); the `calibration` endpoint scores it with the **Brier**
+  score (mean squared error vs. `is_correct`, a proper scoring rule) plus reliability-diagram bins,
+  so an overconfident model is caught. Confidence is a posterior diagnostic only — never folded
+  into the per-run score.
 - **Job tracking** (`db.start_job`/`update_job_progress`/`finish_job`, `jobs` table): both
   `run_extraction.py` and `optimize_prompt.py` record a `jobs` row (per field+model) when they
   start and mark it completed/failed when they stop, so the dashboard can show a "currently
@@ -81,10 +109,17 @@ cd ..
 `records(id, title, md_path)` · `ground_truth(record_id, field_name, value_json)` ·
 `prompt_versions(id, field_name, version, template, parent_id, notes, accepted, created_at)` ·
 `runs(id, prompt_version_id, model_id, record_id, field_name, raw_response, parsed_value_json,
-score, is_correct, latency_ms, prompt_tokens, completion_tokens, cost_usd, error, batch_id,
-created_at)` · `iterations(id, field_name, iteration_num, prompt_version_id, model_id, mean_score,
+excerpt, notes, score, honesty_score, is_correct, outcome, logprob_confidence, excerpt_verified,
+confidence, latency_ms, prompt_tokens, completion_tokens, cost_usd, error, batch_id, created_at)` (`excerpt`
+= verbatim source line the model cited, `notes` = its free-text uncertainty, `honesty_score` =
+abstention-credited score used by the optimizer, `outcome` =
+hit/correct_abstain/abstain_miss/wrong/hallucination, `logprob_confidence` = mean token
+probability when logprobs were requested, `excerpt_verified` = whether the cited excerpt was
+found in the source text, 1/0/NULL, `confidence` = the model's self-reported 0-1 confidence) ·
+`iterations(id, field_name, iteration_num, prompt_version_id, model_id, mean_score,
 n_records, feedback, accepted, created_at)` · `llm_judgments(id, run_id, judge_model, verdict,
-reasoning, created_at)` · `jobs(id, field_name, model_id, kind, status, total, completed,
+reasoning, created_at)` · `self_consistency(id, field_name, model_id, record_id, n_samples,
+agreement, modal_value_json, created_at)` · `jobs(id, field_name, model_id, kind, status, total, completed,
 started_at, updated_at, finished_at, error)`.
 
 ## Production deployment (Fly.io)
@@ -109,11 +144,11 @@ secret is needed on Fly** — the OpenRouter key only ever lives in the develope
 Building the production dataset (run locally):
 ```
 python -m backend.scripts.export_production_subset
-# regenerates backend/deploy/{promptlab.db,corpus/} -- 300 complete-case records
+# regenerates backend/deploy/{promptlab.db,corpus/} -- 100 complete-case records
 # (config.MAX_PRODUCTION_RECORDS), md_path pointed at the local corpus/ folder so you
 # can immediately run a real rollout against it:
 $env:DEP_DB_PATH = "<repo>\backend\deploy\promptlab.db"
-python -m backend.scripts.run_extraction --field <field> --n 300 --tiers free,cheap,mid,expensive
+python -m backend.scripts.run_extraction --field <field> --n 100 --tiers free,cheap,mid,expensive
 # repeat per field: authors, author_affiliation, author_country, sector_name, sub_sector
 ```
 
@@ -165,7 +200,7 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
   (OpenAI, Gemini 2.5, DeepSeek, Grok) cache a shared prefix automatically, with Anthropic/Qwen
   needing an explicit `cache_control: {"type": "ephemeral"}` marker on that block — cached reads
   cost 10-50% of normal input price depending on provider. The catch: cache TTL is only ~5 min
-  (up to 1h for Anthropic), but `run_extraction.py` currently runs *field-major* (all 300 records
+  (up to 1h for Anthropic), but `run_extraction.py` currently runs *field-major* (all 100 records
   for one field, then the next field), so the same record+model's 5 field calls are hours apart
   and never hit a warm cache. To benefit, execution would need to go *record-major* (loop each
   record, call all 5 fields back-to-back per model) instead. **Before committing to this
@@ -178,13 +213,10 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
   added a third accuracy metric (`GET /api/fields/{field}/llm-judge-summary`, a new stat card in
   `ModelCard.tsx`) sourced from `scripts/llm_judge.py`'s posterior semantic true/false verdicts —
   meant to be the most trustworthy of the three accuracy numbers shown (vs. threshold accuracy /
-  exact-match accuracy, which are both just string-matching heuristics). This needs `fly deploy`
-  to actually go live (deferred until the current production rollout finishes, since deploying
-  restarts the machine and kills in-progress unattended jobs). It also currently only has data for
-  `sector_name`/`authors` (40 judged references each, judge model `~openai/gpt-latest`) — TODO:
-  once the rollout + optimizer sweep finish, run `llm_judge.py` for `author_affiliation`/
-  `author_country`/`sub_sector` too, and consider a bigger sample size than 40 for all 5 fields so
-  the metric is meaningful across more of the production data, not just a small judged subset.
+  exact-match accuracy, which are both just string-matching heuristics). The old Fly deployment was
+  deleted, so this is no longer blocked on a deferred `fly deploy` — it will just be part of the
+  fresh build/rollout. TODO: run `llm_judge.py` across all 5 fields with a bigger sample than the
+  earlier 40 references so the metric is meaningful across the whole production dataset.
 
 ## Known issues / follow-ups
 

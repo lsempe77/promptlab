@@ -5,13 +5,13 @@ model (models.yaml) against the current baseline (or a given) prompt version,
 scores each response against ground truth, stores every run in SQLite, and
 prints a per-model comparison table.
 
-Production rollout policy: validate at --n 50 first, then 100, then 300.
---n is hard-capped at config.MAX_PRODUCTION_RECORDS (300) to avoid accidentally
+Production rollout policy: validate at --n 30 first, then 60, then 100.
+--n is hard-capped at config.MAX_PRODUCTION_RECORDS (100) to avoid accidentally
 kicking off a run against the full ~7,600-record ground-truth pool.
 
 Scaling up is incremental by default: a (record, model) pair that already has
 a logged run for this field+prompt-version is skipped, so re-running with a
-bigger --n (e.g. 50 -> 100 -> 300) only pays for the NEW records, not the ones
+bigger --n (e.g. 30 -> 60 -> 100) only pays for the NEW records, not the ones
 already done at the smaller stage. Pass --force to re-run everything anyway
 (e.g. after a prompt/corpus change you want fully re-tested).
 
@@ -70,6 +70,10 @@ def main() -> None:
     ap.add_argument("--force", action="store_true",
                      help="re-run (record, model) pairs even if already logged for this field+prompt version "
                           "(default: skip already-done pairs, so scaling --n up is incremental)")
+    ap.add_argument("--logprobs", action="store_true",
+                     help="request per-token logprobs and store a per-run logprob confidence "
+                          "(mean token probability). Off by default: some providers reject the "
+                          "param, and it's not needed for the core accuracy rollout.")
     args = ap.parse_args()
 
     if args.n > config.MAX_PRODUCTION_RECORDS:
@@ -108,6 +112,7 @@ def main() -> None:
     jobs: list[dict] = []
     job_meta: list[tuple[dict, str]] = []
     prompt_cache: dict[int, tuple[str, str]] = {}
+    source_cache: dict[int, str] = {}  # truncated md text the model actually saw, for excerpt verification
     new_counts: dict[str, int] = {m: 0 for m in models}
     skipped = 0
     for rec in records:
@@ -123,8 +128,10 @@ def main() -> None:
             continue
         system_prompt, user_prompt = prompts.build_prompt(args.field, rec["title"] or "", md_text, instruction=pv["template"])
         prompt_cache[rec["id"]] = (system_prompt, user_prompt)
+        source_cache[rec["id"]] = md_text[: prompts.MAX_CHARS]
         for model_id in needed_models:
-            jobs.append({"model_id": model_id, "system_prompt": system_prompt, "user_prompt": user_prompt})
+            jobs.append({"model_id": model_id, "system_prompt": system_prompt, "user_prompt": user_prompt,
+                         "logprobs": args.logprobs})
             job_meta.append((rec, model_id))
             new_counts[model_id] += 1
 
@@ -173,17 +180,26 @@ def main() -> None:
                                    error=f"unexpected: {exc!r}")
                         errors[model_id] += 1
                     else:
+                        verified = scoring.verify_excerpt(meta.get("excerpt"), source_cache.get(rec["id"]))
+                        verified_col = None if verified is None else int(verified)
                         try:
-                            result = scoring.score_field(args.field, value, rec["ground_truth"])
+                            result = scoring.score_field(args.field, value, rec["ground_truth"],
+                                                         excerpt_verified=verified)
                         except Exception as exc:  # noqa: BLE001 - same rationale as above
                             print(f"  [unexpected-error] {model_id} on record {rec['id']}: {exc!r}")
                             db.add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=value, score=0.0,
+                                       excerpt=meta.get("excerpt"), notes=meta.get("notes"),
+                                       excerpt_verified=verified_col, confidence=meta.get("confidence"),
                                        is_correct=0, latency_ms=resp.latency_ms, prompt_tokens=resp.prompt_tokens,
                                        completion_tokens=resp.completion_tokens, cost_usd=resp.cost_usd,
                                        error=f"unexpected: {exc!r}")
                             errors[model_id] += 1
                         else:
                             db.add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=value,
+                                       excerpt=meta.get("excerpt"), notes=meta.get("notes"),
+                                       excerpt_verified=verified_col, confidence=meta.get("confidence"),
+                                       outcome=result.outcome, honesty_score=result.honesty_score,
+                                       logprob_confidence=resp.logprob_confidence,
                                        score=result.score, is_correct=int(result.is_correct), latency_ms=resp.latency_ms,
                                        prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
                                        cost_usd=resp.cost_usd, error=None)

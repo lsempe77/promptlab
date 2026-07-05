@@ -52,8 +52,15 @@ CREATE TABLE IF NOT EXISTS runs (
     field_name TEXT NOT NULL,
     raw_response TEXT,
     parsed_value_json TEXT,
+    excerpt TEXT,
+    notes TEXT,
     score REAL,
+    honesty_score REAL,
     is_correct INTEGER,
+    outcome TEXT,
+    logprob_confidence REAL,
+    excerpt_verified INTEGER,
+    confidence REAL,
     latency_ms INTEGER,
     prompt_tokens INTEGER,
     completion_tokens INTEGER,
@@ -100,6 +107,22 @@ CREATE TABLE IF NOT EXISTS jobs (
     error TEXT
 );
 
+-- Self-consistency validation study (opt-in, N samples per record at temp>0):
+-- `agreement` = fraction of the N samples that landed in the modal answer
+-- cluster; `modal_value_json` = that consensus value. One row per
+-- (field, model, record).
+CREATE TABLE IF NOT EXISTS self_consistency (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    field_name TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    record_id INTEGER NOT NULL REFERENCES records(id),
+    n_samples INTEGER NOT NULL,
+    agreement REAL NOT NULL,
+    modal_value_json TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (field_name, model_id, record_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_runs_batch ON runs(batch_id);
 CREATE INDEX IF NOT EXISTS idx_runs_field_model ON runs(field_name, model_id);
 CREATE INDEX IF NOT EXISTS idx_ground_truth_field ON ground_truth(field_name);
@@ -124,9 +147,23 @@ def get_conn(db_path: Path = DB_PATH) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotent, additive migrations for DBs created before a column existed
+    (CREATE TABLE IF NOT EXISTS never alters an already-existing table). The
+    production DB lives on a persisted volume, so missing columns are added in
+    place rather than requiring a wipe/rebuild."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
+    for col, coltype in (("excerpt", "TEXT"), ("notes", "TEXT"), ("outcome", "TEXT"),
+                         ("honesty_score", "REAL"), ("logprob_confidence", "REAL"),
+                         ("excerpt_verified", "INTEGER"), ("confidence", "REAL")):
+        if col not in existing:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {coltype}")
+
+
 def init_db(db_path: Path = DB_PATH) -> None:
     with get_conn(db_path) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 def upsert_record(conn: sqlite3.Connection, id_: int, title: str | None, md_path: str) -> None:
@@ -230,6 +267,22 @@ def add_llm_judgment(
         "ON CONFLICT(run_id, judge_model) DO UPDATE SET verdict=excluded.verdict, "
         "reasoning=excluded.reasoning, created_at=excluded.created_at",
         (run_id, judge_model, int(verdict), reasoning, now()),
+    )
+    return cur.lastrowid
+
+
+def add_self_consistency(
+    conn: sqlite3.Connection, field_name: str, model_id: str, record_id: int,
+    n_samples: int, agreement: float, modal_value: Any,
+) -> int | None:
+    cur = conn.execute(
+        "INSERT INTO self_consistency (field_name, model_id, record_id, n_samples, agreement, "
+        "modal_value_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(field_name, model_id, record_id) DO UPDATE SET n_samples=excluded.n_samples, "
+        "agreement=excluded.agreement, modal_value_json=excluded.modal_value_json, "
+        "created_at=excluded.created_at",
+        (field_name, model_id, record_id, n_samples, agreement,
+         json.dumps(modal_value, ensure_ascii=False), now()),
     )
     return cur.lastrowid
 

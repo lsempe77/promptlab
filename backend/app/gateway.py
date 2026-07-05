@@ -4,6 +4,7 @@ swapping models is just a string (`model_id`), no per-provider SDKs.
 """
 from __future__ import annotations
 
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -31,6 +32,11 @@ class ModelResponse:
     cost_usd: float | None
     latency_ms: int
     raw: dict[str, Any]
+    # Mean per-token probability of the completion (exp of the mean token
+    # logprob), 0-1, when the model/provider returned logprobs -- else None.
+    # A model-intrinsic confidence signal (higher = the model was less
+    # "surprised" by its own output). Not all OpenRouter providers expose it.
+    logprob_confidence: float | None = None
 
 
 def call_model(
@@ -41,11 +47,16 @@ def call_model(
     temperature: float = 0.0,
     max_tokens: int = 1024,
     json_mode: bool = True,
+    logprobs: bool = False,
     timeout: float = 60.0,
 ) -> ModelResponse:
     """Call `model_id` via OpenRouter and return its text response plus
     token/cost/latency metadata. Raises GatewayError on failure. Retries a
     few times with backoff on HTTP 429 (rate limited) only.
+
+    If `logprobs=True`, requests per-token logprobs and derives a
+    `logprob_confidence` (mean per-token probability). Providers that don't
+    support logprobs simply return none, leaving `logprob_confidence=None`.
     """
     if not config.OPENROUTER_API_KEY:
         raise GatewayError(
@@ -64,6 +75,8 @@ def call_model(
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
+    if logprobs:
+        payload["logprobs"] = True
 
     headers = {
         "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
@@ -100,8 +113,11 @@ def call_model(
     if not choices:
         raise GatewayError(f"OpenRouter returned no choices for model={model_id}: {data}")
 
-    content = choices[0]["message"]["content"]
+    choice = choices[0]
+    content = choice["message"]["content"]
     usage = data.get("usage") or {}
+
+    logprob_confidence = _mean_token_probability(choice.get("logprobs"))
 
     return ModelResponse(
         model_id=model_id,
@@ -111,7 +127,21 @@ def call_model(
         cost_usd=usage.get("cost"),
         latency_ms=latency_ms,
         raw=data,
+        logprob_confidence=logprob_confidence,
     )
+
+
+def _mean_token_probability(logprobs_obj: Any) -> float | None:
+    """exp(mean token logprob) over the completion's tokens, i.e. the geometric
+    mean per-token probability (0-1). Returns None if the provider didn't
+    return usable logprobs."""
+    if not logprobs_obj or not isinstance(logprobs_obj, dict):
+        return None
+    tokens = logprobs_obj.get("content") or []
+    lps = [t["logprob"] for t in tokens if isinstance(t, dict) and t.get("logprob") is not None]
+    if not lps:
+        return None
+    return math.exp(sum(lps) / len(lps))
 
 
 def call_model_batch(

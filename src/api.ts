@@ -24,16 +24,55 @@ export interface ModelSummary {
   model_id: string;
   n: number;
   mean_score: number | null;
+  mean_honesty_score: number | null;
+  mean_logprob_confidence: number | null;
   n_errors: number;
   mean_latency_ms: number | null;
   total_cost_usd: number | null;
   accuracy: number;
+  abstention_rate: number;
+  hallucination_rate: number;
+  wrong_rate: number;
+  excerpt_verified_rate: number | null;
 }
 
 export interface LlmJudgeSummary {
   model_id: string;
   n_judged: number;
   llm_judged_accuracy: number;
+}
+
+// Confidence signals (see backend scripts/self_consistency.py + the
+// cross-model-agreement endpoint).
+export interface CrossModelAgreement {
+  model_id: string;
+  n_records: number;
+  agreement_rate: number;
+}
+
+export interface SelfConsistency {
+  model_id: string;
+  n_records: number;
+  mean_agreement: number;
+  mean_samples: number;
+}
+
+// Calibration of a model's verbalized 0-1 confidence vs. actual correctness.
+export interface CalibrationBin {
+  lo: number;
+  hi: number;
+  n: number;
+  mean_confidence: number | null;
+  accuracy: number | null;
+}
+
+export interface Calibration {
+  model_id: string;
+  n_scored: number;
+  brier: number;
+  mean_confidence: number;
+  accuracy: number;
+  bins: CalibrationBin[];
 }
 
 export interface IterationLog {
@@ -124,4 +163,9 @@ export const api = {
       `/api/fields/${field}/confusion${modelId ? `?model_id=${encodeURIComponent(modelId)}` : ""}`,
     ),
   llmJudgeSummary: (field: string) => getJson<LlmJudgeSummary[]>(`/api/fields/${field}/llm-judge-summary`),
+  crossModelAgreement: (field: string) =>
+    getJson<CrossModelAgreement[]>(`/api/fields/${field}/cross-model-agreement`),
+  selfConsistency: (field: string) =>
+    getJson<SelfConsistency[]>(`/api/fields/${field}/self-consistency`),
+  calibration: (field: string) => getJson<Calibration[]>(`/api/fields/${field}/calibration`),
 };

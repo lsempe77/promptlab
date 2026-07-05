@@ -53,12 +53,30 @@ def parse_json_object(raw: str) -> dict:
     return _extract_json_object(raw)
 
 
+def _parse_confidence(raw: Any) -> float | None:
+    """A model's self-reported 0-1 confidence. Tolerates 0-100 scales and
+    stray strings; clamps to [0, 1]. None if absent/unparseable."""
+    if raw is None:
+        return None
+    try:
+        c = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if c > 1.0:  # model gave a 0-100 (or percentage) scale
+        c = c / 100.0
+    return max(0.0, min(1.0, c))
+
+
 def parse_field_response(field_name: str, raw_content: str) -> tuple[Any, dict]:
     """Returns (value, meta) where value matches the field's expected shape
-    and meta holds {excerpt, notes} for observability/debugging."""
+    and meta holds {excerpt, notes, confidence} for observability/debugging."""
     spec = FIELDS[field_name]
     obj = _extract_json_object(raw_content)
-    meta = {"excerpt": obj.get("excerpt"), "notes": obj.get("notes")}
+    meta = {
+        "excerpt": obj.get("excerpt"),
+        "notes": obj.get("notes"),
+        "confidence": _parse_confidence(obj.get("confidence")),
+    }
 
     if spec.value_type == "single_categorical":
         value = obj.get("value")
