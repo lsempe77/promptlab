@@ -7,7 +7,7 @@ const PIPELINE_CHART = `flowchart TD
     EX --> SC["Score each answer 3 ways:<br/>fuzzy match &ge;95 / exact / LLM judge<br/>counts as correct if score &ge; 0.90"]
     SC --> HON["Honesty &amp; evidence checks:<br/>hit / abstain / wrong / hallucination<br/>excerpt found &ge;90 - abstain credit 0.5 - fabricated excerpt x0.5"]
     HON --> JUDGE["Cross-family LLM judge<br/>(OpenAI vs Anthropic) - verdict"]
-    JUDGE --> GATE{"Per-model gate:<br/>judged accuracy &ge; 80%?"}
+    JUDGE --> GATE{"Per-model gate:<br/>judged accuracy &ge; 95%?"}
     GATE -- "no (gated)" --> REFLECT["Reflector model:<br/>diagnose failures,<br/>propose revised prompt<br/>(retry up to 3x for valid JSON)"]
     GATE -- "yes" --> STAGE{"Sample size<br/>reached this stage?"}
     STAGE -- "30 refs -> grow" --> G60["Extract to 60 refs<br/>(95% CI narrows)"]
@@ -43,7 +43,7 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
         </p>
         <MermaidDiagram
           chart={PIPELINE_CHART}
-          caption="Extract → score → judge → gate → reflect/rewrite → re-test → advance. Numbers on the decision diamonds are the live thresholds (gate 80%, improvement epsilon 0.01, stop after 3 non-improving iterations)."
+          caption="Extract → score → judge → gate → reflect/rewrite → re-test → advance. Numbers on the decision diamonds are the live thresholds (gate 95%, improvement epsilon 0.01, stop after 3 non-improving iterations)."
         />
       </details>
 

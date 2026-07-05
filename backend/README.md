@@ -31,7 +31,7 @@ flowchart TD
     EX --> SC["Score each answer 3 ways:<br/>fuzzy ≥95 · exact · LLM judge<br/>correct if score ≥ 0.90"]
     SC --> HON["Honesty & evidence checks:<br/>hit / abstain / wrong / hallucination<br/>excerpt ≥90 · abstain credit 0.5 · fabricated ×0.5"]
     HON --> JUDGE["Cross-family LLM judge<br/>(OpenAI↔Anthropic) → verdict"]
-    JUDGE --> GATE{"Per-model gate:<br/>judged accuracy ≥ 80%?"}
+    JUDGE --> GATE{"Per-model gate:<br/>judged accuracy ≥ 95%?"}
     GATE -- "no (gated)" --> REFLECT["Reflector model:<br/>diagnose failures →<br/>propose revised prompt<br/>(retry ≤3× for valid JSON)"]
     GATE -- "yes" --> STAGE{"Sample size<br/>reached this stage?"}
     STAGE -- "30 refs → grow" --> G60["Extract to 60 refs<br/>(95% CI narrows)"]
@@ -276,7 +276,7 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
   {field}/stage-status` derives, with no manual state, how many references a field has reached
   (the current stage vs `config.PRODUCTION_ROLLOUT_STAGES` 30→60→100) and evaluates the quality
   gate **per (field, model)** — each model's own LLM-judged accuracy vs `scoring.GATE_THRESHOLD`
-  (0.80) — returning `n_models_passing`/`n_models_judged`. The dashboard shows a field badge
+  (0.95) — returning `n_models_passing`/`n_models_judged`. The dashboard shows a field badge
   ("N/M models pass gate") with 95% Wilson CIs that narrow as the sample grows, plus a per-model
   gate chip. The gate is derived at read time from `runs`/`llm_judgments`/`prompt_versions` — no
   schema change.
@@ -291,7 +291,7 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
   org). For `sub_sector`, models often pick a *valid* WB sub-sector (e.g. `"Livestock"` for an
   animal-health paper) that disagrees with an odd GT label (`"Other - Industry, trade and services"`).
   The baseline prompts were tightened (report the parent institution / treat name variants as one;
-  choose the WB sub-sector hierarchically) and the optimizer can refine further, but chasing 0.80
+  choose the WB sub-sector hierarchically) and the optimizer can refine further, but chasing 0.95
   against noisy labels has a ceiling — these fields may warrant a GT clean-up pass before their scores
   can be trusted at face value. Update (2026-07-05): a concrete, fixable sub-cause on
   `author_affiliation` is *mojibake in the GT* — the reference data mixes correct UTF-8 with
