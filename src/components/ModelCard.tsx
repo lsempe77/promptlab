@@ -101,13 +101,19 @@ function ReliabilityDiagram({ calibration }: { calibration: Calibration }) {
         />
       )}
       {pts.map((b, i) => (
-        <circle key={i} cx={x(b.mean_confidence!)} cy={y(b.accuracy!)}
-                r={Math.min(7, 3 + Math.sqrt(b.n))} fill="#0067b1" fillOpacity={0.75}>
-          <title>
-            confidence {(b.mean_confidence! * 100).toFixed(0)}% → accuracy{" "}
-            {(b.accuracy! * 100).toFixed(0)}% (n={b.n})
-          </title>
-        </circle>
+        <g key={i}>
+          <circle cx={x(b.mean_confidence!)} cy={y(b.accuracy!)}
+                  r={Math.min(7, 3 + Math.sqrt(b.n))} fill="#0067b1" fillOpacity={0.75}>
+            <title>
+              bucket {i + 1}: stated confidence {(b.mean_confidence! * 100).toFixed(0)}% →
+              actual accuracy {(b.accuracy! * 100).toFixed(0)}% (n={b.n})
+            </title>
+          </circle>
+          <text x={x(b.mean_confidence!)} y={y(b.accuracy!) - 9} textAnchor="middle"
+                fontSize={8.5} fill="#0067b1" opacity={0.9}>
+            n={b.n}
+          </text>
+        </g>
       ))}
       <text x={(x(0) + x(1)) / 2} y={H - 6} textAnchor="middle" fontSize={10} fill="currentColor" opacity={0.7}>
         stated confidence (%)
@@ -291,6 +297,12 @@ export function ModelCard({
             {pct(calibration.accuracy)} actual accuracy &middot; n={calibration.n_scored}
           </p>
           <ReliabilityDiagram calibration={calibration} />
+          <p className="muted panel-caption">
+            Each point is a confidence bucket (left → right = lower → higher stated confidence); the
+            label <em>n</em> is how many predictions fall in it, so small-<em>n</em> points (e.g. a
+            lone prediction sitting at 0% accuracy) are noise, not a trend. A point below the diagonal
+            means the model was overconfident there; above means underconfident.
+          </p>
         </div>
       )}
 
