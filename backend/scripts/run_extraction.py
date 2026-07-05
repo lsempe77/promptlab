@@ -48,18 +48,19 @@ def select_models(args: argparse.Namespace) -> list[str]:
     return [m["id"] for m in roster]
 
 
-def existing_pairs(conn, field_name: str, prompt_version_id: int) -> set[tuple[int, str]]:
+def existing_pairs(conn, project_id: int, field_name: str, prompt_version_id: int) -> set[tuple[int, str]]:
     """(record_id, model_id) pairs that already have a logged run for this
     field + prompt version -- used to make scaling --n up incremental."""
     rows = conn.execute(
-        "SELECT DISTINCT record_id, model_id FROM runs WHERE field_name = ? AND prompt_version_id = ?",
-        (field_name, prompt_version_id),
+        "SELECT DISTINCT record_id, model_id FROM runs WHERE project_id = ? AND field_name = ? AND prompt_version_id = ?",
+        (project_id, field_name, prompt_version_id),
     ).fetchall()
     return {(r["record_id"], r["model_id"]) for r in rows}
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--project", default="dep-extraction", help="project slug (see backend/app/projects.py)")
     ap.add_argument("--field", required=True, choices=list(prompts.BASELINE_INSTRUCTIONS.keys()))
     ap.add_argument("--n", type=int, default=50, help="number of records to sample (capped at %d)" % config.MAX_PRODUCTION_RECORDS)
     ap.add_argument("--models", type=str, default=None, help="comma-separated OpenRouter model ids")
@@ -83,9 +84,10 @@ def main() -> None:
         args.n = config.MAX_PRODUCTION_RECORDS
 
     with db.get_conn() as conn:
-        pv = get_or_create_baseline(conn, args.field)
-        records = db.get_records_with_field(conn, args.field)
-        done_pairs = set() if args.force else existing_pairs(conn, args.field, pv["id"]) if pv else set()
+        project_id = db.get_project_id(conn, args.project)
+        pv = get_or_create_baseline(conn, project_id, args.field)
+        records = db.get_records_with_field(conn, project_id, args.field)
+        done_pairs = set() if args.force else existing_pairs(conn, project_id, args.field, pv["id"]) if pv else set()
 
     if pv is None:
         print(f"Failed to create/load a baseline prompt version for field={args.field}.")
@@ -143,7 +145,7 @@ def main() -> None:
         return
 
     with db.get_conn() as conn:
-        job_ids = {m: db.start_job(conn, args.field, m, kind="extraction", total=new_counts[m]) for m in models}
+        job_ids = {m: db.start_job(conn, project_id, args.field, m, kind="extraction", total=new_counts[m]) for m in models}
 
     try:
         with db.get_conn() as conn:
@@ -151,6 +153,7 @@ def main() -> None:
             def _on_complete(i: int, resp: gateway.ModelResponse | gateway.GatewayError) -> None:
                 rec, model_id = job_meta[i]
                 run_kwargs = dict(
+                    project_id=project_id,
                     prompt_version_id=pv["id"],
                     model_id=model_id,
                     record_id=rec["id"],

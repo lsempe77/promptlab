@@ -71,6 +71,7 @@ def evaluate_instruction(
     records: list[dict],
     model_id: str,
     conn: Any = None,
+    project_id: int | None = None,
     prompt_version_id: int | None = None,
     batch_id: str | None = None,
     max_workers: int = gateway.DEFAULT_MAX_CONCURRENCY,
@@ -101,7 +102,7 @@ def evaluate_instruction(
 
     for rec, source, resp in zip(usable_records, sources, responses):
         run_kwargs = dict(
-            prompt_version_id=prompt_version_id, model_id=model_id, record_id=rec["id"],
+            project_id=project_id, prompt_version_id=prompt_version_id, model_id=model_id, record_id=rec["id"],
             field_name=field_name, batch_id=batch_id,
         )
         if isinstance(resp, gateway.GatewayError):
@@ -230,6 +231,7 @@ def optimize_field(
     field_name: str,
     model_id: str,
     reflector_model: str,
+    project_slug: str = "dep-extraction",
     max_iterations: int = 10,
     no_improve_limit: int = 3,
     minibatch_size: int = DEFAULT_MINIBATCH_SIZE,
@@ -249,8 +251,9 @@ def optimize_field(
     batch_id = uuid.uuid4().hex[:8]
 
     with db.get_conn() as conn:
-        baseline_pv = prompt_store.get_or_create_baseline(conn, field_name)
-        all_records = db.get_records_with_field(conn, field_name)
+        project_id = db.get_project_id(conn, project_slug)
+        baseline_pv = prompt_store.get_or_create_baseline(conn, project_id, field_name)
+        all_records = db.get_records_with_field(conn, project_id, field_name)
 
     if baseline_pv is None:
         raise RuntimeError(f"Failed to create/load a baseline prompt version for field={field_name}.")
@@ -258,12 +261,12 @@ def optimize_field(
         raise ValueError(f"Not enough ground-truthed records for field={field_name} to optimize (need >= 4).")
 
     with db.get_conn() as conn:
-        job_id = db.start_job(conn, field_name, model_id, kind="optimization", total=max_iterations)
+        job_id = db.start_job(conn, project_id, field_name, model_id, kind="optimization", total=max_iterations)
 
     try:
         result = _run_optimization(
             field_name=field_name, model_id=model_id, reflector_model=reflector_model,
-            baseline_pv=baseline_pv, all_records=all_records, batch_id=batch_id,
+            project_id=project_id, baseline_pv=baseline_pv, all_records=all_records, batch_id=batch_id,
             max_iterations=max_iterations, no_improve_limit=no_improve_limit,
             minibatch_size=minibatch_size, val_size=val_size, seed=seed, verbose=verbose,
             max_workers=max_workers, candidates_per_iteration=candidates_per_iteration,
@@ -282,6 +285,7 @@ def _run_optimization(
     field_name: str,
     model_id: str,
     reflector_model: str,
+    project_id: int,
     baseline_pv: Any,
     all_records: list[dict],
     batch_id: str,
@@ -303,8 +307,8 @@ def _run_optimization(
     best_pv_id = baseline_pv["id"]
     with db.get_conn() as conn:
         baseline_outcome = evaluate_instruction(
-            field_name, best_instruction, val, model_id, conn=conn, prompt_version_id=best_pv_id, batch_id=batch_id,
-            max_workers=max_workers,
+            field_name, best_instruction, val, model_id, conn=conn, project_id=project_id,
+            prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
         )
     best_score = baseline_outcome.mean_score
     if verbose:
@@ -320,8 +324,8 @@ def _run_optimization(
                 db.update_job_progress(conn, job_id, it - 1)
             minibatch = rnd.sample(train, k=min(minibatch_size, len(train)))
             train_outcome = evaluate_instruction(
-                field_name, best_instruction, minibatch, model_id, conn=conn, prompt_version_id=best_pv_id, batch_id=batch_id,
-                max_workers=max_workers,
+                field_name, best_instruction, minibatch, model_id, conn=conn, project_id=project_id,
+                prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
             )
 
             if not train_outcome.failures:
@@ -343,14 +347,14 @@ def _run_optimization(
                     continue
 
                 pv = prompt_store.add_version(
-                    conn, field_name, candidate_instruction, parent_id=best_pv_id,
+                    conn, project_id, field_name, candidate_instruction, parent_id=best_pv_id,
                     notes=f"iter {it} (candidate {k + 1}/{candidates_per_iteration}): {diagnosis or ''}"[:500],
                 )
                 if pv is None:
                     raise RuntimeError(f"Failed to persist candidate prompt version for field={field_name}.")
                 candidate_outcome = evaluate_instruction(
-                    field_name, candidate_instruction, val, model_id, conn=conn, prompt_version_id=pv["id"], batch_id=batch_id,
-                    max_workers=max_workers,
+                    field_name, candidate_instruction, val, model_id, conn=conn, project_id=project_id,
+                    prompt_version_id=pv["id"], batch_id=batch_id, max_workers=max_workers,
                 )
                 candidates.append({
                     "instruction": candidate_instruction, "diagnosis": diagnosis, "pv": pv, "outcome": candidate_outcome,
@@ -378,8 +382,8 @@ def _run_optimization(
                     rejected_history.append({"instruction": c["instruction"], "diagnosis": c["diagnosis"]})
 
             db.add_iteration(
-                conn, field_name=field_name, iteration_num=it, prompt_version_id=pv["id"], model_id=model_id,
-                mean_score=candidate_outcome.mean_score, n_records=candidate_outcome.n,
+                conn, project_id=project_id, field_name=field_name, iteration_num=it, prompt_version_id=pv["id"],
+                model_id=model_id, mean_score=candidate_outcome.mean_score, n_records=candidate_outcome.n,
                 feedback=diagnosis, accepted=int(accepted),
             )
 

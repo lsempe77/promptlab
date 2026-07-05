@@ -32,10 +32,10 @@ def main() -> None:
 
     with db.get_conn() as conn:
         runs = conn.execute(
-            "SELECT id, field_name, record_id, parsed_value_json, score, is_correct FROM runs"
+            "SELECT id, project_id, field_name, record_id, parsed_value_json, score, is_correct FROM runs"
         ).fetchall()
 
-        gt_cache: dict[tuple[int, str], object] = {}
+        gt_cache: dict[tuple[int, int, str], object] = {}
         n_changed = 0
         n_skipped_no_value = 0
 
@@ -44,10 +44,10 @@ def main() -> None:
                 n_skipped_no_value += 1
                 continue
 
-            key = (run["record_id"], run["field_name"])
+            key = (run["project_id"], run["record_id"], run["field_name"])
             if key not in gt_cache:
                 row = conn.execute(
-                    "SELECT value_json FROM ground_truth WHERE record_id = ? AND field_name = ?",
+                    "SELECT value_json FROM ground_truth WHERE project_id = ? AND record_id = ? AND field_name = ?",
                     key,
                 ).fetchone()
                 gt_cache[key] = json.loads(row["value_json"]) if row else None

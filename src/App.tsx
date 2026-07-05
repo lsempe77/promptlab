@@ -7,6 +7,7 @@ import {
   type Job,
   type LlmJudgeSummary,
   type ModelSummary,
+  type ProjectInfo,
   type SelfConsistency,
   type Thresholds,
 } from "./api";
@@ -21,6 +22,8 @@ const JOBS_POLL_MS = 6000;
 
 function App() {
   const [tab, setTab] = useState<"dashboard" | "about">("dashboard");
+  const [projects, setProjects] = useState<ProjectInfo[] | null>(null);
+  const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [fields, setFields] = useState<FieldInfo[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -38,22 +41,36 @@ function App() {
 
   useEffect(() => {
     api
-      .fields()
-      .then((f) => {
-        setFields(f);
+      .projects()
+      .then((p) => {
+        setProjects(p);
         setApiError(null);
-        if (f.length > 0) setSelected(f[0].name);
+        if (p.length > 0) setSelectedProject(p[0].slug);
       })
       .catch((e) => setApiError(String(e)));
     api.thresholds().then(setThresholds).catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (!selected) return;
+    if (!selectedProject) return;
+    setFields(null);
+    setSelected(null);
+    api
+      .fields(selectedProject)
+      .then((f) => {
+        setFields(f);
+        setApiError(null);
+        if (f.length > 0) setSelected(f[0].name);
+      })
+      .catch((e) => setApiError(String(e)));
+  }, [selectedProject]);
+
+  useEffect(() => {
+    if (!selectedProject || !selected) return;
     setLoadingField(true);
     prevRunningCount.current = 0;
     api
-      .modelsSummary(selected)
+      .modelsSummary(selectedProject, selected)
       .then((s) => {
         setSummaries(s);
         setSelectedModels(new Set(s.map((m) => m.model_id)));
@@ -61,11 +78,11 @@ function App() {
       })
       .catch((e) => setApiError(String(e)))
       .finally(() => setLoadingField(false));
-    api.llmJudgeSummary(selected).then(setLlmJudge).catch(() => setLlmJudge([]));
-    api.crossModelAgreement(selected).then(setCrossAgreement).catch(() => setCrossAgreement([]));
-    api.selfConsistency(selected).then(setSelfConsistency).catch(() => setSelfConsistency([]));
-    api.calibration(selected).then(setCalibration).catch(() => setCalibration([]));
-  }, [selected]);
+    api.llmJudgeSummary(selectedProject, selected).then(setLlmJudge).catch(() => setLlmJudge([]));
+    api.crossModelAgreement(selectedProject, selected).then(setCrossAgreement).catch(() => setCrossAgreement([]));
+    api.selfConsistency(selectedProject, selected).then(setSelfConsistency).catch(() => setSelfConsistency([]));
+    api.calibration(selectedProject, selected).then(setCalibration).catch(() => setCalibration([]));
+  }, [selectedProject, selected]);
 
   // Poll for running extraction/optimization jobs so the dashboard can show a
   // "currently running" indicator even though the backend has no push/websocket
@@ -73,17 +90,17 @@ function App() {
   // When a job's running count drops back to zero (it just finished), also
   // re-fetch the model summary so newly-logged runs show up without a reload.
   useEffect(() => {
-    if (!selected) return;
+    if (!selectedProject || !selected) return;
     let cancelled = false;
     const poll = () => {
       api
-        .jobs(selected)
+        .jobs(selectedProject, selected)
         .then((j) => {
           if (cancelled) return;
           setJobs(j);
           const runningCount = j.filter((job) => job.status === "running" && !job.stale).length;
           if (runningCount === 0 && prevRunningCount.current > 0) {
-            api.modelsSummary(selected).then(setSummaries).catch(() => {});
+            api.modelsSummary(selectedProject, selected).then(setSummaries).catch(() => {});
           }
           prevRunningCount.current = runningCount;
         })
@@ -95,7 +112,7 @@ function App() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [selected]);
+  }, [selectedProject, selected]);
 
   const activeField = fields?.find((f) => f.name === selected) ?? null;
   const runningJobs = jobs.filter((j) => j.status === "running" && !j.stale);
@@ -118,6 +135,22 @@ function App() {
           studies for inclusion/exclusion and pulling structured details (authors, institutions,
           sectors) out of research papers — to see which combinations work best.
         </p>
+        {projects && projects.length > 0 && (
+          <div className="project-switcher">
+            <label htmlFor="project-select">Project</label>
+            <select
+              id="project-select"
+              value={selectedProject ?? ""}
+              onChange={(e) => setSelectedProject(e.target.value)}
+            >
+              {projects.map((p) => (
+                <option key={p.slug} value={p.slug} title={p.description}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <nav className="tab-nav">
           <button className={tab === "dashboard" ? "tab-btn active" : "tab-btn"} onClick={() => setTab("dashboard")}>
             Dashboard
@@ -222,6 +255,7 @@ function App() {
                               .map((s) => (
                                 <ModelCard
                                   key={s.model_id}
+                                  projectSlug={selectedProject!}
                                   fieldName={selected!}
                                   summary={s}
                                   jobs={jobs.filter((j) => j.model_id === s.model_id)}

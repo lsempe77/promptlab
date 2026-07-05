@@ -81,6 +81,7 @@ def main() -> None:
     ap.add_argument("--concurrency", type=int, default=gateway.DEFAULT_MAX_CONCURRENCY)
     ap.add_argument("--force", action="store_true",
                      help="recompute (field, model, record) triples already stored")
+    ap.add_argument("--project", default="dep-extraction", help="project slug (see backend/app/projects.py)")
     args = ap.parse_args()
 
     if args.temperature <= 0:
@@ -91,8 +92,9 @@ def main() -> None:
         args.n = config.MAX_PRODUCTION_RECORDS
 
     with db.get_conn() as conn:
-        pv = get_or_create_baseline(conn, args.field)
-        records = db.get_records_with_field(conn, args.field)
+        project_id = db.get_project_id(conn, args.project)
+        pv = get_or_create_baseline(conn, project_id, args.field)
+        records = db.get_records_with_field(conn, project_id, args.field)
     if pv is None:
         print(f"No baseline prompt for field={args.field}.")
         return
@@ -110,8 +112,8 @@ def main() -> None:
         done: set[tuple[str, int]] = set()
         if not args.force:
             rows = conn.execute(
-                "SELECT model_id, record_id FROM self_consistency WHERE field_name = ?",
-                (args.field,),
+                "SELECT model_id, record_id FROM self_consistency WHERE project_id = ? AND field_name = ?",
+                (project_id, args.field),
             ).fetchall()
             done = {(r["model_id"], r["record_id"]) for r in rows}
 
@@ -156,7 +158,7 @@ def main() -> None:
             if not values:
                 continue
             modal, agreement = consensus(args.field, values)
-            db.add_self_consistency(conn, args.field, mid, rid, len(values), agreement, modal)
+            db.add_self_consistency(conn, project_id, args.field, mid, rid, len(values), agreement, modal)
             per_model[mid].append(agreement)
 
     print("\nMean self-consistency (agreement) by model:")

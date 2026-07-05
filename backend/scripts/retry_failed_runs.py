@@ -27,12 +27,12 @@ from backend.app.parsing import ParseError, parse_field_response  # noqa: E402
 from backend.app.prompt_store import get_or_create_baseline  # noqa: E402
 
 
-def find_failed_pairs(conn, field_name: str, models: list[str] | None) -> set[tuple[int, str]]:
+def find_failed_pairs(conn, project_id: int, field_name: str, models: list[str] | None) -> set[tuple[int, str]]:
     rows = conn.execute(
-        "SELECT record_id, model_id FROM runs WHERE field_name = ? "
+        "SELECT record_id, model_id FROM runs WHERE project_id = ? AND field_name = ? "
         "GROUP BY record_id, model_id "
         "HAVING SUM(CASE WHEN error IS NULL THEN 1 ELSE 0 END) = 0",
-        (field_name,),
+        (project_id, field_name),
     ).fetchall()
     pairs = {(r["record_id"], r["model_id"]) for r in rows}
     if models:
@@ -43,6 +43,7 @@ def find_failed_pairs(conn, field_name: str, models: list[str] | None) -> set[tu
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--project", default="dep-extraction", help="project slug (see backend/app/projects.py)")
     ap.add_argument("--field", required=True, choices=list(prompts.BASELINE_INSTRUCTIONS.keys()))
     ap.add_argument("--models", type=str, default=None, help="comma-separated model ids to limit the retry to")
     ap.add_argument("--concurrency", type=int, default=gateway.DEFAULT_MAX_CONCURRENCY)
@@ -52,15 +53,16 @@ def main() -> None:
     batch_id = uuid.uuid4().hex[:8]
 
     with db.get_conn() as conn:
-        pv = get_or_create_baseline(conn, args.field)
-        pairs = find_failed_pairs(conn, args.field, models_filter)
+        project_id = db.get_project_id(conn, args.project)
+        pv = get_or_create_baseline(conn, project_id, args.field)
+        pairs = find_failed_pairs(conn, project_id, args.field, models_filter)
         if not pairs:
             print(f"No fully-failed (record, model) pairs found for field={args.field}.")
             return
 
         record_ids = {rid for rid, _ in pairs}
         records_by_id = {
-            rec["id"]: rec for rec in db.get_records_with_field(conn, args.field) if rec["id"] in record_ids
+            rec["id"]: rec for rec in db.get_records_with_field(conn, project_id, args.field) if rec["id"] in record_ids
         }
 
     print(f"Retrying {len(pairs)} failed (record, model) pairs for field={args.field} | prompt v{pv['version']}")
@@ -99,6 +101,7 @@ def main() -> None:
                 nonlocal n_ok, n_err
                 rec, model_id = job_meta[i]
                 run_kwargs = dict(
+                    project_id=project_id,
                     prompt_version_id=pv["id"],
                     model_id=model_id,
                     record_id=rec["id"],

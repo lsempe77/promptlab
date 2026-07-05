@@ -65,6 +65,7 @@ def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--project", default="dep-extraction", help="project slug (see backend/app/projects.py)")
     parser.add_argument("--field", required=True, choices=list(FIELDS.keys()))
     parser.add_argument("--n", type=int, default=40, help="Max number of un-judged runs to judge.")
     parser.add_argument("--judge-model", default="openai/gpt-4o")
@@ -72,7 +73,8 @@ def main() -> None:
     args = parser.parse_args()
 
     with db.get_conn() as conn:
-        runs = db.get_runs_without_judgment(conn, args.field, args.judge_model, limit=args.n)
+        project_id = db.get_project_id(conn, args.project)
+        runs = db.get_runs_without_judgment(conn, project_id, args.field, args.judge_model, limit=args.n)
         if not runs:
             print(f"No un-judged runs left for field={args.field!r} judge_model={args.judge_model!r}.")
         else:
@@ -81,8 +83,8 @@ def main() -> None:
             for r in runs:
                 if r["record_id"] not in gt_cache:
                     row = conn.execute(
-                        "SELECT value_json FROM ground_truth WHERE record_id = ? AND field_name = ?",
-                        (r["record_id"], args.field),
+                        "SELECT value_json FROM ground_truth WHERE project_id = ? AND record_id = ? AND field_name = ?",
+                        (project_id, r["record_id"], args.field),
                     ).fetchone()
                     gt_cache[r["record_id"]] = json.loads(row["value_json"]) if row else None
                 truth = gt_cache[r["record_id"]]
@@ -121,8 +123,8 @@ def main() -> None:
         judged = conn.execute(
             "SELECT r.score, r.is_correct, j.verdict FROM runs r "
             "JOIN llm_judgments j ON j.run_id = r.id AND j.judge_model = ? "
-            "WHERE r.field_name = ?",
-            (args.judge_model, args.field),
+            "WHERE r.project_id = ? AND r.field_name = ?",
+            (args.judge_model, project_id, args.field),
         ).fetchall()
 
     if not judged:

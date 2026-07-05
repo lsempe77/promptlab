@@ -1,8 +1,9 @@
-# DEP Prompt Lab — backend
+# Agentic 3ie Prompt Lab — backend
 
 Agentic system to iteratively refine LLM prompts for 3ie's evidence-synthesis pipeline
-(TAS -> FTS -> data extraction), currently covering the **data extraction** step for 5 metadata
-fields: `authors`, `author_affiliation` (institution), `author_country`, `sector_name`,
+(TAS -> FTS -> data extraction). Multi-project aware (see "Multi-project support" below): today
+only one project is registered, `dep-extraction`, covering the **data extraction** step for 5
+metadata fields: `authors`, `author_affiliation` (institution), `author_country`, `sector_name`,
 `sub_sector`.
 
 Stack: FastAPI + SQLite (no task queue), OpenRouter as a single unified model gateway (free ->
@@ -21,6 +22,14 @@ cd ..
 
 ## Architecture
 
+- **Projects** (`app/projects.py`): a `ProjectSpec` (slug, name, description, fields) registers a
+  synthesis project — today just `dep-extraction`. Adding a new project (HSF, Girl Effect,
+  StrongMinds) means adding its own `FieldSpec` dict (mirroring `app/fields.py`) and registering a
+  `ProjectSpec` for it in `PROJECTS` — no schema changes needed. `db.sync_projects()` upserts the
+  Python registry into the `projects` table on every `init_db()` call, so a new project just needs
+  a code change + restart. Every other table (`records`, `ground_truth`, `prompt_versions`,
+  `runs`, `iterations`, `jobs`) is scoped by a `project_id` FK, so each project has fully
+  independent corpus/ground-truth/prompt/run history while sharing the same DB file and API.
 - **Ground truth**: `1770900869-ier-records.xlsx` joined against the QA'd markdown corpus
   (`..._ok_only_final`, files named `<id>.md`) by numeric `id`. 7,675 studies have both. Build/
   refresh with `python -m backend.scripts.build_ground_truth`, which writes to
@@ -54,7 +63,8 @@ cd ..
   raw accuracy untouched, so the optimizer is pushed toward prompts that quote real text.
 - **Run harness** (`scripts/run_extraction.py`): samples N ground-truthed records, runs every
   configured model (`models.yaml`) against the current baseline/accepted prompt, scores + stores
-  every run in SQLite, prints a comparison table. Example:
+  every run in SQLite, prints a comparison table. Every script that touches the DB accepts
+  `--project <slug>` (default `dep-extraction`). Example:
   ```
   python -m backend.scripts.run_extraction --field sector_name --n 20 --tiers free,cheap
   python -m backend.scripts.run_extraction --field authors --n 15 --models openai/gpt-4o-mini,anthropic/claude-3-5-haiku
@@ -70,11 +80,14 @@ cd ..
   same-family model; one failing pair doesn't stop the sweep). The optimizer's objective is the
   **honesty-adjusted** mean score (see Scorer above), so it is steered to prefer calibrated
   abstention over confident wrong guesses; the raw score is still stored per run for display.
-- **FastAPI app** (`app/api.py`, read-only): `/api/fields`, `/api/fields/{f}/prompt-versions`,
-  `/api/fields/{f}/models-summary`, `/api/fields/{f}/runs`, `/api/fields/{f}/iterations`,
-  `/api/fields/{f}/confusion`, `/api/fields/{f}/jobs`, `/api/fields/{f}/llm-judge-summary`,
-  `/api/fields/{f}/cross-model-agreement`, `/api/fields/{f}/self-consistency`,
-  `/api/fields/{f}/calibration`, `/api/config/thresholds`. Run with
+- **FastAPI app** (`app/api.py`, read-only): every field-scoped route is nested under a project
+  slug: `/api/projects`, `/api/projects/{p}/fields`, `/api/projects/{p}/fields/{f}/prompt-versions`,
+  `/api/projects/{p}/fields/{f}/models-summary`, `/api/projects/{p}/fields/{f}/runs`,
+  `/api/projects/{p}/fields/{f}/iterations`, `/api/projects/{p}/fields/{f}/confusion`,
+  `/api/projects/{p}/fields/{f}/jobs`, `/api/projects/{p}/fields/{f}/llm-judge-summary`,
+  `/api/projects/{p}/fields/{f}/cross-model-agreement`,
+  `/api/projects/{p}/fields/{f}/self-consistency`, `/api/projects/{p}/fields/{f}/calibration`,
+  plus the project-agnostic `/api/config/thresholds`. Run with
   `python -m backend.scripts.serve` (http://127.0.0.1:8000).
 - **Confidence signals** (how *sure* an answer is, separate from whether it's correct): (1)
   **token confidence** — `run_extraction.py --logprobs` requests per-token logprobs and stores a
@@ -106,21 +119,31 @@ cd ..
 
 ## Data model (SQLite)
 
-`records(id, title, md_path)` · `ground_truth(record_id, field_name, value_json)` ·
-`prompt_versions(id, field_name, version, template, parent_id, notes, accepted, created_at)` ·
-`runs(id, prompt_version_id, model_id, record_id, field_name, raw_response, parsed_value_json,
-excerpt, notes, score, honesty_score, is_correct, outcome, logprob_confidence, excerpt_verified,
-confidence, latency_ms, prompt_tokens, completion_tokens, cost_usd, error, batch_id, created_at)` (`excerpt`
-= verbatim source line the model cited, `notes` = its free-text uncertainty, `honesty_score` =
-abstention-credited score used by the optimizer, `outcome` =
-hit/correct_abstain/abstain_miss/wrong/hallucination, `logprob_confidence` = mean token
-probability when logprobs were requested, `excerpt_verified` = whether the cited excerpt was
-found in the source text, 1/0/NULL, `confidence` = the model's self-reported 0-1 confidence) ·
-`iterations(id, field_name, iteration_num, prompt_version_id, model_id, mean_score,
+`projects(id, slug, name, description, created_at)` ·
+`records(project_id, id, title, md_path, PRIMARY KEY(project_id, id))` ·
+`ground_truth(project_id, record_id, field_name, value_json)` ·
+`prompt_versions(id, project_id, field_name, version, template, parent_id, notes, accepted,
+created_at)` · `runs(id, project_id, prompt_version_id, model_id, record_id, field_name,
+raw_response, parsed_value_json, excerpt, notes, score, honesty_score, is_correct, outcome,
+logprob_confidence, excerpt_verified, confidence, latency_ms, prompt_tokens, completion_tokens,
+cost_usd, error, batch_id, created_at)` (`excerpt` = verbatim source line cited, `notes` =
+free-text uncertainty, `honesty_score` = abstention-credited score used by the optimizer,
+`outcome` = hit/correct_abstain/abstain_miss/wrong/hallucination, `logprob_confidence` = mean
+token probability when logprobs requested, `excerpt_verified` = whether the cited excerpt was
+found in the source, `confidence` = the model's self-reported 0-1 confidence) ·
+`iterations(id, project_id, field_name, iteration_num, prompt_version_id, model_id, mean_score,
 n_records, feedback, accepted, created_at)` · `llm_judgments(id, run_id, judge_model, verdict,
-reasoning, created_at)` · `self_consistency(id, field_name, model_id, record_id, n_samples,
-agreement, modal_value_json, created_at)` · `jobs(id, field_name, model_id, kind, status, total, completed,
-started_at, updated_at, finished_at, error)`.
+reasoning, created_at)` · `self_consistency(id, project_id, field_name, model_id, record_id,
+n_samples, agreement, modal_value_json, created_at)` · `jobs(id, project_id, field_name,
+model_id, kind, status, total, completed, started_at, updated_at, finished_at, error)`.
+
+An older single-project DB (no `project_id` columns) is migrated automatically the first time
+`db.init_db()` runs against it — see `db._migrate_to_multi_project`: adds the `projects` table,
+backfills every existing row into a `dep-extraction` project (id=1), and rebuilds
+`records`/`ground_truth`/`prompt_versions`/`runs`/`iterations`/`jobs` with the new project-scoped
+keys. No data is lost (verified: row counts before/after match exactly); it's a no-op once
+already migrated. Additive per-run columns (`excerpt`, `notes`, `honesty_score`, `outcome`,
+`logprob_confidence`, `excerpt_verified`, `confidence`) are added in place by `db._migrate`.
 
 ## Production deployment (Fly.io)
 
@@ -184,17 +207,19 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
 
 ## Roadmap
 
-- **Multi-project support (planned, not started)**: today everything — `FIELDS` in `app/fields.py`,
-  the DB schema, the API, the frontend — is hardcoded to this one "data extraction" project. To
-  add a different synthesis project (e.g. a different corpus/fields/prompts) two options were
-  scoped: (A) a fully separate deployment (duplicate the pattern: new fields module, corpus,
-  db, Fly app — fast, no schema changes, but a second independent dashboard) or (B) a real
-  `projects` table + `project_id` column on `records`/`ground_truth`/`prompt_versions`/`runs`/
-  `iterations`/`jobs`, `FIELDS` loaded per-project instead of a fixed dict, new `/api/projects`
-  endpoints, and a project switcher in the frontend alongside the existing field switcher —
-  chosen direction: **B**, to be done on a `feature/multi-project` branch once `backend/` has
-  been merged into the `promptlab` repo (monorepo) and the current production rollout has
-  finished (do not touch the DB schema while a rollout is actively writing to it).
+- **Multi-project support (backend done, frontend not started)**: on `feature/multi-project`.
+  Backend is fully project-scoped now (see "Projects" in Architecture above and the Data model
+  section) — schema migration, `app/projects.py` registry, `/api/projects/...`-nested API, and
+  `--project` CLI flag on every data-touching script are all done and tested locally (migration
+  verified to preserve all existing rows exactly; API smoke-tested end-to-end). Still only one
+  project is registered (`dep-extraction`). Remaining work: (1) frontend project switcher +
+  `api.ts` updated to call the new nested URLs (currently still calls the old un-nested
+  `/api/fields/...` routes, so the deployed frontend will break against this branch's API until
+  that's done), (2) `app/prompts.py`/`scoring.py`/`taxonomy.py` are still hardcoded to the single
+  `fields.FIELDS` dict rather than being project-aware — needs generalizing when the second real
+  project (HSF/Girl Effect/StrongMinds screening) is actually added, (3) merge to `main` and
+  deploy once the current production rollout finishes (don't touch the live Fly DB schema while
+  a rollout is actively writing to it).
 - **Prompt caching (planned, not started)**: the `<paper>` document block is already the stable
   prefix in every prompt (see `prompts.build_prompt`), and most providers OpenRouter proxies to
   (OpenAI, Gemini 2.5, DeepSeek, Grok) cache a shared prefix automatically, with Anthropic/Qwen

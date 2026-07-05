@@ -23,6 +23,7 @@ from backend.app.prompts import BASELINE_INSTRUCTIONS  # noqa: E402
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--project", default="dep-extraction", help="project slug (see backend/app/projects.py)")
     ap.add_argument("--field", required=True, choices=list(BASELINE_INSTRUCTIONS.keys()))
     ap.add_argument("--model", required=True, help="model being optimized for (the one that runs the extraction)")
     ap.add_argument("--reflector-model", required=True, help="stronger model used to propose revised instructions")
@@ -43,6 +44,7 @@ def main() -> None:
         field_name=args.field,
         model_id=args.model,
         reflector_model=args.reflector_model,
+        project_slug=args.project,
         max_iterations=args.max_iterations,
         no_improve_limit=args.no_improve_limit,
         minibatch_size=args.minibatch_size,

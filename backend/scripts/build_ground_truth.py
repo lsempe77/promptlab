@@ -75,17 +75,20 @@ def main() -> None:
     print(f"Studies with both ground truth and full text: {len(usable_ids):,}")
 
     db.init_db()
+    with db.get_conn() as conn:
+        project_id = db.get_project_id(conn, "dep-extraction")
+
     n_gt = {f: 0 for f in ("authors", "author_affiliation", "author_country", "sector_name", "sub_sector")}
     with db.get_conn() as conn:
         for id_ in usable_ids:
             rec = by_id[id_]
             md_path = str(config.MD_DIR / f"{id_}.md")
-            db.upsert_record(conn, id_, rec["title"], md_path)
+            db.upsert_record(conn, project_id, id_, rec["title"], md_path)
             for field in n_gt:
                 value = rec[field]
                 if not value:
                     continue
-                db.upsert_ground_truth(conn, id_, field, value)
+                db.upsert_ground_truth(conn, project_id, id_, field, value)
                 n_gt[field] += 1
 
     print("Ground-truth rows written per field:")
