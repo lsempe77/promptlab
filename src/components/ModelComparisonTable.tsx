@@ -6,11 +6,6 @@ function pct(x: number | null) {
   return `${(x * 100).toFixed(1)}%`;
 }
 
-function score(x: number | null) {
-  if (x == null) return "—";
-  return x.toFixed(3);
-}
-
 function usd(x: number | null) {
   if (x == null) return "—";
   return `$${x.toFixed(4)}`;
@@ -21,12 +16,11 @@ function ms(x: number | null) {
   return `${Math.round(x)} ms`;
 }
 
-type SortKey = "model_id" | "n" | "mean_score" | "accuracy" | "n_errors" | "mean_latency_ms" | "total_cost_usd";
+type SortKey = "model_id" | "n" | "accuracy" | "n_errors" | "mean_latency_ms" | "total_cost_usd";
 
 const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "model_id", label: "Model" },
   { key: "n", label: "# References" },
-  { key: "mean_score", label: "Mean score" },
   { key: "accuracy", label: "Accuracy" },
   { key: "n_errors", label: "Errors" },
   { key: "mean_latency_ms", label: "Mean latency" },
@@ -34,7 +28,7 @@ const COLUMNS: { key: SortKey; label: string }[] = [
 ];
 
 export function ModelComparisonTable({ summaries }: { summaries: ModelSummary[] }) {
-  const [sortKey, setSortKey] = useState<SortKey>("mean_score");
+  const [sortKey, setSortKey] = useState<SortKey>("accuracy");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   if (summaries.length === 0) {
@@ -82,7 +76,6 @@ export function ModelComparisonTable({ summaries }: { summaries: ModelSummary[] 
           <tr key={s.model_id}>
             <td className="model-id">{s.model_id}</td>
             <td>{s.n}</td>
-            <td>{score(s.mean_score)}</td>
             <td>{pct(s.accuracy)}</td>
             <td className={s.n_errors > 0 ? "has-errors" : ""}>{s.n_errors}</td>
             <td>{ms(s.mean_latency_ms)}</td>

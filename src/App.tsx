@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type FieldInfo, type Job, type ModelSummary, type Thresholds } from "./api";
+import { api, type FieldInfo, type Job, type LlmJudgeSummary, type ModelSummary, type Thresholds } from "./api";
 import { ModelComparisonTable } from "./components/ModelComparisonTable";
 import { ModelCard } from "./components/ModelCard";
 import { ModelFilter } from "./components/ModelFilter";
@@ -17,6 +17,7 @@ function App() {
   const [thresholds, setThresholds] = useState<Thresholds | null>(null);
 
   const [summaries, setSummaries] = useState<ModelSummary[]>([]);
+  const [llmJudge, setLlmJudge] = useState<LlmJudgeSummary[]>([]);
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [loadingField, setLoadingField] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -47,6 +48,7 @@ function App() {
       })
       .catch((e) => setApiError(String(e)))
       .finally(() => setLoadingField(false));
+    api.llmJudgeSummary(selected).then(setLlmJudge).catch(() => setLlmJudge([]));
   }, [selected]);
 
   // Poll for running extraction/optimization jobs so the dashboard can show a
@@ -176,12 +178,13 @@ function App() {
                           <h3>All models — summary</h3>
                           {thresholds && (
                             <p className="muted panel-caption">
-                              Accuracy = share of references scoring ≥ {thresholds.correct_threshold.toFixed(2)}
-                              (fuzzy matches count as correct here, so this can read higher than the
-                              stricter exact-match accuracy shown in each model's confusion matrix below).
-                              Every model is optimized and evaluated against its own prompt history — see
-                              the per-model cards below for each model's own iteration progress, prompt
-                              lineage, and confusion matrix.
+                              Accuracy here = share of references scoring ≥ {thresholds.correct_threshold.toFixed(2)}
+                              (fuzzy matches count as correct). Each model card below also shows a
+                              stricter exact-match accuracy and an LLM-judged accuracy — see "How to
+                              read this dashboard" above for what each one means and why they can
+                              differ. Every model is optimized and evaluated against its own prompt
+                              history — see the per-model cards below for each model's own iteration
+                              progress, prompt lineage, and confusion matrix.
                             </p>
                           )}
                           <ModelComparisonTable summaries={summaries} />
@@ -206,6 +209,7 @@ function App() {
                                   fieldName={selected!}
                                   summary={s}
                                   jobs={jobs.filter((j) => j.model_id === s.model_id)}
+                                  llmJudge={llmJudge.find((j) => j.model_id === s.model_id) ?? null}
                                 />
                               ))}
                           </>

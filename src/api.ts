@@ -30,6 +30,12 @@ export interface ModelSummary {
   accuracy: number;
 }
 
+export interface LlmJudgeSummary {
+  model_id: string;
+  n_judged: number;
+  llm_judged_accuracy: number;
+}
+
 export interface IterationLog {
   id: number;
   field_name: string;
@@ -117,4 +123,5 @@ export const api = {
     getJson<Confusion>(
       `/api/fields/${field}/confusion${modelId ? `?model_id=${encodeURIComponent(modelId)}` : ""}`,
     ),
+  llmJudgeSummary: (field: string) => getJson<LlmJudgeSummary[]>(`/api/fields/${field}/llm-judge-summary`),
 };

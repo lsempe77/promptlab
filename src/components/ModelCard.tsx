@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type Confusion, type IterationLog, type Job, type ModelSummary } from "../api";
+import { api, type Confusion, type IterationLog, type Job, type LlmJudgeSummary, type ModelSummary } from "../api";
 import { IterationChart } from "./IterationChart";
 import { ConfusionMatrix } from "./ConfusionMatrix";
 
@@ -11,10 +11,12 @@ export function ModelCard({
   fieldName,
   summary,
   jobs = [],
+  llmJudge = null,
 }: {
   fieldName: string;
   summary: ModelSummary;
   jobs?: Job[];
+  llmJudge?: LlmJudgeSummary | null;
 }) {
   const [iters, setIters] = useState<IterationLog[] | null>(null);
   const [confusion, setConfusion] = useState<Confusion | null>(null);
@@ -63,17 +65,21 @@ export function ModelCard({
             <span className="stat-value">{summary.n}</span>
             <span className="stat-label">references</span>
           </div>
-          <div className="stat-card">
-            <span className="stat-value">{summary.mean_score != null ? summary.mean_score.toFixed(3) : "—"}</span>
-            <span className="stat-label">mean score</span>
-          </div>
           <div className="stat-card highlight">
             <span className="stat-value">{pct(summary.accuracy)}</span>
-            <span className="stat-label">accuracy</span>
+            <span className="stat-label">threshold accuracy</span>
           </div>
           <div className="stat-card">
             <span className="stat-value">{summary.n_errors}</span>
             <span className="stat-label">errors</span>
+          </div>
+          <div className="stat-card">
+            <span className="stat-value">
+              {llmJudge && llmJudge.n_judged > 0 ? pct(llmJudge.llm_judged_accuracy) : "—"}
+            </span>
+            <span className="stat-label">
+              llm-judged accuracy{llmJudge && llmJudge.n_judged > 0 ? ` (${llmJudge.n_judged})` : ""}
+            </span>
           </div>
         </div>
       </div>
