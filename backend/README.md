@@ -28,16 +28,16 @@ The end-to-end loop (extract → score → judge → gate → reflect/rewrite �
 flowchart TD
     GT["Ground-truth reference set<br/>(human-curated)"] --> EX
     P["Current prompt<br/>(baseline or optimized)"] --> EX["Extraction:<br/>run field across all models"]
-    EX --> SC["Score each answer 3 ways:<br/>fuzzy · exact · LLM judge"]
-    SC --> HON["Honesty & evidence checks:<br/>hit / abstain / wrong / hallucination<br/>+ excerpt verified + calibration"]
+    EX --> SC["Score each answer 3 ways:<br/>fuzzy ≥95 · exact · LLM judge<br/>correct if score ≥ 0.90"]
+    SC --> HON["Honesty & evidence checks:<br/>hit / abstain / wrong / hallucination<br/>excerpt ≥90 · abstain credit 0.5 · fabricated ×0.5"]
     HON --> JUDGE["Cross-family LLM judge<br/>(OpenAI↔Anthropic) → verdict"]
     JUDGE --> GATE{"Per-model gate:<br/>judged accuracy ≥ 80%?"}
     GATE -- "yes" --> STAGE["Advance stage<br/>30 → 60 → 100 refs<br/>(95% Wilson CI narrows)"]
-    GATE -- "no (gated)" --> REFLECT["Reflector model:<br/>diagnose failures →<br/>propose revised prompt"]
+    GATE -- "no (gated)" --> REFLECT["Reflector model:<br/>diagnose failures →<br/>propose revised prompt<br/>(retry ≤3× for valid JSON)"]
     REFLECT --> RETEST["Re-test candidate<br/>on held-out val set"]
-    RETEST --> BETTER{"Beats baseline<br/>by ≥ epsilon?"}
+    RETEST --> BETTER{"Beats baseline<br/>by ≥ 0.01 (epsilon)?"}
     BETTER -- "yes" --> ACCEPT["Accept → new prompt version"]
-    BETTER -- "no" --> REJECT["Reject<br/>(stop after N no-improve)"]
+    BETTER -- "no" --> REJECT["Reject<br/>(stop after 3 no-improve<br/>or 10 iterations)"]
     ACCEPT --> P
     STAGE --> DONE(["Production-ready<br/>(field, model) pairs"])
     DASH["Live dashboard: comparisons ·<br/>confusion · calibration · prompt lineage"] -.reads.- SC

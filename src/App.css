@@ -225,6 +225,36 @@ body {
   margin-top: 6px;
 }
 
+/* Mermaid pipeline diagram in the Methodology panel. */
+.mermaid-figure {
+  margin: 12px 0 4px;
+}
+
+.mermaid-diagram {
+  width: 100%;
+  overflow-x: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+
+.mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-figure figcaption {
+  margin-top: 6px;
+  font-size: 0.8rem;
+}
+
+.mermaid-error {
+  color: #b23b3b;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+}
+
 .stat-card {
   background: var(--bg-elevated);
   border: 1px solid var(--border);

@@ -1,4 +1,21 @@
 import type { Thresholds } from "../api";
+import { MermaidDiagram } from "./MermaidDiagram";
+
+const PIPELINE_CHART = `flowchart TD
+    GT["Ground-truth reference set<br/>(human-curated)"] --> EX
+    P["Current prompt<br/>(baseline or optimized)"] --> EX["Extraction:<br/>run field across all models"]
+    EX --> SC["Score each answer 3 ways:<br/>fuzzy match &ge;95 / exact / LLM judge<br/>counts as correct if score &ge; 0.90"]
+    SC --> HON["Honesty &amp; evidence checks:<br/>hit / abstain / wrong / hallucination<br/>excerpt found &ge;90 - abstain credit 0.5 - fabricated excerpt x0.5"]
+    HON --> JUDGE["Cross-family LLM judge<br/>(OpenAI vs Anthropic) - verdict"]
+    JUDGE --> GATE{"Per-model gate:<br/>judged accuracy &ge; 80%?"}
+    GATE -- "yes" --> STAGE["Advance stage<br/>30 -> 60 -> 100 refs<br/>(95% Wilson CI narrows)"]
+    GATE -- "no (gated)" --> REFLECT["Reflector model:<br/>diagnose failures,<br/>propose revised prompt<br/>(retry up to 3x for valid JSON)"]
+    REFLECT --> RETEST["Re-test candidate<br/>on held-out validation set"]
+    RETEST --> BETTER{"Beats baseline<br/>by &ge; 0.01 (epsilon)?"}
+    BETTER -- "yes" --> ACCEPT["Accept -> new prompt version"]
+    BETTER -- "no" --> REJECT["Reject<br/>(stop after 3 no-improve<br/>or 10 iterations)"]
+    ACCEPT --> P
+    STAGE --> DONE(["Production-ready<br/>(field, model) pairs"])`;
 
 export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
   return (
@@ -11,6 +28,20 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
         that's expected, not a bug — because they're answering slightly different questions.
         The metrics are grouped below — expand a group to read what each one means.
       </p>
+
+      <details className="method-group" open>
+        <summary>The pipeline at a glance</summary>
+        <p className="muted">
+          The tool runs a continuous loop: extract a field across every model, score it three ways,
+          have an independent cross-family model judge it, then either advance the rollout (if a
+          model clears the gate) or rewrite the prompt and re-test. The thresholds on each decision
+          are the actual values the system uses.
+        </p>
+        <MermaidDiagram
+          chart={PIPELINE_CHART}
+          caption="Extract → score → judge → gate → reflect/rewrite → re-test → advance. Numbers on the decision diamonds are the live thresholds (gate 80%, improvement epsilon 0.01, stop after 3 non-improving iterations)."
+        />
+      </details>
 
       <details className="method-group" open>
         <summary>1. How correctness is measured</summary>
