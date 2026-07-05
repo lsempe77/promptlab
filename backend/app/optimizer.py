@@ -200,6 +200,7 @@ def propose_revision(
     reflector_model: str,
     max_cases: int = 8,
     avoid: list[dict[str, Any]] | None = None,
+    max_attempts: int = 3,
 ) -> tuple[str, str | None]:
     """Calls the reflector model and returns (revised_instruction, diagnosis).
     `avoid` is a list of {"instruction", "diagnosis"} dicts for recently
@@ -208,7 +209,7 @@ def propose_revision(
     """
     cases_text = _format_failures(failures, max_cases)
     avoid_text = _format_avoid_history(avoid or [])
-    user_prompt = (
+    base_prompt = (
         f"FIELD BEING EXTRACTED: {field_name}\n\n"
         f"CURRENT INSTRUCTION:\n{current_instruction}\n\n"
         f"FAILURE CASES (predicted vs. expected ground truth):\n{cases_text}"
@@ -219,12 +220,38 @@ def propose_revision(
         '    "revised_instruction": "<the new instruction text, 2-5 sentences>"\n'
         "}\n"
     )
-    resp = gateway.call_model(reflector_model, _REFLECTOR_SYSTEM, user_prompt, temperature=0.7, max_tokens=500)
-    obj = parse_json_object(resp.content)
-    revised = obj.get("revised_instruction")
-    if not revised or not str(revised).strip():
-        raise ParseError(f"Reflector did not return a usable revised_instruction: {resp.content[:300]!r}")
-    return str(revised).strip(), obj.get("diagnosis")
+    # Reasoning-capable reflectors (e.g. Claude Sonnet) can spend their whole
+    # token budget "thinking" and then return null/truncated content, so give a
+    # generous budget and retry a couple of times, nudging harder for JSON-only
+    # output on retries. Without this a transient empty/non-JSON reply wastes a
+    # whole optimizer iteration.
+    last_err: Exception | None = None
+    for attempt in range(max_attempts):
+        user_prompt = base_prompt
+        if attempt > 0:
+            user_prompt += (
+                "\n\nIMPORTANT: Output ONLY the raw JSON object shown above — no preamble, no "
+                "commentary, no markdown code fences, and no step-by-step reasoning before it."
+            )
+        resp = gateway.call_model(
+            reflector_model,
+            _REFLECTOR_SYSTEM,
+            user_prompt,
+            temperature=0.7 if attempt == 0 else 0.3,
+            max_tokens=2000,
+        )
+        try:
+            obj = parse_json_object(resp.content)
+        except ParseError as exc:
+            last_err = exc
+            continue
+        revised = obj.get("revised_instruction")
+        if revised and str(revised).strip():
+            return str(revised).strip(), obj.get("diagnosis")
+        last_err = ParseError(
+            f"Reflector did not return a usable revised_instruction: {resp.content[:300]!r}"
+        )
+    raise last_err if last_err else ParseError("Reflector produced no usable revision")
 
 
 def optimize_field(

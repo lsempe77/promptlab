@@ -13,6 +13,7 @@ when none existed) get no such credit.
 """
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -53,7 +54,31 @@ class ScoreResult:
     honesty_score: float = 0.0
 
 
+def _demojibake(s: str) -> str:
+    """Best-effort repair of UTF-8-decoded-as-cp1252 mojibake (e.g. 'BaÃ±os' ->
+    'Baños', 'SelcÌ§uk' -> 'Selçuk') in the *ground truth* -- the reference
+    data mixes correct UTF-8 with mangled values. This is deliberately safe on
+    already-correct text: a clean Latin-1 accent (e.g. 'é' = 0xE9) re-encoded to
+    cp1252 is an invalid stand-alone UTF-8 byte, so the round-trip raises and we
+    keep the original -- only genuine mojibake (valid UTF-8 byte sequences that
+    were mis-decoded) round-trips cleanly."""
+    if s.isascii():
+        return s
+    try:
+        return s.encode("cp1252").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s
+
+
+def _strip_accents(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+
 def _norm(s: str) -> str:
+    # Repair mojibake in the reference data, then fold away diacritics so a
+    # model's correct 'ç'/'ñ' matches a ground-truth value regardless of accent
+    # encoding noise. Applied to both sides so the comparison is symmetric.
+    s = _strip_accents(_demojibake(s))
     return " ".join(s.strip().lower().split())
 
 
