@@ -33,6 +33,7 @@ from backend.app import db, prompt_store, prompts  # noqa: E402
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--project", default="dep-extraction", help="project slug (see backend/app/projects.py)")
     ap.add_argument("--field", required=True, choices=list(prompts.BASELINE_INSTRUCTIONS.keys()))
     ap.add_argument(
         "--instruction", default=None,
@@ -44,10 +45,11 @@ def main() -> None:
     instruction = args.instruction if args.instruction is not None else prompts.BASELINE_INSTRUCTIONS[args.field]
 
     with db.get_conn() as conn:
-        prompt_store.get_or_create_baseline(conn, args.field)  # ensure v1 exists first
-        incumbent = db.best_accepted_prompt_version(conn, args.field)
+        project_id = db.get_project_id(conn, args.project)
+        prompt_store.get_or_create_baseline(conn, project_id, args.field)  # ensure v1 exists first
+        incumbent = db.best_accepted_prompt_version(conn, project_id, args.field)
         new_row = prompt_store.add_version(
-            conn, args.field, instruction=instruction,
+            conn, project_id, args.field, instruction=instruction,
             parent_id=incumbent["id"] if incumbent else None,
             notes=args.notes, accepted=True,
         )

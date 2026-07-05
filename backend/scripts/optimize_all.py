@@ -35,6 +35,7 @@ def reflector_for(model_id: str) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--project", default="dep-extraction", help="project slug (see backend/app/projects.py)")
     ap.add_argument("--fields", type=str, default=None, help="comma-separated fields (default: all 5)")
     ap.add_argument("--models", type=str, default=None, help="comma-separated model ids (default: full models.yaml roster)")
     ap.add_argument("--skip-models", type=str, default=None, help="comma-separated model ids to exclude")
@@ -68,6 +69,7 @@ def main() -> None:
                     field_name=field,
                     model_id=model_id,
                     reflector_model=reflector,
+                    project_slug=args.project,
                     max_iterations=args.max_iterations,
                     no_improve_limit=args.no_improve_limit,
                     minibatch_size=args.minibatch_size,
