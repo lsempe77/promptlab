@@ -15,8 +15,8 @@ const PIPELINE_CHART = `flowchart TD
     STAGE -- "100 refs (final, capped)" --> DONE(["Production-ready<br/>(field, model) pairs"])
     G60 --> EX
     G100 --> EX
-    REFLECT --> RETEST["Re-test candidate<br/>on held-out validation set"]
-    RETEST --> BETTER{"Beats baseline<br/>by &ge; 0.01 (epsilon)?"}
+    REFLECT --> RETEST["Re-test candidate on 30 papers<br/>(same set as production) + LLM judge"]
+    RETEST --> BETTER{"Higher LLM-judged accuracy?<br/>(&ge; +0.01)"}
     BETTER -- "yes" --> ACCEPT["Accept -> new prompt version"]
     BETTER -- "no" --> REJECT["Reject<br/>(stop after 3 no-improve<br/>or 10 iterations)"]
     ACCEPT --> P`;
@@ -43,7 +43,7 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
         </p>
         <MermaidDiagram
           chart={PIPELINE_CHART}
-          caption="Extract → score → judge → gate → reflect/rewrite → re-test → advance. Numbers on the decision diamonds are the live thresholds (gate 95%, improvement epsilon 0.01, stop after 3 non-improving iterations)."
+          caption="Extract → score → judge → gate → reflect/rewrite → re-test → advance. Numbers on the decision diamonds are the live thresholds (gate 95%, optimizer accepts a rewrite only if LLM-judged accuracy on 30 papers improves by ≥ 0.01, stop after 3 non-improving iterations)."
         />
       </details>
 

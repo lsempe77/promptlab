@@ -18,12 +18,13 @@ import uuid
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any
 
-from . import db, gateway, prompt_store, prompts, scoring
+from . import db, gateway, judging, prompt_store, prompts, scoring
 from .corpus import read_md
 from .parsing import ParseError, parse_field_response, parse_json_object
 
 DEFAULT_MINIBATCH_SIZE = 8
-DEFAULT_VAL_SIZE = 12
+DEFAULT_VAL_SIZE = 30  # same size as production rollout stage 1, so val judged-accuracy is
+                       # directly comparable to the dashboard/gate (seed 42 => same records)
 IMPROVEMENT_EPSILON = 0.01  # candidate must beat incumbent by at least this much
 
 
@@ -32,6 +33,9 @@ class EvalOutcome:
     mean_score: float
     n: int
     failures: list[dict[str, Any]]
+    # (predicted, truth) for every successfully-parsed record, so the caller can
+    # run an independent LLM-judge accuracy pass without re-calling the model.
+    predictions: list[tuple[Any, Any]] = dataclass_field(default_factory=list)
 
 
 @dataclass
@@ -84,6 +88,7 @@ def evaluate_instruction(
     """
     scores: list[float] = []
     failures: list[dict[str, Any]] = []
+    predictions: list[tuple[Any, Any]] = []
 
     usable_records: list[dict] = []
     jobs: list[dict[str, Any]] = []
@@ -129,6 +134,7 @@ def evaluate_instruction(
 
         verified = scoring.verify_excerpt(meta.get("excerpt"), source)
         result = scoring.score_field(field_name, value, rec["ground_truth"], excerpt_verified=verified)
+        predictions.append((value, rec["ground_truth"]))
         # The optimizer optimizes the honesty-adjusted score (partial credit for
         # honest abstention, and a penalty for a value cited with a fabricated
         # excerpt), not the raw score, so it prefers calibrated honesty over
@@ -154,7 +160,7 @@ def evaluate_instruction(
                        cost_usd=resp.cost_usd, error=None)
 
     mean_score = sum(scores) / len(scores) if scores else 0.0
-    return EvalOutcome(mean_score=mean_score, n=len(scores), failures=failures)
+    return EvalOutcome(mean_score=mean_score, n=len(scores), failures=failures, predictions=predictions)
 
 
 _REFLECTOR_SYSTEM = (
@@ -337,11 +343,19 @@ def _run_optimization(
             field_name, best_instruction, val, model_id, conn=conn, project_id=project_id,
             prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
         )
-    best_score = baseline_outcome.mean_score
+    best_score = baseline_outcome.mean_score  # honesty score, used only to rank candidates cheaply
+    judge_model = judging.judge_for(model_id)
+    baseline_judged, baseline_judged_n = judging.judge_accuracy(
+        field_name, baseline_outcome.predictions, judge_model, max_workers=max_workers
+    )
+    best_judged = baseline_judged
     if verbose:
-        print(f"[iter 0] baseline val_score={best_score:.3f} (n={baseline_outcome.n})")
+        print(
+            f"[iter 0] baseline judged-accuracy={baseline_judged:.3f} "
+            f"(n={baseline_judged_n}, honesty={best_score:.3f}); judge={judge_model}"
+        )
 
-    result = OptimizeResult(field_name=field_name, baseline_score=best_score, best_instruction=best_instruction, best_score=best_score)
+    result = OptimizeResult(field_name=field_name, baseline_score=baseline_judged, best_instruction=best_instruction, best_score=baseline_judged)
     no_improve_count = 0
     rejected_history: list[dict[str, Any]] = []  # {"instruction", "diagnosis"}, most recent last
 
@@ -400,7 +414,13 @@ def _run_optimization(
             diagnosis = best_candidate["diagnosis"]
             pv = best_candidate["pv"]
             candidate_outcome = best_candidate["outcome"]
-            accepted = candidate_outcome.mean_score > best_score + IMPROVEMENT_EPSILON
+            # Accept on LLM-judged accuracy -- the same metric the production gate
+            # uses -- not the cheap string-match honesty score (that only ranks
+            # candidates within an iteration). Judge just the winning candidate.
+            cand_judged, cand_judged_n = judging.judge_accuracy(
+                field_name, candidate_outcome.predictions, judge_model, max_workers=max_workers
+            )
+            accepted = cand_judged > best_judged + IMPROVEMENT_EPSILON
 
             for c in candidates:
                 is_winner_and_accepted = accepted and c is best_candidate
@@ -410,7 +430,7 @@ def _run_optimization(
 
             db.add_iteration(
                 conn, project_id=project_id, field_name=field_name, iteration_num=it, prompt_version_id=pv["id"],
-                model_id=model_id, mean_score=candidate_outcome.mean_score, n_records=candidate_outcome.n,
+                model_id=model_id, mean_score=cand_judged, n_records=cand_judged_n,
                 feedback=diagnosis, accepted=int(accepted),
             )
 
@@ -418,19 +438,25 @@ def _run_optimization(
                 tag = "ACCEPTED" if accepted else "rejected"
                 n_tried = len(candidates)
                 suffix = f" (best of {n_tried})" if n_tried > 1 else ""
-                print(f"[iter {it}] val_score={candidate_outcome.mean_score:.3f} (best={best_score:.3f}) -> {tag}{suffix}")
+                print(
+                    f"[iter {it}] judged-accuracy={cand_judged:.3f} (best={best_judged:.3f}, "
+                    f"honesty={candidate_outcome.mean_score:.3f}) -> {tag}{suffix}"
+                )
                 if diagnosis:
                     print(f"           diagnosis: {diagnosis}")
 
             result.iterations.append(IterationLog(
                 iteration_num=it, candidate_instruction=candidate_instruction, diagnosis=diagnosis,
-                val_score=candidate_outcome.mean_score, accepted=accepted, prompt_version_id=pv["id"],
+                val_score=cand_judged, accepted=accepted, prompt_version_id=pv["id"],
             ))
 
             if accepted:
                 best_instruction = candidate_instruction
                 best_pv_id = pv["id"]
-                best_score = candidate_outcome.mean_score
+                best_score = candidate_outcome.mean_score  # honesty, for ranking the next minibatch
+                best_judged = cand_judged
+                result.best_instruction = candidate_instruction
+                result.best_score = cand_judged
                 no_improve_count = 0
             else:
                 no_improve_count += 1

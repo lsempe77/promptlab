@@ -39,8 +39,8 @@ flowchart TD
     STAGE -- "100 refs (final, capped)" --> DONE(["Production-ready<br/>(field, model) pairs"])
     G60 --> EX
     G100 --> EX
-    REFLECT --> RETEST["Re-test candidate<br/>on held-out val set"]
-    RETEST --> BETTER{"Beats baseline<br/>by ≥ 0.01 (epsilon)?"}
+    REFLECT --> RETEST["Re-test candidate on 30 papers<br/>(same set as production) + LLM judge"]
+    RETEST --> BETTER{"Higher LLM-judged accuracy?<br/>(≥ +0.01)"}
     BETTER -- "yes" --> ACCEPT["Accept → new prompt version"]
     BETTER -- "no" --> REJECT["Reject<br/>(stop after 3 no-improve<br/>or 10 iterations)"]
     ACCEPT --> P
@@ -104,9 +104,12 @@ flowchart TD
   `scripts/optimize_all.py` (sweeps every field x model combination in one run, picking a
   cross-family reflector automatically — Anthropic models are reflected on by `~openai/gpt-latest`,
   everything else by `~anthropic/claude-opus-latest`, so a model is never self-critiqued by a
-  same-family model; one failing pair doesn't stop the sweep). The optimizer's objective is the
-  **honesty-adjusted** mean score (see Scorer above), so it is steered to prefer calibrated
-  abstention over confident wrong guesses; the raw score is still stored per run for display.
+  same-family model; one failing pair doesn't stop the sweep). The optimizer **accepts a rewrite
+  only if it raises LLM-judged accuracy** (the same metric as the production gate, via
+  `app/judging.py`) on a fixed 30-record validation set (same size/seed as production stage 1, so
+  the number is directly comparable) by at least `IMPROVEMENT_EPSILON`. The cheap honesty-adjusted
+  score is used only to *rank* candidates within an iteration; the raw score is still stored per
+  run for display.
 - **FastAPI app** (`app/api.py`, read-only): every field-scoped route is nested under a project
   slug: `/api/projects`, `/api/projects/{p}/fields`, `/api/projects/{p}/fields/{f}/prompt-versions`,
   `/api/projects/{p}/fields/{f}/models-summary`, `/api/projects/{p}/fields/{f}/runs`,

@@ -30,7 +30,7 @@ def main() -> None:
     ap.add_argument("--max-iterations", type=int, default=10)
     ap.add_argument("--no-improve-limit", type=int, default=3)
     ap.add_argument("--minibatch-size", type=int, default=8)
-    ap.add_argument("--val-size", type=int, default=12, help="fixed number of records held out for candidate comparison")
+    ap.add_argument("--val-size", type=int, default=30, help="fixed number of records held out for candidate comparison (same size as production stage 1, seed 42, so judged accuracy is comparable)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--concurrency", type=int, default=gateway.DEFAULT_MAX_CONCURRENCY,
                      help="max concurrent API calls per evaluation batch")
@@ -57,8 +57,8 @@ def main() -> None:
 
     print("\n=== Optimization summary ===")
     print(f"Field: {result.field_name} | model: {args.model} | reflector: {args.reflector_model}")
-    print(f"Baseline val score: {result.baseline_score:.3f}")
-    print(f"Best val score:     {result.best_score:.3f}")
+    print(f"Baseline judged accuracy (val): {result.baseline_score:.3f}")
+    print(f"Best judged accuracy (val):     {result.best_score:.3f}")
     print(f"Iterations run:     {len(result.iterations)}")
     print(f"\nBest instruction:\n{result.best_instruction}")
 

@@ -32,42 +32,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.app import db, gateway, parsing  # noqa: E402
+from backend.app import db, gateway, judging, parsing  # noqa: E402
 from backend.app.fields import FIELDS  # noqa: E402
 
-_JUDGE_SYSTEM = (
-    "You are a strict but fair data-quality auditor for a research metadata extraction "
-    "system. You will be shown a field being extracted from an academic paper, a value an "
-    "LLM predicted, and the ground-truth value from a human-curated dataset. Decide whether "
-    "the prediction is CORRECT — i.e. conveys the same real-world information as the ground "
-    "truth, allowing for harmless differences in spelling, abbreviation, ordering, or "
-    "formatting, but NOT allowing genuinely different entities/values. "
-    'Respond with a JSON object: {"correct": true|false, "reasoning": "<one sentence>"}.'
-)
-
-
-def _judge_prompt(field_name: str, predicted, truth) -> str:
-    spec = FIELDS[field_name]
-    return (
-        f"Field: {spec.label} ({spec.description})\n"
-        f"Predicted value: {json.dumps(predicted, ensure_ascii=False)}\n"
-        f"Ground truth value: {json.dumps(truth, ensure_ascii=False)}\n\n"
-        "Is the predicted value correct?"
-    )
-
-
-# Cross-family judge: to avoid self-preference bias, a model's output must be
-# judged by a model from a DIFFERENT family (same rule as the optimizer's
-# reflector in optimize_all.py). Anthropic outputs are judged by GPT; every
-# other family (OpenAI, Google, DeepSeek, xAI, Qwen, ...) is judged by Claude.
-_GPT_JUDGE = "~openai/gpt-latest"
-_CLAUDE_JUDGE = "~anthropic/claude-opus-latest"
-
-
-def _judge_for(model_id: str) -> str:
-    m = model_id.lower()
-    is_anthropic = "anthropic" in m or "claude" in m
-    return _GPT_JUDGE if is_anthropic else _CLAUDE_JUDGE
+# Judge logic lives in app/judging.py (shared with the optimizer's acceptance
+# test in app/optimizer.py) so the posterior sweep and the in-loop judge can't
+# drift apart.
+_JUDGE_SYSTEM = judging.JUDGE_SYSTEM
+_judge_prompt = judging.judge_prompt
+_judge_for = judging.judge_for
 
 
 def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
