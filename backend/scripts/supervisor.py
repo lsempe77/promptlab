@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -90,10 +91,21 @@ def _field_state(conn, project_id: int, field: str, models: list[str]) -> dict:
     ).fetchall()
     judged = {r["model_id"]: (r["acc"], r["n"]) for r in jrows if (r["n"] or 0) > 0}
 
-    return {"pv": pv, "pvid": pvid, "refs": refs, "unjudged": unjudged, "judged": judged}
+    # Persistent exhaustion: we already proposed a candidate off THIS baseline
+    # version and it was rejected, so re-optimizing the same baseline is unlikely
+    # to help -- don't (this is what keeps a daemon from burning money in a loop).
+    # When the baseline later advances (a candidate IS accepted), the new baseline
+    # has no rejected children yet, so optimization resumes.
+    exhausted = conn.execute(
+        "SELECT 1 FROM iterations i JOIN prompt_versions pv ON pv.id = i.prompt_version_id "
+        "WHERE i.project_id = ? AND i.field_name = ? AND i.accepted = 0 AND pv.parent_id = ? LIMIT 1",
+        (project_id, field, pvid),
+    ).fetchone() is not None
+
+    return {"pv": pv, "pvid": pvid, "refs": refs, "unjudged": unjudged, "judged": judged, "exhausted": exhausted}
 
 
-def _decide(state: dict, models: list[str], exhausted: bool) -> tuple[str, int | None, str]:
+def _decide(state: dict, models: list[str]) -> tuple[str, int | None, str]:
     """Return (action, arg, reason). action in extract/judge/optimize/done/stuck."""
     stages = list(config.PRODUCTION_ROLLOUT_STAGES)
     final = stages[-1]
@@ -110,10 +122,10 @@ def _decide(state: dict, models: list[str], exhausted: bool) -> tuple[str, int |
 
     below = [m for m in judged_models if judged[m][0] < scoring.GATE_THRESHOLD]
     if below:
-        if exhausted:
+        if state["exhausted"]:
             return "stuck", None, (
-                f"{len(below)} model(s) below gate {scoring.GATE_THRESHOLD:.0%} and optimizer "
-                "already exhausted -> leave gated (needs prompt/ground-truth work)"
+                f"{len(below)} model(s) below gate {scoring.GATE_THRESHOLD:.0%} and this baseline's "
+                "optimizer attempt was already rejected -> leave gated (needs prompt/ground-truth work)"
             )
         return "optimize", None, f"{len(below)} model(s) below gate {scoring.GATE_THRESHOLD:.0%} -> optimize prompt"
 
@@ -130,7 +142,10 @@ def main() -> None:
     ap.add_argument("--tiers", type=str, default="cheap,mid,expensive")
     ap.add_argument("--model", default="~openai/gpt-mini-latest", help="model the optimizer improves the prompt for")
     ap.add_argument("--reflector-model", default="~anthropic/claude-sonnet-latest")
-    ap.add_argument("--max-cycles", type=int, default=8, help="hard cap on supervisor cycles (safety brake)")
+    ap.add_argument("--max-cycles", type=int, default=8, help="hard cap on supervisor cycles per run (safety brake)")
+    ap.add_argument("--loop", action="store_true", help="run forever (daemon): re-check every --interval seconds")
+    ap.add_argument("--interval", type=int, default=10800, help="seconds to sleep between runs when --loop (default 3h)")
+    ap.add_argument("--max-runs", type=int, default=0, help="stop the daemon after this many runs (0 = unlimited)")
     ap.add_argument("--dry-run", action="store_true", help="print the decision plan without running anything")
     args = ap.parse_args()
 
@@ -140,54 +155,67 @@ def main() -> None:
 
     _log(f"Supervisor start | project={args.project} | fields={fields} | models={len(models)} "
          f"| stages={config.PRODUCTION_ROLLOUT_STAGES} | gate={scoring.GATE_THRESHOLD:.0%} "
-         f"| max_cycles={args.max_cycles}{' | DRY RUN' if args.dry_run else ''}")
+         f"| max_cycles={args.max_cycles}"
+         f"{' | LOOP every %ds' % args.interval if args.loop else ''}"
+         f"{' | DRY RUN' if args.dry_run else ''}")
 
-    exhausted: set[str] = set()
+    run_no = 0
+    while True:
+        run_no += 1
+        _log(f"===== supervisor run {run_no}{' (daemon)' if args.loop else ''} =====")
 
-    for cycle in range(1, args.max_cycles + 1):
-        _log(f"--- cycle {cycle}/{args.max_cycles} ---")
-        any_action = False
+        for cycle in range(1, args.max_cycles + 1):
+            _log(f"--- cycle {cycle}/{args.max_cycles} ---")
+            any_action = False
 
-        for field in fields:
-            with db.get_conn() as conn:
-                project_id = db.get_project_id(conn, args.project)
-                state = _field_state(conn, project_id, field, models)
-            action, arg, reason = _decide(state, models, field in exhausted)
-            passing = sum(1 for m, (acc, _n) in state["judged"].items() if acc >= scoring.GATE_THRESHOLD)
-            _log(f"[{field}] v{state['pv']['version']} refs={state['refs']} unjudged={state['unjudged']} "
-                 f"judged={len(state['judged'])} passing={passing} -> {action.upper()} "
-                 f"{arg if arg is not None else ''} ({reason})")
-
-            if action in ("done", "stuck"):
-                continue
-            any_action = True
-            if args.dry_run:
-                continue
-
-            if action == "extract":
-                _run(["backend.scripts.run_extraction", "--project", args.project, "--field", field,
-                      "--n", str(arg), "--tiers", args.tiers, "--logprobs"])
-            elif action == "judge":
-                _run(["backend.scripts.llm_judge", "--project", args.project, "--field", field,
-                      "--n", "100000", "--cross-family"])
-            elif action == "optimize":
-                v_before = state["pv"]["version"]
-                _run(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
-                      "--model", args.model, "--reflector-model", args.reflector_model])
+            for field in fields:
                 with db.get_conn() as conn:
                     project_id = db.get_project_id(conn, args.project)
-                    v_after = prompt_store.get_or_create_baseline(conn, project_id, field)["version"]
-                if v_after == v_before:
-                    exhausted.add(field)
-                    _log(f"[{field}] optimizer produced no accepted improvement -> marked exhausted")
-                else:
-                    _log(f"[{field}] optimizer accepted a new prompt v{v_before} -> v{v_after}")
+                    state = _field_state(conn, project_id, field, models)
+                action, arg, reason = _decide(state, models)
+                passing = sum(1 for _m, (acc, _n) in state["judged"].items() if acc >= scoring.GATE_THRESHOLD)
+                _log(f"[{field}] v{state['pv']['version']} refs={state['refs']} unjudged={state['unjudged']} "
+                     f"judged={len(state['judged'])} passing={passing}{' exhausted' if state['exhausted'] else ''} "
+                     f"-> {action.upper()} {arg if arg is not None else ''} ({reason})")
 
-        if not any_action:
-            _log("Converged: no field has an actionable step. Stopping.")
+                if action in ("done", "stuck"):
+                    continue
+                any_action = True
+                if args.dry_run:
+                    continue
+
+                if action == "extract":
+                    _run(["backend.scripts.run_extraction", "--project", args.project, "--field", field,
+                          "--n", str(arg), "--tiers", args.tiers, "--logprobs"])
+                elif action == "judge":
+                    _run(["backend.scripts.llm_judge", "--project", args.project, "--field", field,
+                          "--n", "100000", "--cross-family"])
+                elif action == "optimize":
+                    v_before = state["pv"]["version"]
+                    _run(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
+                          "--model", args.model, "--reflector-model", args.reflector_model])
+                    with db.get_conn() as conn:
+                        project_id = db.get_project_id(conn, args.project)
+                        v_after = prompt_store.get_or_create_baseline(conn, project_id, field)["version"]
+                    if v_after != v_before:
+                        _log(f"[{field}] optimizer ACCEPTED a new prompt v{v_before} -> v{v_after}")
+                    else:
+                        _log(f"[{field}] optimizer: no accepted improvement (baseline stays v{v_before}; "
+                             "this baseline will not be re-optimized)")
+
+            if not any_action:
+                _log("Converged: no field has an actionable step this run.")
+                break
+        else:
+            _log(f"Reached max_cycles={args.max_cycles} (safety cap) for this run.")
+
+        if args.dry_run or not args.loop:
             break
-    else:
-        _log(f"Reached max_cycles={args.max_cycles} (safety cap). Stopping.")
+        if args.max_runs and run_no >= args.max_runs:
+            _log(f"Reached max_runs={args.max_runs}. Stopping daemon.")
+            break
+        _log(f"Sleeping {args.interval}s before next run...")
+        time.sleep(args.interval)
 
     _log("Supervisor done.")
 
