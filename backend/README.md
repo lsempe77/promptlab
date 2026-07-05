@@ -207,19 +207,21 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
 
 ## Roadmap
 
-- **Multi-project support (backend done, frontend not started)**: on `feature/multi-project`.
-  Backend is fully project-scoped now (see "Projects" in Architecture above and the Data model
-  section) — schema migration, `app/projects.py` registry, `/api/projects/...`-nested API, and
-  `--project` CLI flag on every data-touching script are all done and tested locally (migration
-  verified to preserve all existing rows exactly; API smoke-tested end-to-end). Still only one
-  project is registered (`dep-extraction`). Remaining work: (1) frontend project switcher +
-  `api.ts` updated to call the new nested URLs (currently still calls the old un-nested
-  `/api/fields/...` routes, so the deployed frontend will break against this branch's API until
-  that's done), (2) `app/prompts.py`/`scoring.py`/`taxonomy.py` are still hardcoded to the single
-  `fields.FIELDS` dict rather than being project-aware — needs generalizing when the second real
-  project (HSF/Girl Effect/StrongMinds screening) is actually added, (3) merge to `main` and
-  deploy once the current production rollout finishes (don't touch the live Fly DB schema while
-  a rollout is actively writing to it).
+- **Multi-project support (merged to `main`)**: the backend is fully project-scoped (see
+  "Projects" in Architecture and the Data model section) — schema + auto-migration,
+  `app/projects.py` registry, `/api/projects/...`-nested API, `--project` CLI flag on every
+  data-touching script, and the frontend project switcher (`api.ts` calls the nested URLs) are all
+  done, merged, and validated locally. Only one project is registered so far (`dep-extraction`).
+  Remaining work: (1) `app/prompts.py`/`scoring.py`/`taxonomy.py` are still hardcoded to the single
+  `fields.FIELDS` dict rather than being project-aware — generalize when a second real project
+  (e.g. a screening project) is actually added; (2) add that second project's fields/corpus/prompts.
+- **Honesty-aware scoring, confidence signals & calibration (done, merged)**: per-run `outcome` +
+  `honesty_score` (abstention credit + fabricated-excerpt penalty, drives the optimizer), excerpt
+  verification, token-logprob / cross-model-agreement / self-consistency signals, and verbalized
+  confidence + Brier calibration are all shipped (see Architecture). TODO: actually *run* the
+  optional studies to populate them on real data — `self_consistency.py`, `llm_judge.py`, and a
+  `--logprobs` extraction pass — since a fresh dataset starts empty of those.
+
 - **Prompt caching (planned, not started)**: the `<paper>` document block is already the stable
   prefix in every prompt (see `prompts.build_prompt`), and most providers OpenRouter proxies to
   (OpenAI, Gemini 2.5, DeepSeek, Grok) cache a shared prefix automatically, with Anthropic/Qwen
