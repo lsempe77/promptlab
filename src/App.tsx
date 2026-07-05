@@ -111,7 +111,11 @@ function App() {
       .runVersions(selectedProject, selected)
       .then((vs) => {
         setRunVersionList(vs);
-        setSelectedVersion(vs.length > 0 ? vs[0].version : null);
+        // Default to the version with the most runs (the real production
+        // dataset) rather than the highest version number, which may be a thin
+        // optimizer-trial version with only a handful of validation runs.
+        const best = vs.reduce<RunVersion | null>((a, b) => (a && a.n_runs >= b.n_runs ? a : b), null);
+        setSelectedVersion(best ? best.version : null);
       })
       .catch(() => {
         setRunVersionList([]);
@@ -263,12 +267,17 @@ function App() {
                               value={selectedVersion ?? ""}
                               onChange={(e) => setSelectedVersion(Number(e.target.value))}
                             >
-                              {runVersionList.map((v, i) => (
-                                <option key={v.version} value={v.version}>
-                                  v{v.version}{i === 0 ? " (latest)" : ""} · {v.n_runs} runs
-                                  {v.accepted ? "" : " · candidate"}
-                                </option>
-                              ))}
+                              {(() => {
+                                const bestV = runVersionList.reduce((a, b) =>
+                                  b.n_runs > a.n_runs ? b : a,
+                                ).version;
+                                return runVersionList.map((v) => (
+                                  <option key={v.version} value={v.version}>
+                                    v{v.version}{v.version === bestV ? " (current)" : ""} · {v.n_runs} runs
+                                    {v.accepted ? "" : " · candidate"}
+                                  </option>
+                                ));
+                              })()}
                             </select>
                           </label>{" "}
                           <span className="muted">metrics &amp; plots below reflect this version</span>

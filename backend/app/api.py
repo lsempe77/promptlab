@@ -65,7 +65,8 @@ def _resolve_pvid(conn, project_id: int, field_name: str, requested_version: int
         "SELECT r.prompt_version_id AS pvid FROM runs r "
         "JOIN prompt_versions pv ON pv.id = r.prompt_version_id "
         "WHERE r.project_id = ? AND r.field_name = ? AND r.prompt_version_id IS NOT NULL "
-        "ORDER BY pv.version DESC LIMIT 1",
+        "GROUP BY r.prompt_version_id "
+        "ORDER BY COUNT(*) DESC, pv.version DESC LIMIT 1",
         (project_id, field_name),
     ).fetchone()
     return row["pvid"] if row else None
