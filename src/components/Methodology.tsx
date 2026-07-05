@@ -16,8 +16,10 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
         <dd>
           Share of references with score ≥{" "}
           <strong>{thresholds ? thresholds.correct_threshold.toFixed(2) : "…"}</strong> (the
-          "correct threshold"). This is intentionally strict — a reference must be a near-exact match to
-          count as correct.
+          "correct threshold") — a fuzzy match (score 0.9) counts as correct here. This is different
+          from the <strong>exact-match accuracy</strong> shown in each model's confusion matrix,
+          which only counts a literal string match as correct — the two numbers measure different
+          things and can legitimately disagree.
         </dd>
 
         <dt>Fuzzy match threshold</dt>

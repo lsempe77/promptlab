@@ -176,10 +176,12 @@ function App() {
                           <h3>All models — summary</h3>
                           {thresholds && (
                             <p className="muted panel-caption">
-                              Accuracy = share of references scoring ≥ {thresholds.correct_threshold.toFixed(2)}. Every
-                              model is optimized and evaluated against its own prompt history — see the per-model
-                              cards below for each model's own iteration progress, prompt lineage, and confusion
-                              matrix.
+                              Accuracy = share of references scoring ≥ {thresholds.correct_threshold.toFixed(2)}
+                              (fuzzy matches count as correct here, so this can read higher than the
+                              stricter exact-match accuracy shown in each model's confusion matrix below).
+                              Every model is optimized and evaluated against its own prompt history — see
+                              the per-model cards below for each model's own iteration progress, prompt
+                              lineage, and confusion matrix.
                             </p>
                           )}
                           <ModelComparisonTable summaries={summaries} />

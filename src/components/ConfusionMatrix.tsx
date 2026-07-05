@@ -61,19 +61,20 @@ export function ConfusionMatrix({ confusion }: { confusion: Confusion | null }) 
   }
 
   if (confusion.n === 0) {
-    return <p className="muted">No runs logged yet for this field.</p>;
+    return <p className="muted">No references processed yet for this field.</p>;
   }
 
   return (
     <div>
       <p className="muted panel-caption">
-        Rows = ground truth, columns = predicted. Diagonal = correct. {confusion.n} runs, overall
-        accuracy {pct(confusion.accuracy)}.
+        Rows = ground truth, columns = predicted. Diagonal = correct. {confusion.n} references,
+        exact-match accuracy {pct(confusion.accuracy)} — stricter than the "Accuracy" stat above
+        (which also counts fuzzy matches as correct), so the two numbers can legitimately differ.
       </p>
       <div className="stat-grid">
         <div className="stat-card highlight">
           <span className="stat-value">{pct(confusion.accuracy)}</span>
-          <span className="stat-label">accuracy</span>
+          <span className="stat-label">exact-match accuracy</span>
         </div>
         <div className="stat-card">
           <span className="stat-value">{pct(confusion.sensitivity)}</span>
