@@ -176,7 +176,7 @@ function App() {
                           <h3>All models — summary</h3>
                           {thresholds && (
                             <p className="muted panel-caption">
-                              Accuracy = share of runs scoring ≥ {thresholds.correct_threshold.toFixed(2)}. Every
+                              Accuracy = share of references scoring ≥ {thresholds.correct_threshold.toFixed(2)}. Every
                               model is optimized and evaluated against its own prompt history — see the per-model
                               cards below for each model's own iteration progress, prompt lineage, and confusion
                               matrix.
@@ -186,7 +186,7 @@ function App() {
                         </section>
 
                         {summaries.length === 0 ? (
-                          <p className="muted">No runs logged yet for this field.</p>
+                          <p className="muted">No references processed yet for this field.</p>
                         ) : (
                           <>
                             <ModelFilter

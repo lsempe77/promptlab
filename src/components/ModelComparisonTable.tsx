@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ModelSummary } from "../api";
 
 function pct(x: number | null) {
@@ -20,25 +21,64 @@ function ms(x: number | null) {
   return `${Math.round(x)} ms`;
 }
 
+type SortKey = "model_id" | "n" | "mean_score" | "accuracy" | "n_errors" | "mean_latency_ms" | "total_cost_usd";
+
+const COLUMNS: { key: SortKey; label: string }[] = [
+  { key: "model_id", label: "Model" },
+  { key: "n", label: "# References" },
+  { key: "mean_score", label: "Mean score" },
+  { key: "accuracy", label: "Accuracy" },
+  { key: "n_errors", label: "Errors" },
+  { key: "mean_latency_ms", label: "Mean latency" },
+  { key: "total_cost_usd", label: "Total cost" },
+];
+
 export function ModelComparisonTable({ summaries }: { summaries: ModelSummary[] }) {
+  const [sortKey, setSortKey] = useState<SortKey>("mean_score");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
   if (summaries.length === 0) {
-    return <p className="muted">No runs logged yet for this field.</p>;
+    return <p className="muted">No references processed yet for this field.</p>;
   }
+
+  const sorted = [...summaries].sort((a, b) => {
+    const av = a[sortKey];
+    const bv = b[sortKey];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    const cmp = typeof av === "string" ? av.localeCompare(bv as string) : (av as number) - (bv as number);
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+
+  function toggleSort(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "model_id" ? "asc" : "desc");
+    }
+  }
+
   return (
     <table className="model-table">
       <thead>
         <tr>
-          <th>Model</th>
-          <th># runs</th>
-          <th>Mean score</th>
-          <th>Accuracy</th>
-          <th>Errors</th>
-          <th>Mean latency</th>
-          <th>Total cost</th>
+          {COLUMNS.map((col) => (
+            <th
+              key={col.key}
+              className="sortable-th"
+              onClick={() => toggleSort(col.key)}
+              aria-sort={sortKey === col.key ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+            >
+              {col.label}
+              <span className="sort-indicator">{sortKey === col.key ? (sortDir === "asc" ? " ▲" : " ▼") : ""}</span>
+            </th>
+          ))}
         </tr>
       </thead>
       <tbody>
-        {summaries.map((s) => (
+        {sorted.map((s) => (
           <tr key={s.model_id}>
             <td className="model-id">{s.model_id}</td>
             <td>{s.n}</td>

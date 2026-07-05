@@ -61,7 +61,7 @@ export function ModelCard({
         <div className="stat-grid">
           <div className="stat-card">
             <span className="stat-value">{summary.n}</span>
-            <span className="stat-label">runs</span>
+            <span className="stat-label">references</span>
           </div>
           <div className="stat-card">
             <span className="stat-value">{summary.mean_score != null ? summary.mean_score.toFixed(3) : "—"}</span>

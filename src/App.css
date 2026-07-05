@@ -499,6 +499,22 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+.model-table th.sortable-th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+
+.model-table th.sortable-th:hover {
+  color: var(--accent-strong);
+}
+
+.model-table th.sortable-th .sort-indicator {
+  color: var(--accent);
+  font-size: 0.7em;
+}
+
 .model-table tbody tr {
   transition: background 0.15s ease;
 }

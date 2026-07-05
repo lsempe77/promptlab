@@ -7,16 +7,16 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
       <dl>
         <dt>Mean score</dt>
         <dd>
-          Average 0–1 score across runs for a model on this field. Single-value fields score 1.0
+          Average 0–1 score across references for a model on this field. Single-value fields score 1.0
           (exact match), 0.9 (fuzzy match), or 0.0 (mismatch). List fields (authors, institutions,
           countries) score the F1 of precision/recall between the predicted and ground-truth list.
         </dd>
 
         <dt>Accuracy</dt>
         <dd>
-          Share of runs with score ≥{" "}
+          Share of references with score ≥{" "}
           <strong>{thresholds ? thresholds.correct_threshold.toFixed(2) : "…"}</strong> (the
-          "correct threshold"). This is intentionally strict — a run must be a near-exact match to
+          "correct threshold"). This is intentionally strict — a reference must be a near-exact match to
           count as correct.
         </dd>
 
