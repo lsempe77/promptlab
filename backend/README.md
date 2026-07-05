@@ -218,9 +218,10 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
 - **Honesty-aware scoring, confidence signals & calibration (done, merged)**: per-run `outcome` +
   `honesty_score` (abstention credit + fabricated-excerpt penalty, drives the optimizer), excerpt
   verification, token-logprob / cross-model-agreement / self-consistency signals, and verbalized
-  confidence + Brier calibration are all shipped (see Architecture). TODO: actually *run* the
-  optional studies to populate them on real data — `self_consistency.py`, `llm_judge.py`, and a
-  `--logprobs` extraction pass — since a fresh dataset starts empty of those.
+  confidence + Brier calibration are all shipped (see Architecture). Update (2026-07-05): the
+  production rollout ran extraction to n=100 across all 5 fields × 9 models *with* `--logprobs`,
+  and a cross-family `llm_judge.py` pass at n=100 is populating the per-model gate;
+  `self_consistency.py` is still optional/TODO.
 
 - **Prompt caching (planned, not started)**: the `<paper>` document block is already the stable
   prefix in every prompt (see `prompts.build_prompt`), and most providers OpenRouter proxies to
@@ -244,6 +245,14 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
   deleted, so this is no longer blocked on a deferred `fly deploy` — it will just be part of the
   fresh build/rollout. TODO: run `llm_judge.py` across all 5 fields with a bigger sample than the
   earlier 40 references so the metric is meaningful across the whole production dataset.
+- **Staged rollout + per-model quality gate (done, 2026-07-05)**: `/api/projects/{slug}/fields/
+  {field}/stage-status` derives, with no manual state, how many references a field has reached
+  (the current stage vs `config.PRODUCTION_ROLLOUT_STAGES` 30→60→100) and evaluates the quality
+  gate **per (field, model)** — each model's own LLM-judged accuracy vs `scoring.GATE_THRESHOLD`
+  (0.80) — returning `n_models_passing`/`n_models_judged`. The dashboard shows a field badge
+  ("N/M models pass gate") with 95% Wilson CIs that narrow as the sample grows, plus a per-model
+  gate chip. The gate is derived at read time from `runs`/`llm_judgments`/`prompt_versions` — no
+  schema change.
 
 ## Known issues / follow-ups
 
@@ -257,7 +266,19 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
   The baseline prompts were tightened (report the parent institution / treat name variants as one;
   choose the WB sub-sector hierarchically) and the optimizer can refine further, but chasing 0.80
   against noisy labels has a ceiling — these fields may warrant a GT clean-up pass before their scores
-  can be trusted at face value.
+  can be trusted at face value. Update (2026-07-05): a concrete, fixable sub-cause on
+  `author_affiliation` is *mojibake in the GT* — the reference data mixes correct UTF-8 with
+  UTF-8-decoded-as-cp1252 values (e.g. `Los BaÃ±os`, `SelcÌ§uk`, `PÃºblica`) that failed string
+  matching against the model's correct output. `scoring._norm` now guardedly repairs that mojibake
+  and folds away diacritics on both sides (clean Latin-1 accents are left untouched because they
+  don't round-trip through cp1252→utf-8), so encoding noise no longer counts as a wrong answer; the
+  residual gap is genuine label disagreement.
+- **Optimizer reflector could waste iterations on empty/non-JSON output (fixed 2026-07-05)**:
+  reasoning-capable reflectors (e.g. `~anthropic/claude-sonnet-latest`) sometimes spent their whole
+  token budget "thinking" and returned `null` or truncated (`{\n  "diag`…) content, so
+  `propose_revision` failed to parse it and burned a no-improve iteration for nothing.
+  `propose_revision` now retries (up to 3×) with a larger `max_tokens` budget and a JSON-only nudge
+  on retries before giving up.
 - **Free-tier upstream rate-limiting**: some free-tier models (seen with `meta-llama/llama-3.3-70b-instruct:free`, `qwen/qwen3-coder:free`, occasionally `google/gemma-4-26b-a4b-it:free`) can get 100% 429-rate-limited by their upstream provider for a period, independent of anything in this codebase. `gateway.call_model()` already retries 3x with backoff on 429, but once a call fails all 3 retries it's logged as a permanent error row for that batch — there's no automatic later re-attempt. Use `python -m backend.scripts.retry_failed_runs --field <field> [--models a,b]` afterwards to re-run just the `(record, model)` pairs that have no successful run yet, once the outage clears.
 - **Scoring thresholds not empirically derived**: `scoring.CORRECT_THRESHOLD` (0.9) and
   `scoring.FUZZY_MATCH_THRESHOLD` (95) are hand-picked. `scripts/llm_judge.py` runs a posterior
