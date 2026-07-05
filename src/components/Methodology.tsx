@@ -9,9 +9,12 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
         There are <strong>three different ways</strong> this dashboard checks whether a model's
         answer was "correct" for a given reference (paper). They can disagree with each other —
         that's expected, not a bug — because they're answering slightly different questions.
+        The metrics are grouped below — expand a group to read what each one means.
       </p>
 
-      <dl>
+      <details className="method-group" open>
+        <summary>1. How correctness is measured</summary>
+        <dl>
         <dt>1. Threshold accuracy — correct references ÷ total references (higher is better)</dt>
         <dd>
           The simplest of the three: for every reference, the model's answer is marked correct or
@@ -59,7 +62,12 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
           explicitly had this second AI review — the number in parentheses next to the percentage
           is how many references that covers.
         </dd>
+        </dl>
+      </details>
 
+      <details className="method-group">
+        <summary>2. Honesty &amp; confidence</summary>
+        <dl>
         <dt>
           Honesty: abstention, hallucination &amp; wrong rates (a breakdown, not a single score)
         </dt>
@@ -162,7 +170,12 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
           below it mean the model was overconfident, above it underconfident. This is only a
           diagnostic — stated confidence is never folded into the accuracy or honesty scores.
         </dd>
+        </dl>
+      </details>
 
+      <details className="method-group">
+        <summary>3. List-field diagnostics &amp; scoring internals</summary>
+        <dl>
         <dt>Fuzzy match threshold (a setting, not a "higher is better" metric)</dt>
         <dd>
           <strong>
@@ -215,7 +228,12 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
           instead. Use it to see <em>where</em> a model goes wrong (which categories get confused
           with which), not just how often.
         </dd>
+        </dl>
+      </details>
 
+      <details className="method-group">
+        <summary>4. Prompt optimization &amp; the staged rollout</summary>
+        <dl>
         <dt>Prompt lineage (no "better" direction — a history log)</dt>
         <dd>
           Every prompt the optimizer tries gets a permanent version row. <strong>Accepted</strong>{" "}
@@ -231,7 +249,22 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
           iteration (x-axis) for that model. A flat or declining line after an iteration means the
           optimizer stopped improving and reverted to the prior best prompt.
         </dd>
-      </dl>
+
+        <dt>Staged rollout &amp; the quality gate — why a field may stay at 30 / 60 / 100</dt>
+        <dd>
+          References are added in <strong>stages</strong> (30 → 60 → 100). After each stage a field
+          is LLM-judged; if its judged accuracy is too low, the optimizer proposes new prompt
+          versions <em>instead of</em> advancing to more references. So a field that "stays at 30"
+          is one still being improved — you can see this happening in two places on each model card:
+          the <strong>reference count</strong> (top of the card) shows which stage the field has
+          reached, and <strong>Prompt versions &amp; failure analysis</strong> grows new
+          accepted/rejected versions while <strong>Prompt optimization progress</strong> shows the
+          validation score climbing (a new prompt is winning) or flat (plateaued — the current best
+          is kept). If a field can't clear the gate even after several prompt versions, that's a
+          signal the difficulty is in the data/ground-truth, not the prompt.
+        </dd>
+        </dl>
+      </details>
     </details>
   );
 }

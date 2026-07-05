@@ -526,6 +526,39 @@ body {
   line-height: 1.5;
 }
 
+.method-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  margin-top: 10px;
+  background: var(--bg-elevated);
+}
+
+.method-group > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--accent-strong);
+  list-style: none;
+}
+
+.method-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.method-group > summary::before {
+  content: "▸ ";
+  color: var(--text-muted);
+}
+
+.method-group[open] > summary::before {
+  content: "▾ ";
+}
+
+.method-group[open] > summary {
+  margin-bottom: 6px;
+}
+
 .panel-caption {
   margin: -6px 0 10px;
   font-size: 0.82rem;
