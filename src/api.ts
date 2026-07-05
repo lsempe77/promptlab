@@ -1,6 +1,12 @@
 export const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) || "http://127.0.0.1:8000";
 
+export interface ProjectInfo {
+  slug: string;
+  name: string;
+  description: string;
+}
+
 export interface FieldInfo {
   name: string;
   label: string;
@@ -110,18 +116,22 @@ async function getJson<T>(path: string): Promise<T> {
 }
 
 export const api = {
-  fields: () => getJson<FieldInfo[]>("/api/fields"),
-  promptVersions: (field: string) => getJson<PromptVersion[]>(`/api/fields/${field}/prompt-versions`),
-  modelsSummary: (field: string) => getJson<ModelSummary[]>(`/api/fields/${field}/models-summary`),
-  iterations: (field: string, modelId?: string) =>
+  projects: () => getJson<ProjectInfo[]>("/api/projects"),
+  fields: (project: string) => getJson<FieldInfo[]>(`/api/projects/${project}/fields`),
+  promptVersions: (project: string, field: string) =>
+    getJson<PromptVersion[]>(`/api/projects/${project}/fields/${field}/prompt-versions`),
+  modelsSummary: (project: string, field: string) =>
+    getJson<ModelSummary[]>(`/api/projects/${project}/fields/${field}/models-summary`),
+  iterations: (project: string, field: string, modelId?: string) =>
     getJson<IterationLog[]>(
-      `/api/fields/${field}/iterations${modelId ? `?model_id=${encodeURIComponent(modelId)}` : ""}`,
+      `/api/projects/${project}/fields/${field}/iterations${modelId ? `?model_id=${encodeURIComponent(modelId)}` : ""}`,
     ),
   thresholds: () => getJson<Thresholds>("/api/config/thresholds"),
-  jobs: (field: string) => getJson<Job[]>(`/api/fields/${field}/jobs`),
-  confusion: (field: string, modelId?: string) =>
+  jobs: (project: string, field: string) => getJson<Job[]>(`/api/projects/${project}/fields/${field}/jobs`),
+  confusion: (project: string, field: string, modelId?: string) =>
     getJson<Confusion>(
-      `/api/fields/${field}/confusion${modelId ? `?model_id=${encodeURIComponent(modelId)}` : ""}`,
+      `/api/projects/${project}/fields/${field}/confusion${modelId ? `?model_id=${encodeURIComponent(modelId)}` : ""}`,
     ),
-  llmJudgeSummary: (field: string) => getJson<LlmJudgeSummary[]>(`/api/fields/${field}/llm-judge-summary`),
+  llmJudgeSummary: (project: string, field: string) =>
+    getJson<LlmJudgeSummary[]>(`/api/projects/${project}/fields/${field}/llm-judge-summary`),
 };

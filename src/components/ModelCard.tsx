@@ -8,11 +8,13 @@ function pct(x: number) {
 }
 
 export function ModelCard({
+  projectSlug,
   fieldName,
   summary,
   jobs = [],
   llmJudge = null,
 }: {
+  projectSlug: string;
   fieldName: string;
   summary: ModelSummary;
   jobs?: Job[];
@@ -33,8 +35,8 @@ export function ModelCard({
     setIters(null);
     setConfusion(null);
     Promise.all([
-      api.iterations(fieldName, summary.model_id),
-      api.confusion(fieldName, summary.model_id),
+      api.iterations(projectSlug, fieldName, summary.model_id),
+      api.confusion(projectSlug, fieldName, summary.model_id),
     ])
       .then(([it, c]) => {
         setIters(it);
@@ -45,7 +47,7 @@ export function ModelCard({
         setConfusion(null);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fieldName, summary.model_id, runningJobs.length]);
+  }, [projectSlug, fieldName, summary.model_id, runningJobs.length]);
 
   const accepted = iters?.filter((i) => i.accepted).length ?? 0;
   const rejected = (iters?.length ?? 0) - accepted;

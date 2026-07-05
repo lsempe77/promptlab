@@ -19,9 +19,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import analytics, db, scoring
-from .fields import FIELDS
+from .projects import PROJECTS
 
-app = FastAPI(title="3ie DEP Prompt Lab API")
+app = FastAPI(title="Agentic 3ie Prompt Lab API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,9 +36,16 @@ app.add_middleware(
 )
 
 
-def _field_or_404(field_name: str) -> None:
-    if field_name not in FIELDS:
-        raise HTTPException(status_code=404, detail=f"Unknown field: {field_name!r}")
+def _project_or_404(project_slug: str):
+    if project_slug not in PROJECTS:
+        raise HTTPException(status_code=404, detail=f"Unknown project: {project_slug!r}")
+    return PROJECTS[project_slug]
+
+
+def _field_or_404(project_slug: str, field_name: str) -> None:
+    project = _project_or_404(project_slug)
+    if field_name not in project.fields:
+        raise HTTPException(status_code=404, detail=f"Unknown field: {field_name!r} in project {project_slug!r}")
 
 
 @app.get("/api/health")
@@ -46,8 +53,17 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/api/fields")
-def list_fields() -> list[dict]:
+@app.get("/api/projects")
+def list_projects() -> list[dict]:
+    return [
+        {"slug": spec.slug, "name": spec.name, "description": spec.description}
+        for spec in PROJECTS.values()
+    ]
+
+
+@app.get("/api/projects/{project_slug}/fields")
+def list_fields(project_slug: str) -> list[dict]:
+    project = _project_or_404(project_slug)
     return [
         {
             "name": spec.name,
@@ -56,26 +72,28 @@ def list_fields() -> list[dict]:
             "taxonomy_key": spec.taxonomy_key,
             "description": spec.description,
         }
-        for spec in FIELDS.values()
+        for spec in project.fields.values()
     ]
 
 
-@app.get("/api/fields/{field_name}/prompt-versions")
-def prompt_versions(field_name: str) -> list[dict]:
-    _field_or_404(field_name)
+@app.get("/api/projects/{project_slug}/fields/{field_name}/prompt-versions")
+def prompt_versions(project_slug: str, field_name: str) -> list[dict]:
+    _field_or_404(project_slug, field_name)
     with db.get_conn() as conn:
+        project_id = db.get_project_id(conn, project_slug)
         rows = conn.execute(
             "SELECT id, field_name, version, template, parent_id, notes, accepted, created_at "
-            "FROM prompt_versions WHERE field_name = ? ORDER BY version",
-            (field_name,),
+            "FROM prompt_versions WHERE project_id = ? AND field_name = ? ORDER BY version",
+            (project_id, field_name),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-@app.get("/api/fields/{field_name}/models-summary")
-def models_summary(field_name: str) -> list[dict]:
-    _field_or_404(field_name)
+@app.get("/api/projects/{project_slug}/fields/{field_name}/models-summary")
+def models_summary(project_slug: str, field_name: str) -> list[dict]:
+    _field_or_404(project_slug, field_name)
     with db.get_conn() as conn:
+        project_id = db.get_project_id(conn, project_slug)
         rows = conn.execute(
             """
             SELECT
@@ -87,11 +105,11 @@ def models_summary(field_name: str) -> list[dict]:
                 AVG(latency_ms) AS mean_latency_ms,
                 SUM(cost_usd) AS total_cost_usd
             FROM runs
-            WHERE field_name = ?
+            WHERE project_id = ? AND field_name = ?
             GROUP BY model_id
             ORDER BY mean_score DESC
             """,
-            (field_name,),
+            (project_id, field_name),
         ).fetchall()
     result = []
     for r in rows:
@@ -102,14 +120,15 @@ def models_summary(field_name: str) -> list[dict]:
     return result
 
 
-@app.get("/api/fields/{field_name}/llm-judge-summary")
-def llm_judge_summary(field_name: str) -> list[dict]:
+@app.get("/api/projects/{project_slug}/fields/{field_name}/llm-judge-summary")
+def llm_judge_summary(project_slug: str, field_name: str) -> list[dict]:
     """Per-model LLM-as-judge verdict summary: a posterior semantic
     true/false judgment per run (see scripts/llm_judge.py), independent of
     the automated string-matching scorer used for `models-summary.accuracy`.
     Only includes models that have at least one judged run."""
-    _field_or_404(field_name)
+    _field_or_404(project_slug, field_name)
     with db.get_conn() as conn:
+        project_id = db.get_project_id(conn, project_slug)
         rows = conn.execute(
             """
             SELECT
@@ -118,10 +137,10 @@ def llm_judge_summary(field_name: str) -> list[dict]:
                 SUM(CASE WHEN j.verdict = 1 THEN 1 ELSE 0 END) AS n_correct
             FROM llm_judgments j
             JOIN runs r ON r.id = j.run_id
-            WHERE r.field_name = ?
+            WHERE r.project_id = ? AND r.field_name = ?
             GROUP BY r.model_id
             """,
-            (field_name,),
+            (project_id, field_name),
         ).fetchall()
     result = []
     for r in rows:
@@ -133,62 +152,67 @@ def llm_judge_summary(field_name: str) -> list[dict]:
 
 
 
-@app.get("/api/fields/{field_name}/iterations")
-def iterations(field_name: str, model_id: str | None = None) -> list[dict]:
+@app.get("/api/projects/{project_slug}/fields/{field_name}/iterations")
+def iterations(project_slug: str, field_name: str, model_id: str | None = None) -> list[dict]:
     """Optimizer iteration log for a field, optionally scoped to one model
     (each iteration is always tied to exactly one "student" model being
-    optimized \u2014 see optimizer.optimize_field). Enriched with the candidate
+    optimized — see optimizer.optimize_field). Enriched with the candidate
     prompt version's number/template/notes so the frontend can render a
     per-model progress chart + prompt lineage from a single call.
     """
-    _field_or_404(field_name)
+    _field_or_404(project_slug, field_name)
     q = (
         "SELECT it.id, it.field_name, it.iteration_num, it.prompt_version_id, it.model_id, "
         "it.mean_score, it.n_records, it.feedback, it.accepted, it.created_at, "
         "pv.version AS prompt_version, pv.template AS prompt_template, pv.notes AS prompt_notes "
         "FROM iterations it JOIN prompt_versions pv ON pv.id = it.prompt_version_id "
-        "WHERE it.field_name = ?"
+        "WHERE it.project_id = ? AND it.field_name = ?"
     )
-    params: list = [field_name]
-    if model_id:
-        q += " AND it.model_id = ?"
-        params.append(model_id)
-    q += " ORDER BY it.iteration_num"
+    params: list = []
     with db.get_conn() as conn:
+        project_id = db.get_project_id(conn, project_slug)
+        params = [project_id, field_name]
+        if model_id:
+            q += " AND it.model_id = ?"
+            params.append(model_id)
+        q += " ORDER BY it.iteration_num"
         rows = conn.execute(q, params).fetchall()
     return [dict(r) for r in rows]
 
 
-@app.get("/api/fields/{field_name}/runs")
-def runs(field_name: str, model_id: str | None = None, limit: int = 200) -> list[dict]:
-    _field_or_404(field_name)
-    q = "SELECT * FROM runs WHERE field_name = ?"
-    params: list = [field_name]
-    if model_id:
-        q += " AND model_id = ?"
-        params.append(model_id)
-    q += " ORDER BY created_at DESC LIMIT ?"
-    params.append(limit)
+@app.get("/api/projects/{project_slug}/fields/{field_name}/runs")
+def runs(project_slug: str, field_name: str, model_id: str | None = None, limit: int = 200) -> list[dict]:
+    _field_or_404(project_slug, field_name)
+    q = "SELECT * FROM runs WHERE project_id = ? AND field_name = ?"
     with db.get_conn() as conn:
+        project_id = db.get_project_id(conn, project_slug)
+        params: list = [project_id, field_name]
+        if model_id:
+            q += " AND model_id = ?"
+            params.append(model_id)
+        q += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
         rows = conn.execute(q, params).fetchall()
     return [dict(r) for r in rows]
 
 
-@app.get("/api/fields/{field_name}/confusion")
-def confusion(field_name: str, model_id: str | None = None) -> dict:
+@app.get("/api/projects/{project_slug}/fields/{field_name}/confusion")
+def confusion(project_slug: str, field_name: str, model_id: str | None = None) -> dict:
     """Confusion matrix (categorical fields) or micro precision/recall/F1/F2
     (list fields), computed live from logged runs + ground truth."""
-    _field_or_404(field_name)
+    _field_or_404(project_slug, field_name)
     q = (
         "SELECT r.parsed_value_json, g.value_json FROM runs r "
-        "JOIN ground_truth g ON g.record_id = r.record_id AND g.field_name = r.field_name "
-        "WHERE r.field_name = ? AND r.parsed_value_json IS NOT NULL"
+        "JOIN ground_truth g ON g.project_id = r.project_id AND g.record_id = r.record_id "
+        "AND g.field_name = r.field_name "
+        "WHERE r.project_id = ? AND r.field_name = ? AND r.parsed_value_json IS NOT NULL"
     )
-    params: list = [field_name]
-    if model_id:
-        q += " AND r.model_id = ?"
-        params.append(model_id)
     with db.get_conn() as conn:
+        project_id = db.get_project_id(conn, project_slug)
+        params: list = [project_id, field_name]
+        if model_id:
+            q += " AND r.model_id = ?"
+            params.append(model_id)
         db_rows = conn.execute(q, params).fetchall()
     rows = [
         {"predicted": json.loads(r["parsed_value_json"]), "truth": json.loads(r["value_json"])}
@@ -197,18 +221,19 @@ def confusion(field_name: str, model_id: str | None = None) -> dict:
     return analytics.compute_confusion(field_name, rows)
 
 
-@app.get("/api/fields/{field_name}/jobs")
-def jobs(field_name: str) -> list[dict]:
+@app.get("/api/projects/{project_slug}/fields/{field_name}/jobs")
+def jobs(project_slug: str, field_name: str) -> list[dict]:
     """Recent extraction/optimization jobs for a field, so the dashboard can
     show a "currently running" indicator. A job's `status` column is set by
     the script that owns it, but a script can die (crash, Ctrl+C, killed
-    terminal) without ever calling `finish_job` \u2014 so a "running" job whose
+    terminal) without ever calling `finish_job` — so a "running" job whose
     `updated_at` is older than `db.JOB_STALE_AFTER_SECONDS` is reported here
     with `stale: true` instead of being trusted at face value.
     """
-    _field_or_404(field_name)
+    _field_or_404(project_slug, field_name)
     with db.get_conn() as conn:
-        rows = db.get_jobs_for_field(conn, field_name)
+        project_id = db.get_project_id(conn, project_slug)
+        rows = db.get_jobs_for_field(conn, project_id, field_name)
     now = datetime.now(timezone.utc)
     result = []
     for r in rows:

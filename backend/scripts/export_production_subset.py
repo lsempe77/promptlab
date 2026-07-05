@@ -42,13 +42,13 @@ from backend.app.fields import FIELDS  # noqa: E402
 SEED = 42
 
 
-def select_complete_case_ids(conn, n: int) -> list[int]:
+def select_complete_case_ids(conn, project_id: int, n: int) -> list[int]:
     field_names = list(FIELDS.keys())
     placeholders = ",".join("?" for _ in field_names)
     rows = conn.execute(
-        f"SELECT record_id FROM ground_truth WHERE field_name IN ({placeholders}) "
+        f"SELECT record_id FROM ground_truth WHERE project_id = ? AND field_name IN ({placeholders}) "
         f"GROUP BY record_id HAVING COUNT(DISTINCT field_name) = ?",
-        (*field_names, len(field_names)),
+        (project_id, *field_names, len(field_names)),
     ).fetchall()
     ids = [r["record_id"] for r in rows]
 
@@ -57,7 +57,9 @@ def select_complete_case_ids(conn, n: int) -> list[int]:
     # long after that and files can move/disappear).
     usable = []
     for id_ in ids:
-        row = conn.execute("SELECT md_path FROM records WHERE id = ?", (id_,)).fetchone()
+        row = conn.execute(
+            "SELECT md_path FROM records WHERE project_id = ? AND id = ?", (project_id, id_)
+        ).fetchone()
         if row and Path(row["md_path"]).exists():
             usable.append(id_)
 
@@ -67,6 +69,7 @@ def select_complete_case_ids(conn, n: int) -> list[int]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--project", default="dep-extraction", help="project slug (see backend/app/projects.py)")
     ap.add_argument("--n", type=int, default=config.MAX_PRODUCTION_RECORDS)
     ap.add_argument("--out-dir", type=Path, default=config.BACKEND_DIR / "deploy")
     args = ap.parse_args()
@@ -79,16 +82,20 @@ def main() -> None:
         db_out_path.unlink()
 
     with db.get_conn() as conn:
-        ids = select_complete_case_ids(conn, args.n)
+        project_id = db.get_project_id(conn, args.project)
+        ids = select_complete_case_ids(conn, project_id, args.n)
         print(f"Selected {len(ids)} complete-case records (requested {args.n}).")
 
         records = []
         ground_truth_rows = []
         for id_ in ids:
-            rec = conn.execute("SELECT id, title, md_path FROM records WHERE id = ?", (id_,)).fetchone()
+            rec = conn.execute(
+                "SELECT id, title, md_path FROM records WHERE project_id = ? AND id = ?", (project_id, id_)
+            ).fetchone()
             records.append(rec)
             gt_rows = conn.execute(
-                "SELECT field_name, value_json FROM ground_truth WHERE record_id = ?", (id_,)
+                "SELECT field_name, value_json FROM ground_truth WHERE project_id = ? AND record_id = ?",
+                (project_id, id_),
             ).fetchall()
             ground_truth_rows.append((id_, gt_rows))
 
@@ -105,14 +112,15 @@ def main() -> None:
     # folder so it's immediately usable for a local production rollout.
     db.init_db(db_out_path)
     with db.get_conn(db_out_path) as out_conn:
+        out_project_id = db.get_project_id(out_conn, args.project)
         for rec in records:
             local_md_path = str(corpus_out / f"{rec['id']}.md")
-            db.upsert_record(out_conn, rec["id"], rec["title"], local_md_path)
+            db.upsert_record(out_conn, out_project_id, rec["id"], rec["title"], local_md_path)
         for id_, gt_rows in ground_truth_rows:
             for gt in gt_rows:
                 out_conn.execute(
-                    "INSERT INTO ground_truth (record_id, field_name, value_json) VALUES (?, ?, ?)",
-                    (id_, gt["field_name"], gt["value_json"]),
+                    "INSERT INTO ground_truth (project_id, record_id, field_name, value_json) VALUES (?, ?, ?, ?)",
+                    (out_project_id, id_, gt["field_name"], gt["value_json"]),
                 )
 
     print(f"Wrote production db to {db_out_path}")
