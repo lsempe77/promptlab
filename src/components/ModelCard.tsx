@@ -94,12 +94,6 @@ function ReliabilityDiagram({ calibration }: { calibration: Calibration }) {
       <line x1={x(0)} y1={y(0)} x2={x(1)} y2={y(1)} stroke="#8a9bb0" strokeOpacity={0.75} strokeDasharray="4 3" />
       <text x={x(0.62)} y={y(0.30)} fontSize={9} fill="currentColor" opacity={0.35}>overconfident</text>
       <text x={x(0.04)} y={y(0.9)} fontSize={9} fill="currentColor" opacity={0.35}>underconfident</text>
-      {pts.length > 1 && (
-        <polyline
-          points={pts.map((b) => `${x(b.mean_confidence!)},${y(b.accuracy!)}`).join(" ")}
-          fill="none" stroke="#0067b1" strokeOpacity={0.5} strokeWidth={1.5}
-        />
-      )}
       {pts.map((b, i) => (
         <g key={i}>
           <circle cx={x(b.mean_confidence!)} cy={y(b.accuracy!)}
