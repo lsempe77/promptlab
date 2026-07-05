@@ -40,6 +40,7 @@ export interface ModelSummary {
   hallucination_rate: number;
   wrong_rate: number;
   excerpt_verified_rate: number | null;
+  prompt_version: number | null;
 }
 
 export interface LlmJudgeSummary {

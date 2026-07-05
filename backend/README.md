@@ -22,6 +22,29 @@ cd ..
 
 ## Architecture
 
+The end-to-end loop (extract → score → judge → gate → reflect/rewrite → re-test → advance):
+
+```mermaid
+flowchart TD
+    GT["Ground-truth reference set<br/>(human-curated)"] --> EX
+    P["Current prompt<br/>(baseline or optimized)"] --> EX["Extraction:<br/>run field across all models"]
+    EX --> SC["Score each answer 3 ways:<br/>fuzzy · exact · LLM judge"]
+    SC --> HON["Honesty & evidence checks:<br/>hit / abstain / wrong / hallucination<br/>+ excerpt verified + calibration"]
+    HON --> JUDGE["Cross-family LLM judge<br/>(OpenAI↔Anthropic) → verdict"]
+    JUDGE --> GATE{"Per-model gate:<br/>judged accuracy ≥ 80%?"}
+    GATE -- "yes" --> STAGE["Advance stage<br/>30 → 60 → 100 refs<br/>(95% Wilson CI narrows)"]
+    GATE -- "no (gated)" --> REFLECT["Reflector model:<br/>diagnose failures →<br/>propose revised prompt"]
+    REFLECT --> RETEST["Re-test candidate<br/>on held-out val set"]
+    RETEST --> BETTER{"Beats baseline<br/>by ≥ epsilon?"}
+    BETTER -- "yes" --> ACCEPT["Accept → new prompt version"]
+    BETTER -- "no" --> REJECT["Reject<br/>(stop after N no-improve)"]
+    ACCEPT --> P
+    STAGE --> DONE(["Production-ready<br/>(field, model) pairs"])
+    DASH["Live dashboard: comparisons ·<br/>confusion · calibration · prompt lineage"] -.reads.- SC
+    DASH -.reads.- JUDGE
+    DASH -.reads.- REFLECT
+```
+
 - **Projects** (`app/projects.py`): a `ProjectSpec` (slug, name, description, fields) registers a
   synthesis project — today just `dep-extraction`. Adding a new project (HSF, Girl Effect,
   StrongMinds) means adding its own `FieldSpec` dict (mirroring `app/fields.py`) and registering a

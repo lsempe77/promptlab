@@ -16,11 +16,12 @@ function ms(x: number | null) {
   return `${Math.round(x)} ms`;
 }
 
-type SortKey = "model_id" | "n" | "accuracy" | "n_errors" | "mean_latency_ms" | "total_cost_usd";
+type SortKey = "model_id" | "n" | "prompt_version" | "accuracy" | "n_errors" | "mean_latency_ms" | "total_cost_usd";
 
 const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "model_id", label: "Model" },
   { key: "n", label: "# References" },
+  { key: "prompt_version", label: "Prompt v." },
   { key: "accuracy", label: "Accuracy" },
   { key: "n_errors", label: "Errors" },
   { key: "mean_latency_ms", label: "Mean latency" },
@@ -76,6 +77,7 @@ export function ModelComparisonTable({ summaries }: { summaries: ModelSummary[] 
           <tr key={s.model_id}>
             <td className="model-id">{s.model_id}</td>
             <td>{s.n}</td>
+            <td>{s.prompt_version != null ? `v${s.prompt_version}` : "—"}</td>
             <td>{pct(s.accuracy)}</td>
             <td className={s.n_errors > 0 ? "has-errors" : ""}>{s.n_errors}</td>
             <td>{ms(s.mean_latency_ms)}</td>

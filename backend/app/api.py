@@ -111,9 +111,11 @@ def models_summary(project_slug: str, field_name: str) -> list[dict]:
                 SUM(CASE WHEN excerpt_verified IS NOT NULL THEN 1 ELSE 0 END) AS n_excerpt_cited,
                 SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) AS n_errors,
                 AVG(latency_ms) AS mean_latency_ms,
-                SUM(cost_usd) AS total_cost_usd
+                SUM(cost_usd) AS total_cost_usd,
+                MAX(pv.version) AS prompt_version
             FROM runs
-            WHERE project_id = ? AND field_name = ?
+            LEFT JOIN prompt_versions pv ON pv.id = runs.prompt_version_id
+            WHERE runs.project_id = ? AND runs.field_name = ?
             GROUP BY model_id
             ORDER BY mean_score DESC
             """,
