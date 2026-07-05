@@ -87,6 +87,7 @@ def call_model(
 
     start = time.perf_counter()
     attempt = 0
+    logprobs_retry_done = False
     while True:
         try:
             resp = httpx.post(
@@ -101,6 +102,18 @@ def call_model(
         if resp.status_code == 429 and attempt < MAX_RETRIES:
             time.sleep(RETRY_BASE_DELAY_S * (2 ** attempt))
             attempt += 1
+            continue
+        # Reasoning models (e.g. ~openai/gpt-latest) reject `logprobs` with a 400.
+        # Rather than lose that model's data entirely, retry once without it
+        # (the run just won't have a logprob_confidence).
+        if (
+            resp.status_code == 400
+            and payload.get("logprobs")
+            and not logprobs_retry_done
+            and "logprob" in resp.text.lower()
+        ):
+            payload.pop("logprobs", None)
+            logprobs_retry_done = True
             continue
         break
     latency_ms = int((time.perf_counter() - start) * 1000)

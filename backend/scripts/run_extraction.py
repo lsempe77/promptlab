@@ -30,6 +30,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+# Windows consoles default to cp1252, which raises UnicodeEncodeError when we
+# print model output / author names with diacritics. Force UTF-8 so a single
+# non-ASCII progress line can't kill the whole batch.
+try:  # pragma: no cover
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from backend.app import config, db, gateway, prompts, scoring  # noqa: E402
 from backend.app.corpus import read_md  # noqa: E402
 from backend.app.parsing import ParseError, parse_field_response  # noqa: E402
