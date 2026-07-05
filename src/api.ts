@@ -111,6 +111,7 @@ export interface RunVersion {
   version: number;
   accepted: number;
   n_runs: number;
+  n_models: number;
 }
 
 export interface IterationLog {

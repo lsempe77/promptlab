@@ -122,7 +122,8 @@ def run_versions(project_slug: str, field_name: str) -> list[dict]:
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
         rows = conn.execute(
-            "SELECT pv.version AS version, pv.accepted AS accepted, COUNT(*) AS n_runs "
+            "SELECT pv.version AS version, pv.accepted AS accepted, COUNT(*) AS n_runs, "
+            "COUNT(DISTINCT r.model_id) AS n_models "
             "FROM runs r JOIN prompt_versions pv ON pv.id = r.prompt_version_id "
             "WHERE r.project_id = ? AND r.field_name = ? "
             "GROUP BY pv.version, pv.accepted ORDER BY pv.version DESC",
