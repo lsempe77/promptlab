@@ -32,14 +32,18 @@ flowchart TD
     SC --> HON["Honesty & evidence checks:<br/>hit / abstain / wrong / hallucination<br/>excerpt ≥90 · abstain credit 0.5 · fabricated ×0.5"]
     HON --> JUDGE["Cross-family LLM judge<br/>(OpenAI↔Anthropic) → verdict"]
     JUDGE --> GATE{"Per-model gate:<br/>judged accuracy ≥ 80%?"}
-    GATE -- "yes" --> STAGE["Advance stage<br/>30 → 60 → 100 refs<br/>(95% Wilson CI narrows)"]
     GATE -- "no (gated)" --> REFLECT["Reflector model:<br/>diagnose failures →<br/>propose revised prompt<br/>(retry ≤3× for valid JSON)"]
+    GATE -- "yes" --> STAGE{"Sample size<br/>reached this stage?"}
+    STAGE -- "30 refs → grow" --> G60["Extract to 60 refs<br/>(95% CI narrows)"]
+    STAGE -- "60 refs → grow" --> G100["Extract to 100 refs<br/>(95% CI narrows)"]
+    STAGE -- "100 refs (final, capped)" --> DONE(["Production-ready<br/>(field, model) pairs"])
+    G60 --> EX
+    G100 --> EX
     REFLECT --> RETEST["Re-test candidate<br/>on held-out val set"]
     RETEST --> BETTER{"Beats baseline<br/>by ≥ 0.01 (epsilon)?"}
     BETTER -- "yes" --> ACCEPT["Accept → new prompt version"]
     BETTER -- "no" --> REJECT["Reject<br/>(stop after 3 no-improve<br/>or 10 iterations)"]
     ACCEPT --> P
-    STAGE --> DONE(["Production-ready<br/>(field, model) pairs"])
     DASH["Live dashboard: comparisons ·<br/>confusion · calibration · prompt lineage"] -.reads.- SC
     DASH -.reads.- JUDGE
     DASH -.reads.- REFLECT

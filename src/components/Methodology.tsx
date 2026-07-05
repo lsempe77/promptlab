@@ -8,14 +8,18 @@ const PIPELINE_CHART = `flowchart TD
     SC --> HON["Honesty &amp; evidence checks:<br/>hit / abstain / wrong / hallucination<br/>excerpt found &ge;90 - abstain credit 0.5 - fabricated excerpt x0.5"]
     HON --> JUDGE["Cross-family LLM judge<br/>(OpenAI vs Anthropic) - verdict"]
     JUDGE --> GATE{"Per-model gate:<br/>judged accuracy &ge; 80%?"}
-    GATE -- "yes" --> STAGE["Advance stage<br/>30 -> 60 -> 100 refs<br/>(95% Wilson CI narrows)"]
     GATE -- "no (gated)" --> REFLECT["Reflector model:<br/>diagnose failures,<br/>propose revised prompt<br/>(retry up to 3x for valid JSON)"]
+    GATE -- "yes" --> STAGE{"Sample size<br/>reached this stage?"}
+    STAGE -- "30 refs -> grow" --> G60["Extract to 60 refs<br/>(95% CI narrows)"]
+    STAGE -- "60 refs -> grow" --> G100["Extract to 100 refs<br/>(95% CI narrows)"]
+    STAGE -- "100 refs (final, capped)" --> DONE(["Production-ready<br/>(field, model) pairs"])
+    G60 --> EX
+    G100 --> EX
     REFLECT --> RETEST["Re-test candidate<br/>on held-out validation set"]
     RETEST --> BETTER{"Beats baseline<br/>by &ge; 0.01 (epsilon)?"}
     BETTER -- "yes" --> ACCEPT["Accept -> new prompt version"]
     BETTER -- "no" --> REJECT["Reject<br/>(stop after 3 no-improve<br/>or 10 iterations)"]
-    ACCEPT --> P
-    STAGE --> DONE(["Production-ready<br/>(field, model) pairs"])`;
+    ACCEPT --> P`;
 
 export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
   return (
