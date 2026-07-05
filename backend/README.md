@@ -155,7 +155,7 @@ full 7,675-record local corpus, and not a recurring/scheduled extraction job. Bo
 without changing inputs just re-processes the same records, so there's no cron job here — the
 production dataset is built once, by hand, then served read-only forever after.
 
-Files: `Dockerfile`, `fly.toml`, `.dockerignore` at the DEP root (repo root for `fly deploy`'s
+Files: `Dockerfile`, `fly.toml`, `.dockerignore` at the **promptlab repo root** (the `fly deploy`
 build context). The image contains only `backend/app`, `backend/scripts`, `backend/models.yaml`
 — **not** the database or corpus, which live on a persistent Fly volume mounted at `/data`, kept
 separate so redeploying code never requires re-uploading ~50MB of data.
@@ -181,7 +181,7 @@ the Fly volume mount before uploading:
 python -m backend.scripts.rewrite_corpus_path_for_deploy --db backend/deploy/promptlab.db --target-dir /data/corpus
 ```
 
-One-time Fly setup (from the DEP root):
+One-time Fly setup (from the promptlab repo root):
 ```
 fly auth login
 fly launch --no-deploy --copy-config --name <app-name>
