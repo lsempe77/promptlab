@@ -1,0 +1,41 @@
+# Roster of OpenRouter models to compare, spanning free -> expensive tiers.
+#
+# Where available, paid entries use OpenRouter's "latest model resolution" aliases
+# (`~author/family-latest`, note the required leading `~` — it's part of the literal
+# model id, not a URL scheme) instead of a version-pinned slug, so the roster picks up
+# the newest release per family automatically instead of going stale.
+# See: https://openrouter.ai/docs/guides/routing/routers/latest-resolution
+#
+# Confirmed available `~...-latest` aliases as of 2026-07-04 (checked against the live
+# `GET /api/v1/models` catalog): anthropic/claude-opus-latest, claude-sonnet-latest,
+# claude-haiku-latest; openai/gpt-latest, gpt-mini-latest; google/gemini-pro-latest,
+# gemini-flash-latest; moonshotai/kimi-latest. No latest-alias exists yet for
+# xAI/Grok, Z.ai/GLM, Mistral, DeepSeek, Qwen, or Meta-Llama, so those stay pinned to
+# their current newest concrete release and should be refreshed by hand periodically.
+#
+# `id` must be a valid OpenRouter model slug (see https://openrouter.ai/models or
+# GET https://openrouter.ai/api/v1/models). Tier labels are just for grouping/reporting,
+# they don't affect behavior.
+
+free:
+  - meta-llama/llama-3.3-70b-instruct:free
+  - openai/gpt-oss-20b:free
+  - qwen/qwen3-coder:free
+  - google/gemma-4-26b-a4b-it:free
+  - poolside/laguna-xs-2.1:free
+
+cheap:
+  - "~openai/gpt-mini-latest"
+  - "~anthropic/claude-haiku-latest"
+  - deepseek/deepseek-v4-flash
+
+mid:
+  - "~openai/gpt-latest"
+  - "~google/gemini-flash-latest"
+  - "~anthropic/claude-sonnet-latest"
+  - mistralai/mistral-medium-3-5
+
+expensive:
+  - "~google/gemini-pro-latest"
+  - "~anthropic/claude-opus-latest"
+  - z-ai/glm-5.2

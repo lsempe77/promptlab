@@ -1,0 +1,7 @@
+pandas
+python-calamine
+httpx
+pyyaml
+rapidfuzz
+fastapi
+uvicorn[standard]
