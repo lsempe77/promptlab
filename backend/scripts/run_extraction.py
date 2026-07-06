@@ -92,13 +92,24 @@ def main() -> None:
               f"{', '.join(str(s) for s in config.PRODUCTION_ROLLOUT_STAGES)}.")
         args.n = config.MAX_PRODUCTION_RECORDS
 
+    models = select_models(args)
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, args.project)
-        pv = get_or_create_baseline(conn, project_id, args.field)
         records = db.get_records_with_field(conn, project_id, args.field)
-        done_pairs = set() if args.force else existing_pairs(conn, project_id, args.field, pv["id"]) if pv else set()
+        # Per-model accepted baseline: each model runs its OWN current best
+        # prompt (seeded from the shared baseline on first use).
+        model_pv = {m: get_or_create_baseline(conn, project_id, args.field, model_id=m) for m in models}
+        done_pairs: set[tuple[int, str]] = set()
+        if not args.force:
+            for m in models:
+                for r in conn.execute(
+                    "SELECT DISTINCT record_id FROM runs WHERE project_id = ? AND field_name = ? "
+                    "AND model_id = ? AND prompt_version_id = ?",
+                    (project_id, args.field, m, model_pv[m]["id"]),
+                ).fetchall():
+                    done_pairs.add((r["record_id"], m))
 
-    if pv is None:
+    if any(model_pv[m] is None for m in models):
         print(f"Failed to create/load a baseline prompt version for field={args.field}.")
         return
     if not records:
@@ -107,10 +118,11 @@ def main() -> None:
 
     random.Random(args.seed).shuffle(records)
     records = records[: args.n]
-    models = select_models(args)
     batch_id = uuid.uuid4().hex[:8]
 
-    print(f"Field: {args.field} | prompt v{pv['version']} | records: {len(records)} | models: {len(models)} | concurrency: {args.concurrency}")
+    ver_summary = ", ".join(f"{m.split('/')[-1]}=v{model_pv[m]['version']}" for m in models)
+    print(f"Field: {args.field} | records: {len(records)} | models: {len(models)} | concurrency: {args.concurrency}")
+    print(f"Per-model prompt versions: {ver_summary}")
     print(f"Batch id: {batch_id}\n")
 
     results: dict[str, list[float]] = {m: [] for m in models}
@@ -122,7 +134,6 @@ def main() -> None:
     # --force) so scaling --n up doesn't re-pay for smaller-stage records.
     jobs: list[dict] = []
     job_meta: list[tuple[dict, str]] = []
-    prompt_cache: dict[int, tuple[str, str]] = {}
     source_cache: dict[int, str] = {}  # truncated md text the model actually saw, for excerpt verification
     new_counts: dict[str, int] = {m: 0 for m in models}
     skipped = 0
@@ -137,10 +148,12 @@ def main() -> None:
             print(f"  [skip] record {rec['id']}: cannot read md ({exc})")
             skipped += len(needed_models)
             continue
-        system_prompt, user_prompt = prompts.build_prompt(args.field, rec["title"] or "", md_text, instruction=pv["template"])
-        prompt_cache[rec["id"]] = (system_prompt, user_prompt)
         source_cache[rec["id"]] = md_text[: prompts.MAX_CHARS]
         for model_id in needed_models:
+            # each model uses its own accepted prompt template
+            system_prompt, user_prompt = prompts.build_prompt(
+                args.field, rec["title"] or "", md_text, instruction=model_pv[model_id]["template"]
+            )
             jobs.append({"model_id": model_id, "system_prompt": system_prompt, "user_prompt": user_prompt,
                          "logprobs": args.logprobs})
             job_meta.append((rec, model_id))
@@ -163,7 +176,7 @@ def main() -> None:
                 rec, model_id = job_meta[i]
                 run_kwargs = dict(
                     project_id=project_id,
-                    prompt_version_id=pv["id"],
+                    prompt_version_id=model_pv[model_id]["id"],
                     model_id=model_id,
                     record_id=rec["id"],
                     field_name=args.field,

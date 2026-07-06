@@ -285,7 +285,7 @@ def optimize_field(
 
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
-        baseline_pv = prompt_store.get_or_create_baseline(conn, project_id, field_name)
+        baseline_pv = prompt_store.get_or_create_baseline(conn, project_id, field_name, model_id=model_id)
         all_records = db.get_records_with_field(conn, project_id, field_name)
 
     if baseline_pv is None:
@@ -390,6 +390,7 @@ def _run_optimization(
                 pv = prompt_store.add_version(
                     conn, project_id, field_name, candidate_instruction, parent_id=best_pv_id,
                     notes=f"iter {it} (candidate {k + 1}/{candidates_per_iteration}): {diagnosis or ''}"[:500],
+                    model_id=model_id,
                 )
                 if pv is None:
                     raise RuntimeError(f"Failed to persist candidate prompt version for field={field_name}.")

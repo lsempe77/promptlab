@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS prompt_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id),
     field_name TEXT NOT NULL,
+    model_id TEXT,
     version INTEGER NOT NULL,
     template TEXT NOT NULL,
     parent_id INTEGER REFERENCES prompt_versions(id),
@@ -185,6 +186,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
                          ("excerpt_verified", "INTEGER"), ("confidence", "REAL")):
         if col not in existing:
             conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {coltype}")
+
+    # Per-model prompts: prompt_versions gains an owner model_id (NULL = the
+    # original shared/field-level baseline). Additive, so existing shared
+    # baselines and their runs stay valid.
+    pv_cols = {row["name"] for row in conn.execute("PRAGMA table_info(prompt_versions)")}
+    if "model_id" not in pv_cols:
+        conn.execute("ALTER TABLE prompt_versions ADD COLUMN model_id TEXT")
 
 
 def _needs_multi_project_migration(conn: sqlite3.Connection) -> bool:
@@ -373,12 +381,12 @@ def get_records_with_field(
 
 def add_prompt_version(
     conn: sqlite3.Connection, project_id: int, field_name: str, version: int, template: str,
-    parent_id: int | None, notes: str | None, accepted: int = 1,
+    parent_id: int | None, notes: str | None, accepted: int = 1, model_id: str | None = None,
 ) -> int | None:
     cur = conn.execute(
-        "INSERT INTO prompt_versions (project_id, field_name, version, template, parent_id, notes, "
-        "accepted, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (project_id, field_name, version, template, parent_id, notes, accepted, now()),
+        "INSERT INTO prompt_versions (project_id, field_name, model_id, version, template, parent_id, notes, "
+        "accepted, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (project_id, field_name, model_id, version, template, parent_id, notes, accepted, now()),
     )
     return cur.lastrowid
 
@@ -395,16 +403,24 @@ def latest_prompt_version(conn: sqlite3.Connection, project_id: int, field_name:
     ).fetchone()
 
 
-def best_accepted_prompt_version(conn: sqlite3.Connection, project_id: int, field_name: str) -> sqlite3.Row | None:
-    """Highest-version row for this field that was actually accepted (i.e. the
-    baseline, or an optimizer candidate that beat its incumbent). This is what
-    production extraction runs should use — rejected candidates still get a
-    permanent row (for full provenance) but must never shadow the real best.
+def best_accepted_prompt_version(
+    conn: sqlite3.Connection, project_id: int, field_name: str, model_id: str | None = None
+) -> sqlite3.Row | None:
+    """Highest-version ACCEPTED row for this field, scoped to a model when
+    `model_id` is given (per-model prompts), else the shared/field-level
+    baseline (model_id IS NULL). This is what production extraction should use;
+    rejected candidates still get a permanent row but must never shadow the best.
     """
+    if model_id is None:
+        return conn.execute(
+            "SELECT * FROM prompt_versions WHERE project_id = ? AND field_name = ? AND model_id IS NULL "
+            "AND accepted = 1 ORDER BY version DESC LIMIT 1",
+            (project_id, field_name),
+        ).fetchone()
     return conn.execute(
-        "SELECT * FROM prompt_versions WHERE project_id = ? AND field_name = ? AND accepted = 1 "
-        "ORDER BY version DESC LIMIT 1",
-        (project_id, field_name),
+        "SELECT * FROM prompt_versions WHERE project_id = ? AND field_name = ? AND model_id = ? "
+        "AND accepted = 1 ORDER BY version DESC LIMIT 1",
+        (project_id, field_name, model_id),
     ).fetchone()
 
 

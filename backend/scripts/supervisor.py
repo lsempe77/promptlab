@@ -64,75 +64,76 @@ def _field_state(conn, project_id: int, field: str, models: list[str]) -> dict:
     """Current pipeline state for a field, scoped to its current baseline/accepted
     prompt version. `refs` is the MIN distinct-record count across target models,
     so a stage only counts as reached once every model has that many records."""
-    pv = prompt_store.get_or_create_baseline(conn, project_id, field)
-    pvid = pv["id"]
-
-    rows = conn.execute(
-        "SELECT model_id, COUNT(DISTINCT record_id) AS c FROM runs "
-        "WHERE project_id = ? AND field_name = ? AND prompt_version_id = ? AND error IS NULL "
-        "GROUP BY model_id",
-        (project_id, field, pvid),
-    ).fetchall()
-    per_model_refs = {r["model_id"]: r["c"] for r in rows}
+    pv_of = {m: prompt_store.get_or_create_baseline(conn, project_id, field, model_id=m) for m in models}
+    per_model_refs: dict[str, int] = {}
+    unjudged = 0
+    judged: dict[str, tuple[float, int]] = {}
+    exhausted: dict[str, bool] = {}
+    for m in models:
+        pvid = pv_of[m]["id"]
+        per_model_refs[m] = conn.execute(
+            "SELECT COUNT(DISTINCT record_id) AS c FROM runs WHERE project_id = ? AND field_name = ? "
+            "AND model_id = ? AND prompt_version_id = ? AND error IS NULL",
+            (project_id, field, m, pvid),
+        ).fetchone()["c"]
+        unjudged += conn.execute(
+            "SELECT COUNT(*) AS n FROM runs r WHERE r.project_id = ? AND r.field_name = ? AND r.model_id = ? "
+            "AND r.prompt_version_id = ? AND r.parsed_value_json IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM llm_judgments j WHERE j.run_id = r.id)",
+            (project_id, field, m, pvid),
+        ).fetchone()["n"]
+        jr = conn.execute(
+            "SELECT AVG(CASE WHEN j.verdict = 1 THEN 1.0 ELSE 0.0 END) AS acc, COUNT(*) AS n "
+            "FROM llm_judgments j JOIN runs r ON r.id = j.run_id "
+            "WHERE r.project_id = ? AND r.field_name = ? AND r.model_id = ? AND r.prompt_version_id = ?",
+            (project_id, field, m, pvid),
+        ).fetchone()
+        if jr and (jr["n"] or 0) > 0:
+            judged[m] = (jr["acc"], jr["n"])
+        # per-model persistent exhaustion: a rejected candidate off THIS model's
+        # current prompt means don't re-optimize this model on this prompt.
+        exhausted[m] = conn.execute(
+            "SELECT 1 FROM iterations i JOIN prompt_versions pv ON pv.id = i.prompt_version_id "
+            "WHERE i.project_id = ? AND i.field_name = ? AND i.model_id = ? AND i.accepted = 0 "
+            "AND pv.parent_id = ? LIMIT 1",
+            (project_id, field, m, pvid),
+        ).fetchone() is not None
     refs = min((per_model_refs.get(m, 0) for m in models), default=0) if models else 0
-
-    unjudged = conn.execute(
-        "SELECT COUNT(*) AS n FROM runs r WHERE r.project_id = ? AND r.field_name = ? "
-        "AND r.prompt_version_id = ? AND r.parsed_value_json IS NOT NULL "
-        "AND NOT EXISTS (SELECT 1 FROM llm_judgments j WHERE j.run_id = r.id)",
-        (project_id, field, pvid),
-    ).fetchone()["n"]
-
-    jrows = conn.execute(
-        "SELECT r.model_id, AVG(CASE WHEN j.verdict = 1 THEN 1.0 ELSE 0.0 END) AS acc, "
-        "COUNT(*) AS n FROM llm_judgments j JOIN runs r ON r.id = j.run_id "
-        "WHERE r.project_id = ? AND r.field_name = ? AND r.prompt_version_id = ? GROUP BY r.model_id",
-        (project_id, field, pvid),
-    ).fetchall()
-    judged = {r["model_id"]: (r["acc"], r["n"]) for r in jrows if (r["n"] or 0) > 0}
-
-    # Persistent exhaustion: we already proposed a candidate off THIS baseline
-    # version and it was rejected, so re-optimizing the same baseline is unlikely
-    # to help -- don't (this is what keeps a daemon from burning money in a loop).
-    # When the baseline later advances (a candidate IS accepted), the new baseline
-    # has no rejected children yet, so optimization resumes.
-    exhausted = conn.execute(
-        "SELECT 1 FROM iterations i JOIN prompt_versions pv ON pv.id = i.prompt_version_id "
-        "WHERE i.project_id = ? AND i.field_name = ? AND i.accepted = 0 AND pv.parent_id = ? LIMIT 1",
-        (project_id, field, pvid),
-    ).fetchone() is not None
-
-    return {"pv": pv, "pvid": pvid, "refs": refs, "unjudged": unjudged, "judged": judged, "exhausted": exhausted}
+    return {"pv_of": pv_of, "refs": refs, "per_model_refs": per_model_refs,
+            "unjudged": unjudged, "judged": judged, "exhausted": exhausted}
 
 
-def _decide(state: dict, models: list[str]) -> tuple[str, int | None, str]:
-    """Return (action, arg, reason). action in extract/judge/optimize/done/stuck."""
+def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str], str]:
+    """Return (action, arg, optimize_models, reason)."""
     stages = list(config.PRODUCTION_ROLLOUT_STAGES)
     final = stages[-1]
     refs, unjudged, judged = state["refs"], state["unjudged"], state["judged"]
 
     if refs == 0:
-        return "extract", stages[0], "no production runs yet -> bootstrap stage 1"
+        return "extract", stages[0], [], "a model has no runs on its current prompt -> bootstrap/refill stage 1"
     if unjudged > 0:
-        return "judge", None, f"{unjudged} unjudged runs -> refresh the gate"
+        return "judge", None, [], f"{unjudged} unjudged runs -> refresh the gate"
 
     judged_models = [m for m in models if m in judged]
     if not judged_models:
-        return "judge", None, "runs exist but none judged yet -> judge"
+        return "judge", None, [], "runs exist but none judged yet -> judge"
 
     below = [m for m in judged_models if judged[m][0] < scoring.GATE_THRESHOLD]
+    optimizable = [m for m in below if not state["exhausted"].get(m)]
+    if optimizable:
+        return "optimize", None, optimizable, (
+            f"{len(optimizable)} model(s) below gate {scoring.GATE_THRESHOLD:.0%} -> optimize each on its own prompt"
+        )
     if below:
-        if state["exhausted"]:
-            return "stuck", None, (
-                f"{len(below)} model(s) below gate {scoring.GATE_THRESHOLD:.0%} and this baseline's "
-                "optimizer attempt was already rejected -> leave gated (needs prompt/ground-truth work)"
-            )
-        return "optimize", None, f"{len(below)} model(s) below gate {scoring.GATE_THRESHOLD:.0%} -> optimize prompt"
+        return "stuck", None, [], (
+            f"{len(below)} model(s) below gate {scoring.GATE_THRESHOLD:.0%}, each already has a rejected "
+            "candidate -> gated (needs prompt/ground-truth work)"
+        )
 
     next_stage = next((s for s in stages if s > refs), None)
     if next_stage is not None:
-        return "extract", next_stage, f"all judged models pass; advance {refs} -> {next_stage} refs"
-    return "done", None, f"at final stage ({final}) and all judged models pass -> production-ready"
+        return "extract", next_stage, [], f"all judged models pass; advance {refs} -> {next_stage} refs"
+    return "done", None, [], f"at final stage ({final}) and all judged models pass -> production-ready"
 
 
 def main() -> None:
@@ -153,6 +154,8 @@ def main() -> None:
     tiers = [t.strip() for t in args.tiers.split(",") if t.strip()] or None
     models = _target_models(tiers)
 
+    db.init_db()  # idempotent: ensures schema + migrations (e.g. prompt_versions.model_id) are applied
+
     _log(f"Supervisor start | project={args.project} | fields={fields} | models={len(models)} "
          f"| stages={config.PRODUCTION_ROLLOUT_STAGES} | gate={scoring.GATE_THRESHOLD:.0%} "
          f"| max_cycles={args.max_cycles}"
@@ -172,10 +175,10 @@ def main() -> None:
                 with db.get_conn() as conn:
                     project_id = db.get_project_id(conn, args.project)
                     state = _field_state(conn, project_id, field, models)
-                action, arg, reason = _decide(state, models)
+                action, arg, opt_models, reason = _decide(state, models)
                 passing = sum(1 for _m, (acc, _n) in state["judged"].items() if acc >= scoring.GATE_THRESHOLD)
-                _log(f"[{field}] v{state['pv']['version']} refs={state['refs']} unjudged={state['unjudged']} "
-                     f"judged={len(state['judged'])} passing={passing}{' exhausted' if state['exhausted'] else ''} "
+                _log(f"[{field}] refs={state['refs']} unjudged={state['unjudged']} "
+                     f"judged={len(state['judged'])} passing={passing}/{len(models)} "
                      f"-> {action.upper()} {arg if arg is not None else ''} ({reason})")
 
                 if action in ("done", "stuck"):
@@ -191,17 +194,10 @@ def main() -> None:
                     _run(["backend.scripts.llm_judge", "--project", args.project, "--field", field,
                           "--n", "100000", "--cross-family"])
                 elif action == "optimize":
-                    v_before = state["pv"]["version"]
-                    _run(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
-                          "--model", args.model, "--reflector-model", args.reflector_model])
-                    with db.get_conn() as conn:
-                        project_id = db.get_project_id(conn, args.project)
-                        v_after = prompt_store.get_or_create_baseline(conn, project_id, field)["version"]
-                    if v_after != v_before:
-                        _log(f"[{field}] optimizer ACCEPTED a new prompt v{v_before} -> v{v_after}")
-                    else:
-                        _log(f"[{field}] optimizer: no accepted improvement (baseline stays v{v_before}; "
-                             "this baseline will not be re-optimized)")
+                    # per-model prompts: optimize each below-gate model on its own lineage
+                    for m in opt_models:
+                        _run(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
+                              "--model", m, "--reflector-model", args.reflector_model])
 
             if not any_action:
                 _log("Converged: no field has an actionable step this run.")
