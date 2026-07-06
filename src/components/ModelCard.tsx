@@ -203,9 +203,9 @@ export function ModelCard({
             <span className="stat-value">{summary.n}</span>
             <span className="stat-label">references</span>
           </div>
-          <div className="stat-card highlight">
+          <div className="stat-card">
             <span className="stat-value">{pct(summary.accuracy)}</span>
-            <span className="stat-label">threshold accuracy</span>
+            <span className="stat-label">fuzzy-match rate</span>
             {accCi && (
               <>
                 <ConfidenceWhisker accuracy={summary.accuracy} ci={accCi} />
@@ -224,12 +224,12 @@ export function ModelCard({
               {llmJudge && llmJudge.n_judged > 0 ? pct(llmJudge.llm_judged_accuracy) : "—"}
             </span>
             <span className="stat-label">
-              llm-judged accuracy{llmJudge && llmJudge.n_judged > 0 ? ` (${llmJudge.n_judged})` : ""}
+              concordance (LLM judge){llmJudge && llmJudge.n_judged > 0 ? ` (${llmJudge.n_judged})` : ""}
             </span>
           </div>
-          <div className="stat-card">
+          <div className="stat-card highlight">
             <span className="stat-value">{gateMetric != null ? pct(gateMetric) : "—"}</span>
-            <span className="stat-label">gate metric ({gateMetricName})</span>
+            <span className="stat-label">Quality — gate ({gateMetricName})</span>
             {gateMetric != null && gateThreshold != null && (
               <span className={`gate-chip ${gateMetric >= gateThreshold ? "pass" : "gated"}`}>
                 {gateMetric >= gateThreshold

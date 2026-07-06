@@ -247,6 +247,44 @@ body {
   font-weight: 600;
 }
 
+/* Compact metric glossary in the Methodology panel. */
+table.glossary {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  margin-top: 8px;
+}
+
+table.glossary th,
+table.glossary td {
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  vertical-align: top;
+}
+
+table.glossary tr.glossary-tier td {
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.04);
+  border-bottom: none;
+  padding-top: 10px;
+}
+
+table.glossary .glossary-metric {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+table.glossary .glossary-dir {
+  color: #555;
+  white-space: nowrap;
+}
+
+.glossary-note {
+  margin-top: 8px;
+  font-size: 0.75rem;
+}
+
 /* Reliability diagram scales to fill the card width (viewBox keeps aspect). */
 .reliability {
   width: 100%;
