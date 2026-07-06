@@ -84,11 +84,20 @@ export interface Calibration {
 }
 
 // Derived staged-rollout / quality-gate status for a field. The gate is
-// evaluated PER MODEL within the field (each model's own LLM-judged accuracy
-// vs. the threshold), not as a single field-level verdict.
+// evaluated PER MODEL within the field on a field-type-aware quality metric
+// (F1 for the list fields, accuracy for the categorical ones), with LLM-judged
+// accuracy kept as a reported concordance companion.
 export interface StageModelGate {
   model_id: string;
-  llm_judged_accuracy: number;
+  gate_metric_name: string; // "f1" | "accuracy"
+  gate_metric: number;
+  precision: number | null;
+  recall: number | null;
+  f1: number | null;
+  accuracy: number | null;
+  kappa: number | null;
+  n: number;
+  llm_judged_accuracy: number | null;
   n_judged: number;
   gate_passed: boolean;
 }
@@ -100,6 +109,7 @@ export interface StageStatus {
   final_stage: number;
   gate_threshold: number;
   models: StageModelGate[];
+  n_models_evaluated: number;
   n_models_judged: number;
   n_models_passing: number;
   n_judged: number;
@@ -143,6 +153,7 @@ export interface CategoricalConfusion {
   pred_labels: string[];
   matrix: number[][];
   accuracy: number;
+  kappa: number | null;
   sensitivity: number;
   specificity: number;
   f2: number;

@@ -23,13 +23,13 @@ import "./App.css";
 const JOBS_POLL_MS = 6000;
 
 function StageBadge({ s }: { s: StageStatus }) {
-  const judged = s.n_models_judged;
+  const evaluated = s.n_models_evaluated;
   const passing = s.n_models_passing;
   const gatePct = Math.round(s.gate_threshold * 100);
   const cls =
-    judged === 0
+    evaluated === 0
       ? "stage-badge neutral"
-      : passing === judged
+      : passing === evaluated
         ? "stage-badge pass"
         : passing === 0
           ? "stage-badge gated"
@@ -37,10 +37,10 @@ function StageBadge({ s }: { s: StageStatus }) {
   return (
     <div className={cls}>
       <span className="stage-pill">Stage {s.references}/{s.final_stage}</span>
-      {judged > 0 ? (
+      {evaluated > 0 ? (
         <span>
-          {passing}/{judged} models pass gate{" "}
-          <span className="muted">(≥{gatePct}% llm-judged accuracy, per model)</span>
+          {passing}/{evaluated} models pass gate{" "}
+          <span className="muted">(≥{gatePct}% quality metric — F1 for lists, accuracy for categorical, per model)</span>
         </span>
       ) : (
         <span className="muted">gate (≥{gatePct}%): not yet judged</span>

@@ -23,6 +23,7 @@ Usage (from repo root):
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import time
@@ -37,7 +38,7 @@ try:  # pragma: no cover - Windows console cp1252 guard
 except Exception:
     pass
 
-from backend.app import config, db, prompt_store, scoring  # noqa: E402
+from backend.app import analytics, config, db, prompt_store, scoring  # noqa: E402
 from backend.app.prompts import BASELINE_INSTRUCTIONS  # noqa: E402
 
 
@@ -68,6 +69,7 @@ def _field_state(conn, project_id: int, field: str, models: list[str]) -> dict:
     per_model_refs: dict[str, int] = {}
     unjudged = 0
     judged: dict[str, tuple[float, int]] = {}
+    gate: dict[str, tuple[float, int]] = {}  # runs-based gate metric (F1 for lists / accuracy for categorical)
     exhausted: dict[str, bool] = {}
     for m in models:
         pvid = pv_of[m]["id"]
@@ -90,6 +92,21 @@ def _field_state(conn, project_id: int, field: str, models: list[str]) -> dict:
         ).fetchone()
         if jr and (jr["n"] or 0) > 0:
             judged[m] = (jr["acc"], jr["n"])
+        # Gate metric: computed from runs (no judge needed), matching the dashboard's
+        # stage-status gate -- F1 for list fields, accuracy for categorical.
+        grows = conn.execute(
+            "SELECT r.parsed_value_json, g.value_json FROM runs r "
+            "JOIN ground_truth g ON g.project_id = r.project_id AND g.record_id = r.record_id "
+            "AND g.field_name = r.field_name "
+            "WHERE r.project_id = ? AND r.field_name = ? AND r.model_id = ? AND r.prompt_version_id = ? "
+            "AND r.parsed_value_json IS NOT NULL",
+            (project_id, field, m, pvid),
+        ).fetchall()
+        if grows:
+            mrows = [{"predicted": json.loads(x["parsed_value_json"]), "truth": json.loads(x["value_json"])}
+                     for x in grows]
+            gm = analytics.gate_metrics(field, mrows)
+            gate[m] = (gm["metric"], gm["n"])
         # per-model persistent exhaustion: a rejected candidate off THIS model's
         # current prompt means don't re-optimize this model on this prompt.
         exhausted[m] = conn.execute(
@@ -100,25 +117,27 @@ def _field_state(conn, project_id: int, field: str, models: list[str]) -> dict:
         ).fetchone() is not None
     refs = min((per_model_refs.get(m, 0) for m in models), default=0) if models else 0
     return {"pv_of": pv_of, "refs": refs, "per_model_refs": per_model_refs,
-            "unjudged": unjudged, "judged": judged, "exhausted": exhausted}
+            "unjudged": unjudged, "judged": judged, "gate": gate, "exhausted": exhausted}
 
 
 def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str], str]:
     """Return (action, arg, optimize_models, reason)."""
     stages = list(config.PRODUCTION_ROLLOUT_STAGES)
     final = stages[-1]
-    refs, unjudged, judged = state["refs"], state["unjudged"], state["judged"]
+    refs, unjudged, gate = state["refs"], state["unjudged"], state["gate"]
 
     if refs == 0:
         return "extract", stages[0], [], "a model has no runs on its current prompt -> bootstrap/refill stage 1"
     if unjudged > 0:
-        return "judge", None, [], f"{unjudged} unjudged runs -> refresh the gate"
+        return "judge", None, [], f"{unjudged} unjudged runs -> refresh the concordance metric"
 
-    judged_models = [m for m in models if m in judged]
-    if not judged_models:
-        return "judge", None, [], "runs exist but none judged yet -> judge"
+    evaluated = [m for m in models if m in gate]
+    if not evaluated:
+        return "judge", None, [], "runs exist but no gate metric yet -> judge"
 
-    below = [m for m in judged_models if judged[m][0] < scoring.GATE_THRESHOLD]
+    # Gate on the runs-based quality metric (F1 for list fields, accuracy for
+    # categorical) -- same metric the dashboard shows -- not judged accuracy.
+    below = [m for m in evaluated if gate[m][0] < scoring.GATE_THRESHOLD]
     optimizable = [m for m in below if not state["exhausted"].get(m)]
     if optimizable:
         return "optimize", None, optimizable, (
@@ -132,8 +151,8 @@ def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str],
 
     next_stage = next((s for s in stages if s > refs), None)
     if next_stage is not None:
-        return "extract", next_stage, [], f"all judged models pass; advance {refs} -> {next_stage} refs"
-    return "done", None, [], f"at final stage ({final}) and all judged models pass -> production-ready"
+        return "extract", next_stage, [], f"all evaluated models pass; advance {refs} -> {next_stage} refs"
+    return "done", None, [], f"at final stage ({final}) and all evaluated models pass -> production-ready"
 
 
 def main() -> None:
@@ -176,7 +195,7 @@ def main() -> None:
                     project_id = db.get_project_id(conn, args.project)
                     state = _field_state(conn, project_id, field, models)
                 action, arg, opt_models, reason = _decide(state, models)
-                passing = sum(1 for _m, (acc, _n) in state["judged"].items() if acc >= scoring.GATE_THRESHOLD)
+                passing = sum(1 for _m, (score, _n) in state["gate"].items() if score >= scoring.GATE_THRESHOLD)
                 _log(f"[{field}] refs={state['refs']} unjudged={state['unjudged']} "
                      f"judged={len(state['judged'])} passing={passing}/{len(models)} "
                      f"-> {action.upper()} {arg if arg is not None else ''} ({reason})")

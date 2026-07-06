@@ -35,6 +35,23 @@ def _fbeta(precision: float, recall: float, beta: float) -> float:
     return (1 + b2) * precision * recall / denom if denom else 0.0
 
 
+def _cohens_kappa(rows: list[dict[str, Any]]) -> float | None:
+    """Chance-corrected agreement between predicted and ground-truth category
+    for single-categorical fields. Reported alongside accuracy because raw
+    accuracy can look high just from an imbalanced class distribution; kappa
+    discounts the agreement expected by chance. Returns None when undefined
+    (no data, or chance agreement == 1)."""
+    pairs = [(_norm(r["predicted"] or ""), _norm(r["truth"])) for r in rows if r["truth"]]
+    n = len(pairs)
+    if n == 0:
+        return None
+    po = sum(1 for p, t in pairs if p == t) / n
+    pred_counts = Counter(p for p, _ in pairs)
+    truth_counts = Counter(t for _, t in pairs)
+    pe = sum((pred_counts[c] / n) * (truth_counts[c] / n) for c in set(pred_counts) | set(truth_counts))
+    return (po - pe) / (1 - pe) if (1 - pe) != 0 else None
+
+
 def _categorical_confusion(rows: list[dict[str, Any]]) -> dict:
     truth_counts = Counter(_norm(r["truth"]) for r in rows if r["truth"])
     top = [c for c, _ in truth_counts.most_common(MAX_CATEGORIES)]
@@ -96,6 +113,7 @@ def _categorical_confusion(rows: list[dict[str, Any]]) -> dict:
         "pred_labels": pred_labels,
         "matrix": matrix,
         "accuracy": (n_correct / n_total) if n_total else 0.0,
+        "kappa": _cohens_kappa(rows),
         "sensitivity": macro(sensitivities),
         "specificity": macro(specificities),
         "f2": macro(f2s),
@@ -167,3 +185,38 @@ def compute_confusion(field_name: str, rows: list[dict[str, Any]]) -> dict:
         return _categorical_confusion(rows)
     universe_size = len(get_options(spec.taxonomy_key)) if spec.taxonomy_key else None
     return _list_confusion(rows, fuzzy=(spec.value_type == "list_text"), universe_size=universe_size)
+
+
+def gate_metrics(field_name: str, rows: list[dict[str, Any]]) -> dict:
+    """The per-(field, model) quality metric the production gate is evaluated on,
+    plus its components, computed from logged runs (no LLM judge needed).
+
+    Field-type aware, matching the systematic-review evaluation literature:
+      * list fields (authors/affiliation/country) -> element-level micro F1
+        (balances precision & recall; the standard for multi-value extraction);
+      * single-categorical (sector/sub_sector) -> record-level accuracy, with
+        Cohen's kappa reported alongside (chance-corrected).
+    `metric` is the number compared against scoring.GATE_THRESHOLD.
+    """
+    conf = compute_confusion(field_name, rows)
+    if conf["type"] == "categorical":
+        return {
+            "metric_name": "accuracy",
+            "metric": conf["accuracy"],
+            "accuracy": conf["accuracy"],
+            "kappa": conf.get("kappa"),
+            "precision": None,
+            "recall": conf.get("sensitivity"),
+            "f1": None,
+            "n": conf["n"],
+        }
+    return {
+        "metric_name": "f1",
+        "metric": conf["f1"],
+        "accuracy": None,
+        "kappa": None,
+        "precision": conf["precision"],
+        "recall": conf["recall"],
+        "f1": conf["f1"],
+        "n": conf["n"],
+    }

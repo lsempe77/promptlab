@@ -372,27 +372,53 @@ def stage_status(project_slug: str, field_name: str) -> dict:
             "WHERE r.project_id = ? AND r.field_name = ? GROUP BY r.model_id",
             (project_id, field_name),
         ).fetchall()
+        rrows = conn.execute(
+            "SELECT r.model_id, r.parsed_value_json, g.value_json FROM runs r "
+            "JOIN ground_truth g ON g.project_id = r.project_id AND g.record_id = r.record_id "
+            "AND g.field_name = r.field_name "
+            "WHERE r.project_id = ? AND r.field_name = ? AND r.parsed_value_json IS NOT NULL",
+            (project_id, field_name),
+        ).fetchall()
         pv = conn.execute(
             "SELECT COUNT(*) AS total, SUM(CASE WHEN accepted = 1 THEN 1 ELSE 0 END) AS accepted "
             "FROM prompt_versions WHERE project_id = ? AND field_name = ?",
             (project_id, field_name),
         ).fetchone()
 
+    # Judged accuracy is kept as a reported *concordance* companion; the GATE
+    # itself is now the field-type-aware quality metric (F1 for list fields,
+    # accuracy for categorical) computed from runs -- see analytics.gate_metrics.
+    judged_by_model = {
+        jr["model_id"]: (jr["acc"], jr["n"] or 0)
+        for jr in jrows if (jr["n"] or 0) > 0 and jr["acc"] is not None
+    }
+    rows_by_model: dict[str, list[dict]] = {}
+    for rr in rrows:
+        rows_by_model.setdefault(rr["model_id"], []).append(
+            {"predicted": json.loads(rr["parsed_value_json"]), "truth": json.loads(rr["value_json"])}
+        )
+
     models = []
-    for jr in jrows:
-        n = jr["n"] or 0
-        if n <= 0 or jr["acc"] is None:
-            continue
-        acc = jr["acc"]
+    for model_id, mrows in rows_by_model.items():
+        gm = analytics.gate_metrics(field_name, mrows)
+        judged = judged_by_model.get(model_id)
         models.append(
             {
-                "model_id": jr["model_id"],
-                "llm_judged_accuracy": acc,
-                "n_judged": n,
-                "gate_passed": acc >= scoring.GATE_THRESHOLD,
+                "model_id": model_id,
+                "gate_metric_name": gm["metric_name"],
+                "gate_metric": gm["metric"],
+                "precision": gm["precision"],
+                "recall": gm["recall"],
+                "f1": gm["f1"],
+                "accuracy": gm["accuracy"],
+                "kappa": gm["kappa"],
+                "n": gm["n"],
+                "llm_judged_accuracy": judged[0] if judged else None,
+                "n_judged": judged[1] if judged else 0,
+                "gate_passed": gm["metric"] >= scoring.GATE_THRESHOLD,
             }
         )
-    models.sort(key=lambda m: m["llm_judged_accuracy"], reverse=True)
+    models.sort(key=lambda m: m["gate_metric"], reverse=True)
 
     stages = list(config.PRODUCTION_ROLLOUT_STAGES)
     next_target = next((s for s in stages if s > references), None)  # None = final stage reached
@@ -403,7 +429,8 @@ def stage_status(project_slug: str, field_name: str) -> dict:
         "final_stage": stages[-1] if stages else references,
         "gate_threshold": scoring.GATE_THRESHOLD,
         "models": models,
-        "n_models_judged": len(models),
+        "n_models_evaluated": len(models),
+        "n_models_judged": sum(1 for m in models if m["llm_judged_accuracy"] is not None),
         "n_models_passing": sum(1 for m in models if m["gate_passed"]),
         "n_judged": sum(m["n_judged"] for m in models),
         "prompt_versions": (pv["total"] if pv else 0) or 0,

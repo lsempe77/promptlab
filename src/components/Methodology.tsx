@@ -7,7 +7,7 @@ const PIPELINE_CHART = `flowchart TD
     EX --> SC["Score each answer 3 ways:<br/>fuzzy match &ge;95 / exact / LLM judge<br/>counts as correct if score &ge; 0.90"]
     SC --> HON["Honesty &amp; evidence checks:<br/>hit / abstain / wrong / hallucination<br/>excerpt found &ge;90 - abstain credit 0.5 - fabricated excerpt x0.5"]
     HON --> JUDGE["Cross-family LLM judge<br/>(OpenAI vs Anthropic) - verdict"]
-    JUDGE --> GATE{"Per-model gate:<br/>judged accuracy &ge; 95%?"}
+    JUDGE --> GATE{"Per-model gate:<br/>F1 (lists) / accuracy (categorical) &ge; 90%?"}
     GATE -- "no (gated)" --> REFLECT["Reflector model:<br/>diagnose failures,<br/>propose revised prompt<br/>(retry up to 3x for valid JSON)"]
     GATE -- "yes" --> STAGE{"Sample size<br/>reached this stage?"}
     STAGE -- "100 refs -> grow" --> G200["Extract to 200 refs<br/>(95% CI narrows)"]
@@ -43,7 +43,7 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
         </p>
         <MermaidDiagram
           chart={PIPELINE_CHART}
-          caption="Extract → score → judge → gate → reflect/rewrite → re-test → advance. Numbers on the decision diamonds are the live thresholds (gate 95%, optimizer accepts a rewrite only if LLM-judged accuracy on a 50-paper held-out set improves by ≥ 0.01, stop after 3 non-improving iterations)."
+          caption="Extract → score → judge → gate → reflect/rewrite → re-test → advance. Numbers on the decision diamonds are the live thresholds (gate 90% — F1 for list fields, accuracy for categorical; optimizer accepts a rewrite only if LLM-judged accuracy on a 50-paper held-out set improves by ≥ 0.01, stop after 3 non-improving iterations)."
         />
       </details>
 
@@ -287,8 +287,11 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
 
         <dt>Staged rollout &amp; the quality gate — why a field may stay at 100 / 200 / 300</dt>
         <dd>
-          References are added in <strong>stages</strong> (100 → 200 → 300). After each stage a field
-          is LLM-judged; if its judged accuracy is too low, the optimizer proposes new prompt
+          References are added in <strong>stages</strong> (100 → 200 → 300). After each stage a
+          field's per-model <strong>quality metric</strong> is checked against the gate
+          (<strong>F1</strong> for the list fields, <strong>accuracy</strong> for the categorical
+          ones, with Cohen's κ and LLM-judged accuracy reported alongside); if it's below the gate,
+          the optimizer proposes new prompt
           versions <em>instead of</em> advancing to more references. So a field that "stays at 30"
           is one still being improved — you can see this happening in two places on each model card:
           the <strong>reference count</strong> (top of the card) shows which stage the field has

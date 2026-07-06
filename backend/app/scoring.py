@@ -23,10 +23,15 @@ from .fields import FIELDS
 
 FUZZY_MATCH_THRESHOLD = 95  # rapidfuzz 0-100 scale
 CORRECT_THRESHOLD = 0.9  # score (0-1) at/above which a run counts as "correct"
-GATE_THRESHOLD = 0.95  # per-(field, model) LLM-judged accuracy at/above which a model counts as
-                       # production-ready and its staged rollout may advance to more references;
-                       # below it the (field, model) is "gated" and the optimizer should improve
-                       # the prompt instead of advancing. Single bar applied at every stage.
+GATE_THRESHOLD = 0.90  # per-(field, model) quality bar for production-readiness. The gated metric is
+                       # field-type aware (see analytics.gate_metrics): element-level F1 for the
+                       # list fields (authors/affiliation/country) and record-level accuracy for the
+                       # single-categorical fields (sector/sub_sector), matching the systematic-
+                       # review evaluation literature (F1 for multi-value extraction; accuracy +
+                       # kappa for categorical). Lowered from 0.95 -> 0.90: the human reference
+                       # standard is itself noisy (benchmark bias), so 0.95 was chasing label noise;
+                       # ~0.90 is a defensible bar (lit. often uses ~0.70-0.90). Per-user thresholds
+                       # are a planned enhancement (see ROADMAP.md).
 ABSTENTION_CREDIT = 0.5  # honesty-adjusted credit for an honest abstention (null/empty output)
                          # when a value actually existed -- rewards "I don't know" over a
                          # confident wrong guess. Only affects `honesty_score` (the optimizer's

@@ -181,6 +181,11 @@ export function ModelCard({
   const accepted = iters?.filter((i) => i.accepted).length ?? 0;
   const rejected = (iters?.length ?? 0) - accepted;
   const accCi = wilson95(summary.accuracy, summary.n);
+  // The production gate is the field-type-aware quality metric (F1 for list
+  // fields, accuracy for categorical), derived from this model's confusion.
+  const gateMetric =
+    confusion == null ? null : confusion.type === "list" ? confusion.f1 : confusion.accuracy;
+  const gateMetricName = confusion?.type === "list" ? "F1" : "accuracy";
 
   return (
     <section className="panel model-card">
@@ -221,13 +226,13 @@ export function ModelCard({
             <span className="stat-label">
               llm-judged accuracy{llmJudge && llmJudge.n_judged > 0 ? ` (${llmJudge.n_judged})` : ""}
             </span>
-            {llmJudge && llmJudge.n_judged > 0 && gateThreshold != null && (
-              <span
-                className={`gate-chip ${
-                  llmJudge.llm_judged_accuracy >= gateThreshold ? "pass" : "gated"
-                }`}
-              >
-                {llmJudge.llm_judged_accuracy >= gateThreshold
+          </div>
+          <div className="stat-card">
+            <span className="stat-value">{gateMetric != null ? pct(gateMetric) : "—"}</span>
+            <span className="stat-label">gate metric ({gateMetricName})</span>
+            {gateMetric != null && gateThreshold != null && (
+              <span className={`gate-chip ${gateMetric >= gateThreshold ? "pass" : "gated"}`}>
+                {gateMetric >= gateThreshold
                   ? `✓ gate ≥${Math.round(gateThreshold * 100)}%`
                   : `✗ gated (<${Math.round(gateThreshold * 100)}%)`}
               </span>

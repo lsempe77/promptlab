@@ -237,6 +237,10 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
 
 ## Roadmap
 
+> Forward-looking plans live in the repo-root [`ROADMAP.md`](../ROADMAP.md) (the canonical
+> roadmap). The entries below are kept for the areas with implementation detail; new
+> direction-setting items go in `ROADMAP.md`.
+
 - **Multi-project support (merged to `main`)**: the backend is fully project-scoped (see
   "Projects" in Architecture and the Data model section) — schema + auto-migration,
   `app/projects.py` registry, `/api/projects/...`-nested API, `--project` CLI flag on every

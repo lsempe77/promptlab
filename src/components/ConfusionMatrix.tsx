@@ -81,6 +81,12 @@ export function ConfusionMatrix({ confusion }: { confusion: Confusion | null }) 
           <span className="stat-label">sensitivity (recall)</span>
         </div>
         <div className="stat-card">
+          <span className="stat-value">
+            {confusion.kappa == null ? "—" : confusion.kappa.toFixed(3)}
+          </span>
+          <span className="stat-label">Cohen's κ (chance-corrected)</span>
+        </div>
+        <div className="stat-card">
           <span className="stat-value">{pct(confusion.specificity)}</span>
           <span className="stat-label">specificity</span>
         </div>
