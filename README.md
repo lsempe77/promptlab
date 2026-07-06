@@ -1,69 +1,75 @@
-# PromptLab (frontend)
+# PromptLab
 
-Observability dashboard for 3ie's DEP LLM data-extraction prompt lab. Shows:
+Observability dashboard **and** autonomous prompt-optimization engine for **3ie's Development
+Evidence Portal (DEP)** LLM data-extraction pipeline. It extracts structured metadata — authors,
+author affiliations, author-institution countries, sector, sub-sector — from impact-evaluation
+studies, scores every model against a human-curated ground truth, and **continuously improves the
+prompts on its own, in the cloud**.
 
-- Model comparison across the OpenRouter roster (accuracy, cost, latency) per field.
-- Prompt version history / lineage (baseline -> optimizer iterations, accepted vs. rejected candidates, reflector diagnoses).
-- Metric-over-iterations charts as the GEPA-lite optimizer improves a field's instruction.
+- **Frontend** (this repo root): React + Vite + TypeScript dashboard.
+- **Backend** (`backend/`): FastAPI **read-only** API + scoring / optimizer / supervisor engine
+  over a SQLite DB. See [`backend/README.md`](backend/README.md) for the full architecture and the
+  detailed pipeline diagram.
+- **Forward-looking plans**: [`ROADMAP.md`](ROADMAP.md).
 
-## Status
+## Architecture — two loops, different autonomy
 
-Scaffolded with Vite + React + TypeScript. No UI has been built yet — this is
-a placeholder while the backend (FastAPI layer over the existing SQLite
-prompt-lab DB) is still in progress. See the `backend/` folder in the sibling
-`DEP` workspace for the extraction/scoring/optimizer engine this will visualize.
+The agent moves **prompts** on its own, but **data** (ground truth / taxonomy) and **code /
+eval-logic** changes stay human-gated, so it can never edit its own answer key or scoring rules to
+game the metric:
+
+```mermaid
+flowchart LR
+    subgraph cloud["Cloud — autonomous (Fly.io supervisor)"]
+      A["Loop A: optimize PROMPTS<br/>within the gate"]
+      B["Loop B: audit ground truth,<br/>propose DATA fixes (planned)"]
+    end
+    A -->|"writes prompt_versions"| DB[("SQLite on /data")]
+    B -->|"email diff + signed approval"| H{{"Human"}}
+    H -->|"approves DATA edit"| DB
+    CODE["Eval-logic / code change"] --> PR["GitHub PR"]
+    PR --> HR{{"Human review"}}
+    HR --> DEP["fly deploy"]
+    DEP --> DB
+    DB --> API["Read-only API"]
+    API --> UI["Dashboard"]
+```
+
+The inner **extract → score → judge → gate → optimize → advance** loop (Loop A, run by the
+`supervisor` daemon) is documented with its own diagram in
+[`backend/README.md`](backend/README.md#architecture) and in the dashboard's "How to read this
+dashboard" panel.
+
+## What the dashboard shows
+
+Metrics are tiered so the one that matters leads:
+
+- **Quality gate (per model)** — the production metric: **F1** for list fields (authors,
+  affiliations, countries) and **accuracy** for categorical fields (sector, sub-sector); a
+  (field, model) is production-ready at **≥ 90%**.
+- **Explains the gate** — precision & recall (lists) or **Cohen's κ** (categorical), with 95%
+  Wilson confidence intervals.
+- **Corroboration** — cross-family **LLM-judge concordance**; confidence **calibration** (Brier).
+- **Honesty** — abstain / wrong / hallucination mix and an honesty-adjusted score (which *steers
+  the optimizer*), plus excerpt-verification (anti-fabrication).
+- **Efficiency** — cost per model and an **EcoLogits-estimated CO₂e** footprint.
+- **Comparisons** — sortable model table, a **quality leaderboard**, a **cost-vs-quality**
+  frontier plot, confusion matrices, and prompt lineage + optimizer-progress charts.
 
 ## Development
 
 ```bash
 npm install
-npm run dev
+npm run dev        # http://localhost:5173/promptlab/
 ```
 
-## Planned data source
+The frontend reads from the API at `VITE_API_BASE_URL` (defaults to the local dev server
+`http://127.0.0.1:8000`; in production it points at the Fly.io deployment). Start the backend with
+`python -m backend.scripts.serve` — see [`backend/README.md`](backend/README.md).
 
-A FastAPI service (not yet built) will expose read endpoints over
-`backend/data/promptlab.db`:
+## Deploy
 
-- `GET /fields` — configured extraction fields
-- `GET /fields/{field}/prompt-versions` — full lineage (parent_id chain, accepted flag, notes/diagnosis, created_at)
-- `GET /fields/{field}/runs` — per-record/per-model run history (score, latency, cost, errors)
-- `GET /fields/{field}/iterations` — optimizer iteration log (train/val scores, accept/reject, reflector diagnosis)
-- `POST /fields/{field}/optimize` — trigger an optimizer run
-
----
-
-Original Vite template docs below.
-
-# React + TypeScript + Vite
-
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+- **Frontend** → GitHub Pages, on push to `main`.
+- **Backend** → `fly deploy` (always-on Fly.io app; the autonomous supervisor daemon runs there).
+  The full build → rollout → deploy sequence is in
+  [`backend/README.md`](backend/README.md#production-deployment-flyio).

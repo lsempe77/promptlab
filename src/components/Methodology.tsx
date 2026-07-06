@@ -3,22 +3,29 @@ import type { Thresholds } from "../api";
 import { MermaidDiagram } from "./MermaidDiagram";
 
 const PIPELINE_CHART = `flowchart TD
-    GT["Ground-truth reference set<br/>(human-curated)"] --> EX
-    P["Current prompt<br/>(baseline or optimized)"] --> EX["Extraction:<br/>run field across all models"]
-    EX --> SC["Score vs ground truth<br/>(concordance-aware match)"]
-    SC --> GATE{"Per-model gate:<br/>F1 (lists) / accuracy (categorical) &ge; 90%?"}
-    GATE -- "no (gated)" --> REFLECT["Reflector model:<br/>diagnose failures,<br/>propose revised prompt"]
-    GATE -- "yes" --> STAGE{"Sample size<br/>reached this stage?"}
-    STAGE -- "100 -> grow" --> G200["Extract to 200 refs"]
-    STAGE -- "200 -> grow" --> G300["Extract to 300 refs"]
+    GT["Ground truth<br/>(human-curated)"] --> EX
+    P["Per-model prompt<br/>(v1 baseline → optimized)"] --> EX["Extract field across<br/>the model roster"]
+    EX --> SC["Score vs truth — concordance-aware:<br/>accents/mojibake folded · 'A or B' = either accepted"]
+    SC --> LOG["Log per run:<br/>outcome · honesty · cost · CO₂e"]
+    SC --> JUDGE["Cross-family LLM judge<br/>(concordance)"]
+    LOG --> GATE{"Per-model gate:<br/>F1 (lists) / accuracy (categorical) ≥ 90%?"}
+    JUDGE -. corroborates .-> GATE
+    GATE -- "below gate" --> REFLECT
+    GATE -- "passes" --> STAGE{"Sample size<br/>reached this stage?"}
+    STAGE -- "100 → grow" --> G200["Extract to 200 refs"]
+    STAGE -- "200 → grow" --> G300["Extract to 300 refs"]
     STAGE -- "300 (capped)" --> DONE(["Production-ready<br/>(field, model) pairs"])
     G200 --> EX
     G300 --> EX
-    REFLECT --> RETEST["Re-test candidate on a 50-paper<br/>held-out set + cross-model holdout"]
-    RETEST --> BETTER{"Improves & generalizes?"}
-    BETTER -- "yes" --> ACCEPT["Accept -> new prompt version"]
-    BETTER -- "no" --> REJECT["Reject (bold rewrite after 2,<br/>stop after 4 no-improve)"]
-    ACCEPT --> P`;
+    subgraph OPT["Optimizer (autonomous, per-model)"]
+      direction TB
+      REFLECT["Reflector proposes revision<br/>(bold structural rewrite after 2 rejects)"] --> RETEST["Re-test on 50-paper held-out val<br/>+ cross-model holdout"]
+      RETEST --> ACC{"Improves AND generalizes?"}
+      ACC -- "yes" --> ACCEPT["Accept → new per-model prompt version"]
+      ACC -- "no" --> REJECT["Reject<br/>(stop after 4 no-improve / 10 iters)"]
+    end
+    ACCEPT --> P
+    DASH["Dashboard: leaderboard · cost/quality ·<br/>confusion · calibration · lineage · CO₂e"] -.reads.- SC`;
 
 // One glossary row: [metric, plain meaning, better direction].
 type Row = [string, string, string];

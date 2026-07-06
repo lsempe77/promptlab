@@ -22,31 +22,55 @@ cd ..
 
 ## Architecture
 
-The end-to-end loop (extract → score → judge → gate → reflect/rewrite → re-test → advance):
+The end-to-end **autonomous** loop — extract → score → judge → gate → (optimize | advance) — runs
+in the cloud via the supervisor daemon (no laptop required):
 
 ```mermaid
 flowchart TD
-    GT["Ground-truth reference set<br/>(human-curated)"] --> EX
-    P["Current prompt<br/>(baseline or optimized)"] --> EX["Extraction:<br/>run field across all models"]
-    EX --> SC["Score each answer 3 ways:<br/>fuzzy ≥95 · exact · LLM judge<br/>correct if score ≥ 0.90"]
-    SC --> HON["Honesty & evidence checks:<br/>hit / abstain / wrong / hallucination<br/>excerpt ≥90 · abstain credit 0.5 · fabricated ×0.5"]
-    HON --> JUDGE["Cross-family LLM judge<br/>(OpenAI↔Anthropic) → verdict"]
-    JUDGE --> GATE{"Per-model gate:<br/>judged accuracy ≥ 95%?"}
-    GATE -- "no (gated)" --> REFLECT["Reflector model:<br/>diagnose failures →<br/>propose revised prompt<br/>(retry ≤3× for valid JSON)"]
-    GATE -- "yes" --> STAGE{"Sample size<br/>reached this stage?"}
-    STAGE -- "30 refs → grow" --> G60["Extract to 60 refs<br/>(95% CI narrows)"]
-    STAGE -- "60 refs → grow" --> G100["Extract to 100 refs<br/>(95% CI narrows)"]
-    STAGE -- "100 refs (final, capped)" --> DONE(["Production-ready<br/>(field, model) pairs"])
-    G60 --> EX
-    G100 --> EX
-    REFLECT --> RETEST["Re-test candidate on 30 papers<br/>(same set as production) + LLM judge"]
-    RETEST --> BETTER{"Higher LLM-judged accuracy?<br/>(≥ +0.01)"}
-    BETTER -- "yes" --> ACCEPT["Accept → new prompt version"]
-    BETTER -- "no" --> REJECT["Reject<br/>(stop after 3 no-improve<br/>or 10 iterations)"]
+    GT["Ground truth<br/>(human-curated)"] --> EX
+    P["Per-model prompt<br/>(v1 baseline → optimized)"] --> EX["Extract field across<br/>the model roster"]
+    EX --> SC["Score vs truth — concordance-aware:<br/>accents/mojibake folded · 'A or B' = either accepted"]
+    SC --> LOG["Log per run:<br/>outcome · honesty · cost · CO₂e"]
+    SC --> JUDGE["Cross-family LLM judge<br/>(concordance)"]
+    LOG --> GATE{"Per-model gate:<br/>F1 (lists) / accuracy (categorical) ≥ 90%?"}
+    JUDGE -. corroborates .-> GATE
+    GATE -- "below gate" --> REFLECT
+    GATE -- "passes" --> STAGE{"Sample size<br/>reached this stage?"}
+    STAGE -- "100 → grow" --> G200["Extract to 200 refs"]
+    STAGE -- "200 → grow" --> G300["Extract to 300 refs"]
+    STAGE -- "300 (capped)" --> DONE(["Production-ready<br/>(field, model) pairs"])
+    G200 --> EX
+    G300 --> EX
+    subgraph OPT["Optimizer (autonomous, per-model)"]
+      direction TB
+      REFLECT["Reflector proposes revision<br/>(bold structural rewrite after 2 rejects)"] --> RETEST["Re-test on 50-paper held-out val<br/>+ cross-model holdout"]
+      RETEST --> ACC{"Improves AND generalizes?"}
+      ACC -- "yes" --> ACCEPT["Accept → new per-model prompt version"]
+      ACC -- "no" --> REJECT["Reject<br/>(stop after 4 no-improve / 10 iters)"]
+    end
     ACCEPT --> P
-    DASH["Live dashboard: comparisons ·<br/>confusion · calibration · prompt lineage"] -.reads.- SC
-    DASH -.reads.- JUDGE
-    DASH -.reads.- REFLECT
+    DASH["Dashboard: leaderboard · cost/quality ·<br/>confusion · calibration · lineage · CO₂e"] -.reads.- SC
+```
+
+Two loops share the DB at different autonomy levels — the agent moves **prompts** on its own, but
+**data** (ground truth / taxonomy) and **code / eval-logic** changes stay human-gated, so it can
+never edit its own answer key or scoring rules to game the metric:
+
+```mermaid
+flowchart LR
+    subgraph cloud["Cloud — autonomous (Fly.io supervisor)"]
+      A["Loop A: optimize PROMPTS<br/>within the gate"]
+      B["Loop B: audit ground truth,<br/>propose DATA fixes (planned)"]
+    end
+    A -->|"writes prompt_versions"| DB[("SQLite on /data")]
+    B -->|"email diff + signed approval"| H{{"Human"}}
+    H -->|"approves DATA edit"| DB
+    CODE["Eval-logic / code change"] --> PR["GitHub PR"]
+    PR --> HR{{"Human review"}}
+    HR --> DEP["fly deploy"]
+    DEP --> DB
+    DB --> API["Read-only API"]
+    API --> UI["Dashboard"]
 ```
 
 - **Projects** (`app/projects.py`): a `ProjectSpec` (slug, name, description, fields) registers a
@@ -76,7 +100,10 @@ flowchart TD
   injection guard).
 - **Scorer** (`app/scoring.py`): field-type aware — exact/fuzzy match for single categorical
   fields (sector, sub-sector), set-based F1 with fuzzy name matching for list fields (authors,
-  institutions), exact set match for list-categorical (countries). Each run is also tagged with
+  institutions), exact set match for list-categorical (countries). All comparisons are
+  **concordance-aware**: accents/mojibake are folded and transliterated (so `José`≡`Jose`,
+  `Lønborg`≡`Lonborg`) and a `|`-joined ground-truth value (curators tagged two equally-valid
+  labels) counts correct if the model matches *either*. Each run is also tagged with
   an `outcome` (`hit` / `correct_abstain` / `abstain_miss` / `wrong` / `hallucination`) and a
   separate `honesty_score`. The raw `score`/`is_correct`/accuracy numbers are unchanged (so
   historical aggregates stay comparable); the honesty-adjusted score gives partial credit
@@ -90,7 +117,8 @@ flowchart TD
   raw accuracy untouched, so the optimizer is pushed toward prompts that quote real text.
 - **Run harness** (`scripts/run_extraction.py`): samples N ground-truthed records, runs every
   configured model (`models.yaml`) against the current baseline/accepted prompt, scores + stores
-  every run in SQLite, prints a comparison table. Every script that touches the DB accepts
+  every run in SQLite (with per-run `cost_usd` and an EcoLogits-estimated `co2e_grams` footprint),
+  prints a comparison table. Every script that touches the DB accepts
   `--project <slug>` (default `dep-extraction`). Example:
   ```
   python -m backend.scripts.run_extraction --field sector_name --n 20 --tiers free,cheap
@@ -104,12 +132,29 @@ flowchart TD
   `scripts/optimize_all.py` (sweeps every field x model combination in one run, picking a
   cross-family reflector automatically — Anthropic models are reflected on by `~openai/gpt-latest`,
   everything else by `~anthropic/claude-opus-latest`, so a model is never self-critiqued by a
-  same-family model; one failing pair doesn't stop the sweep). The optimizer **accepts a rewrite
-  only if it raises LLM-judged accuracy** (the same metric as the production gate, via
-  `app/judging.py`) on a fixed 30-record validation set (same size/seed as production stage 1, so
-  the number is directly comparable) by at least `IMPROVEMENT_EPSILON`. The cheap honesty-adjusted
-  score is used only to *rank* candidates within an iteration; the raw score is still stored per
-  run for display.
+  same-family model; one failing pair doesn't stop the sweep). Prompts are **per-model** (each
+  model optimizes its own lineage, falling back to a shared v1 baseline until it diverges). A
+  rewrite is **accepted only if it (a) raises LLM-judged accuracy** (`app/judging.py`) on a fixed
+  **50-record held-out val set** **and (b) does not regress** the mean judged accuracy on a
+  separate **held-out set across the optimized model + a cheap different-family reference** — a
+  **cross-model generalization gate** that blocks single-model overfits. After `bold_after` (2)
+  consecutive rejections it switches to **bold** mode (structural rewrites, shown the cases the
+  prompt already gets right); it stops after `no_improve_limit` (4) non-improving iterations. The
+  cheap honesty-adjusted score only *ranks* candidates within an iteration. (Note: the
+  **production gate** the dashboard + supervisor use is field-type-aware — **F1** for list fields,
+  **accuracy** for categorical, ≥ `GATE_THRESHOLD` 0.90 — computed from runs via
+  `app/analytics.gate_metrics`; LLM-judged accuracy is kept as a corroborating companion.)
+- **Autonomous supervisor** (`scripts/supervisor.py`): the always-on orchestrator ("Loop A"). Each
+  cycle it reads per-(field, model) state and picks one action — extract the next rollout stage,
+  judge unjudged runs, optimize a below-gate model on its own prompt lineage, or advance — shelling
+  out to the tested `run_extraction` / `llm_judge` / `optimize_prompt` scripts. Deployed as a
+  `--loop` daemon on Fly so the pipeline runs without a laptop; self-terminating via the guardrails
+  (`MAX_PRODUCTION_RECORDS`, `PRODUCTION_ROLLOUT_STAGES`, `no_improve_limit`).
+- **Ground-truth audit** (`scripts/audit_ground_truth.py`, `scripts/propose_gt_fixes.py`):
+  read-only diagnostics (no model calls, no DB writes) that flag reference-data issues (encoding,
+  name-order, values outside the taxonomy, duplicates, rare categories) and propose canonical
+  fixes for human review — the input to the planned data-quality loop ("Loop B"); see
+  `../ROADMAP.md`.
 - **FastAPI app** (`app/api.py`, read-only): every field-scoped route is nested under a project
   slug: `/api/projects`, `/api/projects/{p}/fields`, `/api/projects/{p}/fields/{f}/prompt-versions`,
   `/api/projects/{p}/fields/{f}/models-summary`, `/api/projects/{p}/fields/{f}/runs`,
@@ -153,14 +198,16 @@ flowchart TD
 `records(project_id, id, title, md_path, PRIMARY KEY(project_id, id))` ·
 `ground_truth(project_id, record_id, field_name, value_json)` ·
 `prompt_versions(id, project_id, field_name, version, template, parent_id, notes, accepted,
-created_at)` · `runs(id, project_id, prompt_version_id, model_id, record_id, field_name,
+model_id, created_at)` (`model_id` scopes a lineage to one model; NULL = shared baseline) ·
+`runs(id, project_id, prompt_version_id, model_id, record_id, field_name,
 raw_response, parsed_value_json, excerpt, notes, score, honesty_score, is_correct, outcome,
 logprob_confidence, excerpt_verified, confidence, latency_ms, prompt_tokens, completion_tokens,
-cost_usd, error, batch_id, created_at)` (`excerpt` = verbatim source line cited, `notes` =
+cost_usd, co2e_grams, error, batch_id, created_at)` (`excerpt` = verbatim source line cited, `notes` =
 free-text uncertainty, `honesty_score` = abstention-credited score used by the optimizer,
 `outcome` = hit/correct_abstain/abstain_miss/wrong/hallucination, `logprob_confidence` = mean
 token probability when logprobs requested, `excerpt_verified` = whether the cited excerpt was
-found in the source, `confidence` = the model's self-reported 0-1 confidence) ·
+found in the source, `confidence` = the model's self-reported 0-1 confidence, `co2e_grams` =
+EcoLogits-estimated grams CO₂e per call) ·
 `iterations(id, project_id, field_name, iteration_num, prompt_version_id, model_id, mean_score,
 n_records, feedback, accepted, created_at)` · `llm_judgments(id, run_id, judge_model, verdict,
 reasoning, created_at)` · `self_consistency(id, project_id, field_name, model_id, record_id,
@@ -282,10 +329,12 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
 - **Staged rollout + per-model quality gate (done, 2026-07-05)**: `/api/projects/{slug}/fields/
   {field}/stage-status` derives, with no manual state, how many references a field has reached
   (the current stage vs `config.PRODUCTION_ROLLOUT_STAGES` 100→200→300) and evaluates the quality
-  gate **per (field, model)** — each model's own LLM-judged accuracy vs `scoring.GATE_THRESHOLD`
-  (0.95) — returning `n_models_passing`/`n_models_judged`. The dashboard shows a field badge
-  ("N/M models pass gate") with 95% Wilson CIs that narrow as the sample grows, plus a per-model
-  gate chip. The gate is derived at read time from `runs`/`llm_judgments`/`prompt_versions` — no
+  gate **per (field, model)** on a field-type-aware quality metric — **F1** for list fields,
+  **accuracy** for categorical — vs `scoring.GATE_THRESHOLD` (**0.90**), returning
+  `n_models_passing`/`n_models_evaluated` (LLM-judged accuracy is kept as a corroborating
+  companion). The dashboard shows a field badge ("N/M models pass gate") with 95% Wilson CIs that
+  narrow as the sample grows, plus a per-model gate chip. The gate is computed at read time from
+  `runs` + ground truth via `app/analytics.gate_metrics` (with Cohen's κ for categorical) — no
   schema change.
 - **Data-quality control loop ("Loop B", planned — design agreed 2026-07-06)**: a second
   autonomous loop alongside the prompt-optimizer supervisor ("Loop A"), for keeping the *reference
@@ -312,7 +361,7 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
   org). For `sub_sector`, models often pick a *valid* WB sub-sector (e.g. `"Livestock"` for an
   animal-health paper) that disagrees with an odd GT label (`"Other - Industry, trade and services"`).
   The baseline prompts were tightened (report the parent institution / treat name variants as one;
-  choose the WB sub-sector hierarchically) and the optimizer can refine further, but chasing 0.95
+  choose the WB sub-sector hierarchically) and the optimizer can refine further, but chasing 0.90
   against noisy labels has a ceiling — these fields may warrant a GT clean-up pass before their scores
   can be trusted at face value. Update (2026-07-05): a concrete, fixable sub-cause on
   `author_affiliation` is *mojibake in the GT* — the reference data mixes correct UTF-8 with
@@ -320,7 +369,12 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
   matching against the model's correct output. `scoring._norm` now guardedly repairs that mojibake
   and folds away diacritics on both sides (clean Latin-1 accents are left untouched because they
   don't round-trip through cp1252→utf-8), so encoding noise no longer counts as a wrong answer; the
-  residual gap is genuine label disagreement.
+  residual gap is genuine label disagreement. Update (2026-07-06): further hardened — the fold now
+  also transliterates non-decomposable letters (`ø→o`, `ß→ss`, …) and is applied to the LLM judge +
+  optimizer feedback too; a `|`-joined single-value GT counts correct if the model picks either;
+  and `scripts/audit_ground_truth.py` + `propose_gt_fixes.py` surface the remaining issues (notably
+  that the `sector_name` taxonomy is comma-stripped vs the comma-using GT — a *taxonomy* fix, not a
+  GT one).
 - **Optimizer reflector could waste iterations on empty/non-JSON output (fixed 2026-07-05)**:
   reasoning-capable reflectors (e.g. `~anthropic/claude-sonnet-latest`) sometimes spent their whole
   token budget "thinking" and returned `null` or truncated (`{\n  "diag`…) content, so
