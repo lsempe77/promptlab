@@ -138,7 +138,8 @@ export function ModelComparisonTable({
   }
 
   return (
-    <table className="model-table">
+    <div className="model-table-scroll">
+      <table className="model-table">
       <thead>
         <tr>
           {cols.map((c) => (
@@ -164,6 +165,7 @@ export function ModelComparisonTable({
           </tr>
         ))}
       </tbody>
-    </table>
+      </table>
+    </div>
   );
 }
