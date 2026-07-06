@@ -3,7 +3,7 @@ the matching .md files) for deploying the backend somewhere other than this
 machine (e.g. a cloud host), without shipping the full ~1.3 GB / 7,675-file
 local corpus.
 
-Selects up to `--n` (default 100, matching config.MAX_PRODUCTION_RECORDS)
+Selects up to `--n` (default 300, matching config.MAX_PRODUCTION_RECORDS)
 records that have COMPLETE ground truth across all 5 fields, so the same
 subset can be reused for every field's extraction run. Selection is
 deterministic (seed=42, same convention as the other scripts).

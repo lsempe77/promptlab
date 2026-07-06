@@ -24,9 +24,29 @@ from .corpus import read_md
 from .parsing import ParseError, parse_field_response, parse_json_object
 
 DEFAULT_MINIBATCH_SIZE = 8
-DEFAULT_VAL_SIZE = 30  # same size as production rollout stage 1, so val judged-accuracy is
-                       # directly comparable to the dashboard/gate (seed 42 => same records)
+DEFAULT_VAL_SIZE = 50  # held-out set for LLM-judged candidate comparison. Kept modest (vs the
+                       # 100+ production stages) because every candidate is re-judged on the
+                       # whole val set each iteration, so cost/CO2e scales linearly with it;
+                       # 50 halves the noise of 30 at half the cost of 100 (seed 42 => stable set)
 IMPROVEMENT_EPSILON = 0.01  # candidate must beat incumbent by at least this much
+
+DEFAULT_HOLDOUT_SIZE = 30  # records held out ENTIRELY from candidate selection; used only for the
+                           # cross-model generalization check, never to pick which candidate wins.
+# A cheap, different-family model used (alongside the model being optimized) to check that an
+# accepted rewrite generalizes rather than overfitting to a single model. Overridable per run.
+DEFAULT_HOLDOUT_REFERENCE = "deepseek/deepseek-v4-flash"
+_HOLDOUT_REFERENCE_ALT = "~openai/gpt-mini-latest"  # used when the optimized model IS the reference
+DEFAULT_BOLD_AFTER = 2  # after this many consecutive rejections, switch the reflector to "bold"
+                        # mode (structural rewrites) instead of small incremental edits.
+
+
+def _default_holdout_models(model_id: str) -> list[str]:
+    """[optimized model, a cheap different-family reference] for the cross-model
+    generalization gate."""
+    ref = DEFAULT_HOLDOUT_REFERENCE
+    if ref.split("/")[-1].lower() in model_id.lower():
+        ref = _HOLDOUT_REFERENCE_ALT
+    return [model_id, ref]
 
 
 @dataclass
@@ -37,6 +57,9 @@ class EvalOutcome:
     # (predicted, truth) for every successfully-parsed record, so the caller can
     # run an independent LLM-judge accuracy pass without re-calling the model.
     predictions: list[tuple[Any, Any]] = dataclass_field(default_factory=list)
+    # A few cases the instruction currently gets RIGHT, shown to the reflector in
+    # bold mode so a structural rewrite doesn't break what already works.
+    successes: list[dict[str, Any]] = dataclass_field(default_factory=list)
 
 
 @dataclass
@@ -70,6 +93,26 @@ def train_val_split(records: list[dict], val_size: int = DEFAULT_VAL_SIZE, seed:
     return shuffled[val_size:], shuffled[:val_size]
 
 
+def train_val_holdout_split(
+    records: list[dict], val_size: int = DEFAULT_VAL_SIZE, holdout_size: int = DEFAULT_HOLDOUT_SIZE,
+    seed: int = 42,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Three-way split: train (minibatch source) / val (drives which candidate
+    wins) / holdout (NEVER seen during selection, used only for the cross-model
+    generalization gate). All three are disjoint and fixed for a given seed.
+    Sizes are clamped so a train remainder always survives on small pools.
+    """
+    shuffled = records[:]
+    random.Random(seed).shuffle(shuffled)
+    n = len(shuffled)
+    holdout_size = max(0, min(holdout_size, n // 3))
+    val_size = min(val_size, max(1, (n - holdout_size) // 2))
+    holdout = shuffled[:holdout_size]
+    val = shuffled[holdout_size:holdout_size + val_size]
+    train = shuffled[holdout_size + val_size:]
+    return train, val, holdout
+
+
 def evaluate_instruction(
     field_name: str,
     instruction: str,
@@ -89,6 +132,7 @@ def evaluate_instruction(
     """
     scores: list[float] = []
     failures: list[dict[str, Any]] = []
+    successes: list[dict[str, Any]] = []
     predictions: list[tuple[Any, Any]] = []
 
     usable_records: list[dict] = []
@@ -150,6 +194,8 @@ def evaluate_instruction(
                 "explanation": result.explanation,
                 "excerpt": meta.get("excerpt"),
             })
+        else:
+            successes.append({"id": rec["id"], "predicted": value, "truth": rec["ground_truth"]})
         if conn is not None and prompt_version_id is not None:
             db.add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=value,
                        excerpt=meta.get("excerpt"), notes=meta.get("notes"),
@@ -163,7 +209,8 @@ def evaluate_instruction(
                        error=None)
 
     mean_score = sum(scores) / len(scores) if scores else 0.0
-    return EvalOutcome(mean_score=mean_score, n=len(scores), failures=failures, predictions=predictions)
+    return EvalOutcome(mean_score=mean_score, n=len(scores), failures=failures,
+                       predictions=predictions, successes=successes)
 
 
 _REFLECTOR_SYSTEM = (
@@ -178,15 +225,41 @@ _REFLECTOR_SYSTEM = (
     "than a small rewording of those."
 )
 
+_REFLECTOR_SYSTEM_BOLD = (
+    "You are improving the instruction given to another LLM that extracts a specific metadata "
+    "field from academic papers. Previous small, incremental edits have FAILED to improve results "
+    "several times in a row, so a timid reword will not help. Take a BOLD, different approach: you "
+    "MAY restructure the instruction, change the decision procedure step by step, add a short "
+    "worked example, or rethink from scratch what to look for. You may exceed the usual 2-5 "
+    "sentence length if the task genuinely needs it, but do NOT change the required output format. "
+    "You will also be shown cases the CURRENT instruction already gets RIGHT — your rewrite must not "
+    "break those. Diagnose why the incremental fixes stalled, then propose a substantially "
+    "different instruction."
+)
+
 
 def _format_failures(failures: list[dict[str, Any]], max_cases: int) -> str:
     lines = []
     for c in failures[:max_cases]:
+        # Fold accents/mojibake/whitespace on the shown values so the reflector
+        # doesn't mis-diagnose a spurious 'José' vs 'Jose' difference as the
+        # failure cause and chase it (the scorer already ignores these).
+        pred = scoring.fold_value(c['predicted'])
+        truth = scoring.fold_value(c['truth'])
         lines.append(
-            f"- record {c['id']}: predicted={c['predicted']!r}, expected={c['truth']!r} "
+            f"- record {c['id']}: predicted={pred!r}, expected={truth!r} "
             f"({c['explanation']}); excerpt cited: {c['excerpt']!r}"
         )
     return "\n".join(lines) if lines else "(no failure cases in this sample)"
+
+
+def _format_successes(successes: list[dict[str, Any]], max_cases: int) -> str:
+    lines = []
+    for c in successes[:max_cases]:
+        pred = scoring.fold_value(c["predicted"])
+        truth = scoring.fold_value(c["truth"])
+        lines.append(f"- record {c['id']}: correctly produced {pred!r} (expected {truth!r})")
+    return "\n".join(lines) if lines else "(no correct cases in this sample)"
 
 
 def _format_avoid_history(avoid: list[dict[str, Any]]) -> str:
@@ -210,23 +283,34 @@ def propose_revision(
     max_cases: int = 8,
     avoid: list[dict[str, Any]] | None = None,
     max_attempts: int = 3,
+    bold: bool = False,
+    successes: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str | None]:
     """Calls the reflector model and returns (revised_instruction, diagnosis).
     `avoid` is a list of {"instruction", "diagnosis"} dicts for recently
     rejected candidates, so the reflector doesn't propose the same dead end
-    twice.
+    twice. When `bold` is set (after repeated rejections) the reflector is asked
+    for a substantially different rewrite and is shown `successes` (cases the
+    current instruction gets right) so the bolder rewrite doesn't break them.
     """
     cases_text = _format_failures(failures, max_cases)
     avoid_text = _format_avoid_history(avoid or [])
+    keep_text = ""
+    if bold:
+        keep_text = (
+            "\n\nCASES THE CURRENT INSTRUCTION ALREADY GETS RIGHT (your rewrite must keep these correct):\n"
+            + _format_successes(successes or [], max_cases)
+        )
     base_prompt = (
         f"FIELD BEING EXTRACTED: {field_name}\n\n"
         f"CURRENT INSTRUCTION:\n{current_instruction}\n\n"
         f"FAILURE CASES (predicted vs. expected ground truth):\n{cases_text}"
+        f"{keep_text}"
         f"{avoid_text}\n\n"
         "RESPOND IN VALID JSON:\n"
         "{\n"
         '    "diagnosis": "<1-2 sentences on the main failure pattern you see>",\n'
-        '    "revised_instruction": "<the new instruction text, 2-5 sentences>"\n'
+        '    "revised_instruction": "<the new instruction text>"\n'
         "}\n"
     )
     # Reasoning-capable reflectors (e.g. Claude Sonnet) can spend their whole
@@ -235,6 +319,7 @@ def propose_revision(
     # output on retries. Without this a transient empty/non-JSON reply wastes a
     # whole optimizer iteration.
     last_err: Exception | None = None
+    system_prompt = _REFLECTOR_SYSTEM_BOLD if bold else _REFLECTOR_SYSTEM
     for attempt in range(max_attempts):
         user_prompt = base_prompt
         if attempt > 0:
@@ -244,9 +329,9 @@ def propose_revision(
             )
         resp = gateway.call_model(
             reflector_model,
-            _REFLECTOR_SYSTEM,
+            system_prompt,
             user_prompt,
-            temperature=0.7 if attempt == 0 else 0.3,
+            temperature=(0.9 if bold else 0.7) if attempt == 0 else 0.3,
             max_tokens=2000,
         )
         try:
@@ -269,9 +354,12 @@ def optimize_field(
     reflector_model: str,
     project_slug: str = "dep-extraction",
     max_iterations: int = 10,
-    no_improve_limit: int = 3,
+    no_improve_limit: int = 4,
     minibatch_size: int = DEFAULT_MINIBATCH_SIZE,
     val_size: int = DEFAULT_VAL_SIZE,
+    holdout_size: int = DEFAULT_HOLDOUT_SIZE,
+    holdout_models: list[str] | None = None,
+    bold_after: int = DEFAULT_BOLD_AFTER,
     seed: int = 42,
     verbose: bool = True,
     max_workers: int = gateway.DEFAULT_MAX_CONCURRENCY,
@@ -283,8 +371,18 @@ def optimize_field(
     one on the val set is compared against the incumbent). `history_window`
     controls how many of the most-recently-rejected instructions are shown to
     the reflector so it doesn't keep proposing the same dead end.
+
+    A candidate is accepted only if it (a) improves LLM-judged accuracy on the
+    selection `val` set for the optimized model AND (b) does not regress the
+    mean judged accuracy on a separate `holdout` set across `holdout_models`
+    (the optimized model plus a cheap different-family reference) — a
+    cross-model generalization gate that blocks single-model overfits. After
+    `bold_after` consecutive rejections the reflector switches to bold
+    (structural) rewrites.
     """
     batch_id = uuid.uuid4().hex[:8]
+    if holdout_models is None:
+        holdout_models = _default_holdout_models(model_id)
 
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
@@ -304,7 +402,8 @@ def optimize_field(
             field_name=field_name, model_id=model_id, reflector_model=reflector_model,
             project_id=project_id, baseline_pv=baseline_pv, all_records=all_records, batch_id=batch_id,
             max_iterations=max_iterations, no_improve_limit=no_improve_limit,
-            minibatch_size=minibatch_size, val_size=val_size, seed=seed, verbose=verbose,
+            minibatch_size=minibatch_size, val_size=val_size, holdout_size=holdout_size,
+            holdout_models=holdout_models, bold_after=bold_after, seed=seed, verbose=verbose,
             max_workers=max_workers, candidates_per_iteration=candidates_per_iteration,
             history_window=history_window, job_id=job_id,
         )
@@ -315,6 +414,36 @@ def optimize_field(
     with db.get_conn() as conn:
         db.finish_job(conn, job_id, status="completed")
     return result
+
+
+def _holdout_generalization(
+    field_name: str,
+    instruction: str,
+    holdout: list[dict],
+    models: list[str],
+    conn: Any,
+    project_id: int,
+    prompt_version_id: int,
+    batch_id: str,
+    max_workers: int,
+) -> tuple[float, dict[str, float]]:
+    """Run `instruction` on the held-out set with each model in `models`, judge
+    each with its cross-family judge, and return (mean judged accuracy across
+    models, per-model judged accuracy). Runs are logged (they are real, costed
+    extractions) so their carbon/cost show up in the audit trail too.
+    """
+    per_model: dict[str, float] = {}
+    for m in models:
+        outcome = evaluate_instruction(
+            field_name, instruction, holdout, m, conn=conn, project_id=project_id,
+            prompt_version_id=prompt_version_id, batch_id=batch_id, max_workers=max_workers,
+        )
+        judged, _n = judging.judge_accuracy(
+            field_name, outcome.predictions, judging.judge_for(m), max_workers=max_workers
+        )
+        per_model[m] = judged
+    avg = sum(per_model.values()) / len(per_model) if per_model else 0.0
+    return avg, per_model
 
 
 def _run_optimization(
@@ -329,6 +458,9 @@ def _run_optimization(
     no_improve_limit: int,
     minibatch_size: int,
     val_size: int,
+    holdout_size: int,
+    holdout_models: list[str],
+    bold_after: int,
     seed: int,
     verbose: bool,
     max_workers: int,
@@ -336,7 +468,12 @@ def _run_optimization(
     history_window: int,
     job_id: int | None,
 ) -> OptimizeResult:
-    train, val = train_val_split(all_records, val_size=val_size, seed=seed)
+    train, val, holdout = train_val_holdout_split(
+        all_records, val_size=val_size, holdout_size=holdout_size, seed=seed
+    )
+    # The cross-model generalization gate needs a non-trivial holdout; on very
+    # small pools it is disabled and acceptance falls back to the val gate only.
+    gen_gate = len(holdout) >= 4 and len(holdout_models) >= 1
     rnd = random.Random(seed)
 
     best_instruction = baseline_pv["template"]
@@ -352,11 +489,24 @@ def _run_optimization(
         field_name, baseline_outcome.predictions, judge_model, max_workers=max_workers
     )
     best_judged = baseline_judged
+    best_holdout_avg = 0.0
+    if gen_gate:
+        with db.get_conn() as conn:
+            best_holdout_avg, base_per = _holdout_generalization(
+                field_name, best_instruction, holdout, holdout_models, conn=conn,
+                project_id=project_id, prompt_version_id=best_pv_id, batch_id=batch_id,
+                max_workers=max_workers,
+            )
     if verbose:
         print(
             f"[iter 0] baseline judged-accuracy={baseline_judged:.3f} "
             f"(n={baseline_judged_n}, honesty={best_score:.3f}); judge={judge_model}"
         )
+        if gen_gate:
+            per = ", ".join(f"{m.split('/')[-1]}={v:.2f}" for m, v in base_per.items())
+            print(f"          holdout generalization avg={best_holdout_avg:.3f} over [{per}] (n={len(holdout)})")
+        else:
+            print(f"          (cross-model holdout gate disabled: only {len(holdout)} holdout records)")
 
     result = OptimizeResult(field_name=field_name, baseline_score=baseline_judged, best_instruction=best_instruction, best_score=baseline_judged)
     no_improve_count = 0
@@ -378,12 +528,16 @@ def _run_optimization(
                 break
 
             avoid = rejected_history[-history_window:] if history_window > 0 else None
+            bold = no_improve_count >= bold_after
+            if bold and verbose:
+                print(f"[iter {it}] bold mode ON ({no_improve_count} consecutive rejections >= bold_after={bold_after})")
 
             candidates: list[dict[str, Any]] = []
             for k in range(candidates_per_iteration):
                 try:
                     candidate_instruction, diagnosis = propose_revision(
-                        field_name, best_instruction, train_outcome.failures, reflector_model, avoid=avoid
+                        field_name, best_instruction, train_outcome.failures, reflector_model,
+                        avoid=avoid, bold=bold, successes=train_outcome.successes,
                     )
                 except (ParseError, gateway.GatewayError) as exc:
                     if verbose:
@@ -424,7 +578,22 @@ def _run_optimization(
             cand_judged, cand_judged_n = judging.judge_accuracy(
                 field_name, candidate_outcome.predictions, judge_model, max_workers=max_workers
             )
-            accepted = cand_judged > best_judged + IMPROVEMENT_EPSILON
+            passes_val = cand_judged > best_judged + IMPROVEMENT_EPSILON
+            # Cross-model generalization gate: a candidate that beats val must also
+            # not regress the mean judged accuracy on the untouched holdout set
+            # across the optimized model + a different-family reference. This is
+            # what blocks single-model overfits (e.g. the diacritics flip).
+            cand_holdout_avg: float | None = None
+            cand_holdout_per: dict[str, float] = {}
+            if passes_val and gen_gate:
+                cand_holdout_avg, cand_holdout_per = _holdout_generalization(
+                    field_name, candidate_instruction, holdout, holdout_models, conn=conn,
+                    project_id=project_id, prompt_version_id=pv["id"], batch_id=batch_id,
+                    max_workers=max_workers,
+                )
+                accepted = cand_holdout_avg >= best_holdout_avg - IMPROVEMENT_EPSILON
+            else:
+                accepted = passes_val
 
             for c in candidates:
                 is_winner_and_accepted = accepted and c is best_candidate
@@ -446,6 +615,11 @@ def _run_optimization(
                     f"[iter {it}] judged-accuracy={cand_judged:.3f} (best={best_judged:.3f}, "
                     f"honesty={candidate_outcome.mean_score:.3f}) -> {tag}{suffix}"
                 )
+                if cand_holdout_avg is not None:
+                    per = ", ".join(f"{m.split('/')[-1]}={v:.2f}" for m, v in cand_holdout_per.items())
+                    print(f"           holdout avg={cand_holdout_avg:.3f} (best={best_holdout_avg:.3f}) over [{per}]")
+                elif passes_val and not gen_gate:
+                    print("           (val gate passed; holdout gate disabled)")
                 if diagnosis:
                     print(f"           diagnosis: {diagnosis}")
 
@@ -459,6 +633,8 @@ def _run_optimization(
                 best_pv_id = pv["id"]
                 best_score = candidate_outcome.mean_score  # honesty, for ranking the next minibatch
                 best_judged = cand_judged
+                if cand_holdout_avg is not None:
+                    best_holdout_avg = cand_holdout_avg
                 result.best_instruction = candidate_instruction
                 result.best_score = cand_judged
                 no_improve_count = 0

@@ -20,7 +20,7 @@ function pct(x: number) {
 // 95% Wilson score interval for a proportion (accuracy = correct / n). Better
 // behaved than the plain normal (Wald) interval for small n and accuracies
 // near 0 or 1. The interval narrows ~1/√n as the sample grows (central limit
-// theorem) — the whole point of the staged 30 → 60 → 100 rollout.
+// theorem) — the whole point of the staged 100 → 200 → 300 rollout.
 function wilson95(p: number, n: number): { low: number; high: number } | null {
   if (!n || n <= 0) return null;
   const z = 1.96;

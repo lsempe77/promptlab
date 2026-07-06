@@ -277,12 +277,26 @@ a local crash, there's no automatic resume, so just re-run the command if a rest
   earlier 40 references so the metric is meaningful across the whole production dataset.
 - **Staged rollout + per-model quality gate (done, 2026-07-05)**: `/api/projects/{slug}/fields/
   {field}/stage-status` derives, with no manual state, how many references a field has reached
-  (the current stage vs `config.PRODUCTION_ROLLOUT_STAGES` 30→60→100) and evaluates the quality
+  (the current stage vs `config.PRODUCTION_ROLLOUT_STAGES` 100→200→300) and evaluates the quality
   gate **per (field, model)** — each model's own LLM-judged accuracy vs `scoring.GATE_THRESHOLD`
   (0.95) — returning `n_models_passing`/`n_models_judged`. The dashboard shows a field badge
   ("N/M models pass gate") with 95% Wilson CIs that narrow as the sample grows, plus a per-model
   gate chip. The gate is derived at read time from `runs`/`llm_judgments`/`prompt_versions` — no
   schema change.
+- **Data-quality control loop ("Loop B", planned — design agreed 2026-07-06)**: a second
+  autonomous loop alongside the prompt-optimizer supervisor ("Loop A"), for keeping the *reference
+  data* clean. Shape: a scheduled, read-only cloud audit (`scripts/audit_ground_truth.py` +
+  `scripts/propose_gt_fixes.py`, both already built) runs every X, emails the human a diff of
+  proposed ground-truth/taxonomy corrections, and — on a **signed one-click approval** (NOT raw
+  email-reply parsing) scoped to a hash of that exact changeset — applies the approved **data**
+  edits to the DB/`taxonomy.json` with an old→new audit log (reversible). The next
+  screening/extraction round then picks up the corrected data automatically (no redeploy).
+  Hard rule: this loop only ever applies **data** changes (ground truth, taxonomy, eval *policy*
+  toggles). **Code / eval-logic changes always go through a GitHub PR → human review → `fly
+  deploy`**, never an email approval — an agent must not be able to edit its own scoring code or
+  answer key (reward-hacking surface). New infra needed: scheduled job, email provider secret,
+  one authenticated write endpoint (the API is otherwise read-only), apply+log module. Detection
+  is safe to automate anywhere; only *application* is gated.
 
 ## Known issues / follow-ups
 

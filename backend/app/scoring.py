@@ -72,7 +72,22 @@ def _demojibake(s: str) -> str:
 
 
 def _strip_accents(s: str) -> str:
+    # Some letters are distinct code points, not base + combining mark, so NFKD
+    # decomposition can't fold them (e.g. Scandinavian 'ø', Polish 'ł', German
+    # 'ß'). Transliterate those explicitly first, then drop combining marks from
+    # the rest (é -> e, ü -> u, ...).
+    s = "".join(_TRANSLIT.get(c, c) for c in s)
     return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+
+# Letters that survive NFKD accent-stripping because they are separate letters
+# rather than base + combining diacritic. Mapped to their closest ASCII form so
+# a model's plain-ASCII output matches accented/encoded ground truth.
+_TRANSLIT = {
+    "ø": "o", "Ø": "O", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE",
+    "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ð": "d", "Ð": "D",
+    "ß": "ss", "þ": "th", "Þ": "Th", "ı": "i", "İ": "I",
+}
 
 
 def _norm(s: str) -> str:
@@ -85,6 +100,38 @@ def _norm(s: str) -> str:
 
 def _fuzzy_equal(a: str, b: str, threshold: int = FUZZY_MATCH_THRESHOLD) -> bool:
     return fuzz.token_set_ratio(_norm(a), _norm(b)) >= threshold
+
+
+def fold_display(s: str) -> str:
+    """Case-preserving normalization for values *shown to the LLM judge and the
+    optimizer's reflector*: repair mojibake, transliterate/strip accents, and
+    collapse whitespace (including non-breaking spaces). This removes the
+    spurious encoding/accent/spacing differences that the string scorer already
+    ignores (via `_norm`) but that an LLM would otherwise see as real
+    disagreements. Unlike `_norm` it keeps the original case and word order, so
+    the value still reads naturally."""
+    return " ".join(_strip_accents(_demojibake(s)).split())
+
+
+def fold_value(value: Any) -> Any:
+    """Apply `fold_display` to a scalar or list of scalars, leaving other JSON
+    values (None, numbers, bools) untouched. Used to normalize both sides of a
+    comparison before it is handed to an LLM."""
+    if isinstance(value, str):
+        return fold_display(value)
+    if isinstance(value, list):
+        return [fold_value(v) for v in value]
+    return value
+
+
+def split_alternatives(value: str) -> list[str]:
+    """A single-valued ground-truth entry may list several acceptable answers
+    joined by '|' (e.g. a paper the curators tagged with two equally-valid
+    sub-sectors). Predicting ANY ONE of them counts as correct. Non-pipe values
+    return a single-element list."""
+    if "|" in value:
+        return [p.strip() for p in value.split("|") if p.strip()]
+    return [value]
 
 
 def verify_excerpt(excerpt: Any, source_text: str | None) -> bool | None:
@@ -122,9 +169,13 @@ def _score_single_categorical(predicted: Any, truth: Any) -> ScoreResult:
     if not pred:
         return ScoreResult(0.0, 0.0 >= CORRECT_THRESHOLD, "abstained (returned null) but a value existed",
                            outcome=OUTCOME_ABSTAIN_MISS, honesty_score=ABSTENTION_CREDIT)
-    if _norm(pred) == _norm(truth_s):
+    # The ground truth may list several acceptable answers joined by '|'
+    # (curators tagged the paper with >1 equally-valid label); predicting any
+    # one of them is correct.
+    alternatives = split_alternatives(truth_s)
+    if any(_norm(pred) == _norm(a) for a in alternatives):
         return ScoreResult(1.0, 1.0 >= CORRECT_THRESHOLD, "exact match", outcome=OUTCOME_HIT, honesty_score=1.0)
-    if _fuzzy_equal(pred, truth_s):
+    if any(_fuzzy_equal(pred, a) for a in alternatives):
         return ScoreResult(0.9, 0.9 >= CORRECT_THRESHOLD, f"fuzzy match ({pred!r} ~ {truth_s!r})",
                            outcome=OUTCOME_HIT, honesty_score=0.9)
     return ScoreResult(0.0, 0.0 >= CORRECT_THRESHOLD, f"mismatch: predicted {pred!r}, expected {truth_s!r}",

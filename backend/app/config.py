@@ -42,10 +42,10 @@ _load_dotenv(BACKEND_DIR / ".env")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
-# Production rollout: validate at 30 records, then 60, then 100 — never larger
+# Production rollout: validate at 100 records, then 200, then 300 — never larger
 # without a deliberate code change. Scripts clamp to this and warn if exceeded.
-MAX_PRODUCTION_RECORDS = 100
-PRODUCTION_ROLLOUT_STAGES = (30, 60, 100)
+MAX_PRODUCTION_RECORDS = 300
+PRODUCTION_ROLLOUT_STAGES = (100, 200, 300)
 
 
 def load_models() -> list[dict]:

@@ -5,8 +5,8 @@ model (models.yaml) against the current baseline (or a given) prompt version,
 scores each response against ground truth, stores every run in SQLite, and
 prints a per-model comparison table.
 
-Production rollout policy: validate at --n 30 first, then 60, then 100.
---n is hard-capped at config.MAX_PRODUCTION_RECORDS (100) to avoid accidentally
+Production rollout policy: validate at --n 100 first, then 200, then 300.
+--n is hard-capped at config.MAX_PRODUCTION_RECORDS (300) to avoid accidentally
 kicking off a run against the full ~7,600-record ground-truth pool.
 
 Scaling up is incremental by default: a (record, model) pair that already has

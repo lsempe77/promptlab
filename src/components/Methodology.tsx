@@ -10,12 +10,12 @@ const PIPELINE_CHART = `flowchart TD
     JUDGE --> GATE{"Per-model gate:<br/>judged accuracy &ge; 95%?"}
     GATE -- "no (gated)" --> REFLECT["Reflector model:<br/>diagnose failures,<br/>propose revised prompt<br/>(retry up to 3x for valid JSON)"]
     GATE -- "yes" --> STAGE{"Sample size<br/>reached this stage?"}
-    STAGE -- "30 refs -> grow" --> G60["Extract to 60 refs<br/>(95% CI narrows)"]
-    STAGE -- "60 refs -> grow" --> G100["Extract to 100 refs<br/>(95% CI narrows)"]
-    STAGE -- "100 refs (final, capped)" --> DONE(["Production-ready<br/>(field, model) pairs"])
-    G60 --> EX
-    G100 --> EX
-    REFLECT --> RETEST["Re-test candidate on 30 papers<br/>(same set as production) + LLM judge"]
+    STAGE -- "100 refs -> grow" --> G200["Extract to 200 refs<br/>(95% CI narrows)"]
+    STAGE -- "200 refs -> grow" --> G300["Extract to 300 refs<br/>(95% CI narrows)"]
+    STAGE -- "300 refs (final, capped)" --> DONE(["Production-ready<br/>(field, model) pairs"])
+    G200 --> EX
+    G300 --> EX
+    REFLECT --> RETEST["Re-test candidate on 50 papers<br/>(held-out val set) + LLM judge"]
     RETEST --> BETTER{"Higher LLM-judged accuracy?<br/>(&ge; +0.01)"}
     BETTER -- "yes" --> ACCEPT["Accept -> new prompt version"]
     BETTER -- "no" --> REJECT["Reject<br/>(stop after 3 no-improve<br/>or 10 iterations)"]
@@ -43,7 +43,7 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
         </p>
         <MermaidDiagram
           chart={PIPELINE_CHART}
-          caption="Extract → score → judge → gate → reflect/rewrite → re-test → advance. Numbers on the decision diamonds are the live thresholds (gate 95%, optimizer accepts a rewrite only if LLM-judged accuracy on 30 papers improves by ≥ 0.01, stop after 3 non-improving iterations)."
+          caption="Extract → score → judge → gate → reflect/rewrite → re-test → advance. Numbers on the decision diamonds are the live thresholds (gate 95%, optimizer accepts a rewrite only if LLM-judged accuracy on a 50-paper held-out set improves by ≥ 0.01, stop after 3 non-improving iterations)."
         />
       </details>
 
@@ -69,7 +69,7 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
           not the exact truth. The small bar under "threshold accuracy" is the{" "}
           <strong>95% confidence interval</strong> (Wilson score): the range the true accuracy is
           very likely in. This is the <strong>central limit theorem</strong> at work — as the
-          rollout grows the sample (30 → 60 → 100 references), the interval shrinks by roughly{" "}
+          rollout grows the sample (100 → 200 → 300 references), the interval shrinks by roughly{" "}
           <em>1 ÷ √(sample size)</em>, so the estimate gets sharper and more trustworthy. A wide
           band on a model with few references means "not enough data to be sure yet" (the fix is
           more references) rather than necessarily an unreliable model — and you can literally watch
@@ -285,9 +285,9 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
           optimizer stopped improving and reverted to the prior best prompt.
         </dd>
 
-        <dt>Staged rollout &amp; the quality gate — why a field may stay at 30 / 60 / 100</dt>
+        <dt>Staged rollout &amp; the quality gate — why a field may stay at 100 / 200 / 300</dt>
         <dd>
-          References are added in <strong>stages</strong> (30 → 60 → 100). After each stage a field
+          References are added in <strong>stages</strong> (100 → 200 → 300). After each stage a field
           is LLM-judged; if its judged accuracy is too low, the optimizer proposes new prompt
           versions <em>instead of</em> advancing to more references. So a field that "stays at 30"
           is one still being improved — you can see this happening in two places on each model card:

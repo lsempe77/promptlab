@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from . import gateway, parsing
+from . import gateway, parsing, scoring
 from .fields import FIELDS
 
 JUDGE_SYSTEM = (
@@ -38,10 +38,25 @@ def judge_for(model_id: str) -> str:
 
 def judge_prompt(field_name: str, predicted: Any, truth: Any) -> str:
     spec = FIELDS[field_name]
+    # Fold away accents/mojibake/whitespace noise on both sides so the judge
+    # never spends a verdict on a spurious 'López' vs 'Lopez' difference (the
+    # string scorer already ignores these; the judge otherwise would not).
+    predicted = scoring.fold_value(predicted)
+    truth = scoring.fold_value(truth)
+    # A single-valued ground truth may list several acceptable answers joined by
+    # '|'; predicting any one of them is correct, so tell the judge that.
+    if isinstance(truth, str) and "|" in truth:
+        alts = scoring.split_alternatives(truth)
+        truth_line = (
+            "Ground truth value (ANY ONE of these is acceptable): "
+            f"{json.dumps(alts, ensure_ascii=False)}"
+        )
+    else:
+        truth_line = f"Ground truth value: {json.dumps(truth, ensure_ascii=False)}"
     return (
         f"Field: {spec.label} ({spec.description})\n"
         f"Predicted value: {json.dumps(predicted, ensure_ascii=False)}\n"
-        f"Ground truth value: {json.dumps(truth, ensure_ascii=False)}\n\n"
+        f"{truth_line}\n\n"
         "Is the predicted value correct?"
     )
 
