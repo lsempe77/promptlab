@@ -19,6 +19,7 @@ import { ModelCard } from "./components/ModelCard";
 import { ModelFilter } from "./components/ModelFilter";
 import { Methodology } from "./components/Methodology";
 import { About } from "./components/About";
+import { useWalkthrough } from "./components/Walkthrough";
 import "./App.css";
 
 const JOBS_POLL_MS = 6000;
@@ -179,6 +180,7 @@ function App() {
 
   const activeField = fields?.find((f) => f.name === selected) ?? null;
   const runningJobs = jobs.filter((j) => j.status === "running" && !j.stale);
+  const { start: startWalkthrough } = useWalkthrough();
 
   function toggleModel(modelId: string) {
     setSelectedModels((prev) => {
@@ -191,7 +193,7 @@ function App() {
 
   return (
     <div className="dashboard">
-      <header className="dashboard-header">
+      <header id="tour-header" className="dashboard-header">
         <h1>Agentic 3ie Prompt Lab</h1>
         <p className="muted">
           We test different AI models and prompts on evidence-synthesis tasks — like screening
@@ -199,7 +201,7 @@ function App() {
           sectors) out of research papers — to see which combinations work best.
         </p>
         {projects && projects.length > 0 && (
-          <div className="project-switcher">
+          <div id="tour-project-switcher" className="project-switcher">
             <label htmlFor="project-select">Project</label>
             <select
               id="project-select"
@@ -214,12 +216,15 @@ function App() {
             </select>
           </div>
         )}
-        <nav className="tab-nav">
+        <nav id="tour-tab-nav" className="tab-nav">
           <button className={tab === "dashboard" ? "tab-btn active" : "tab-btn"} onClick={() => setTab("dashboard")}>
             Dashboard
           </button>
           <button className={tab === "about" ? "tab-btn active" : "tab-btn"} onClick={() => setTab("about")}>
             How it works
+          </button>
+          <button className="tab-btn tour-btn" onClick={startWalkthrough} title="Start guided walkthrough">
+            Tour
           </button>
         </nav>
       </header>
@@ -237,11 +242,11 @@ function App() {
 
           {!apiError && !fields && <p className="muted">Loading fields…</p>}
 
-          <Methodology thresholds={thresholds} />
+          <div id="tour-methodology"><Methodology thresholds={thresholds} /></div>
 
           {fields && fields.length > 0 && (
             <div className="dashboard-body">
-              <nav className="field-nav">
+              <nav id="tour-field-nav" className="field-nav">
                 {fields.map((f) => (
                   <button
                     key={f.name}
@@ -259,7 +264,7 @@ function App() {
                     <section className="panel">
                       <h2>{activeField.label}</h2>
                       <p className="muted">{activeField.description}</p>
-                      {stageStatus && <StageBadge s={stageStatus} />}
+                      {stageStatus && <div id="tour-stage-badge"><StageBadge s={stageStatus} /></div>}
                       {(() => {
                         // Only offer versions from a real production run (many
                         // models); hide the optimizer's single-model 12-paper
@@ -325,11 +330,13 @@ function App() {
                             {" "}<em>Concordance</em> is an independent cross-family LLM-judge check; <em>Fuzzy-match</em> is a
                             demoted string-match heuristic. Click any column header to sort.
                           </p>
+                          <div id="tour-model-table">
                           <ModelComparisonTable
                             summaries={summaries}
                             stageModels={stageStatus?.models ?? []}
                             valueType={activeField.value_type}
                           />
+                          </div>
                           <AggregateCharts
                             summaries={summaries}
                             stageModels={stageStatus?.models ?? []}
@@ -342,6 +349,7 @@ function App() {
                           <p className="muted">No references processed yet for this field.</p>
                         ) : (
                           <>
+                            <div id="tour-model-filter">
                             <ModelFilter
                               models={summaries.map((s) => s.model_id)}
                               selected={selectedModels}
@@ -349,6 +357,7 @@ function App() {
                               onSelectAll={() => setSelectedModels(new Set(summaries.map((s) => s.model_id)))}
                               onSelectNone={() => setSelectedModels(new Set())}
                             />
+                            </div>
                             {summaries
                               .filter((s) => selectedModels.has(s.model_id))
                               .map((s) => (

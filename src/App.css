@@ -120,6 +120,22 @@ body {
   border-bottom-color: var(--accent);
 }
 
+.tab-btn.tour-btn {
+  margin-left: auto;
+  margin-right: 0;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-bottom: 2px solid transparent;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 0.85rem;
+}
+.tab-btn.tour-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--surface-hover, rgba(0,0,0,0.05));
+}
+
 .about-steps {
   padding-left: 20px;
   display: flex;
