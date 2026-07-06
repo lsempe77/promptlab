@@ -18,16 +18,15 @@ import uuid
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any
 
-from . import db, gateway, judging, prompt_store, prompts, scoring
+from . import analytics, db, gateway, prompt_store, prompts, scoring
 from . import carbon
 from .corpus import read_md
 from .parsing import ParseError, parse_field_response, parse_json_object
 
 DEFAULT_MINIBATCH_SIZE = 8
-DEFAULT_VAL_SIZE = 50  # held-out set for LLM-judged candidate comparison. Kept modest (vs the
-                       # 100+ production stages) because every candidate is re-judged on the
-                       # whole val set each iteration, so cost/CO2e scales linearly with it;
-                       # 50 halves the noise of 30 at half the cost of 100 (seed 42 => stable set)
+DEFAULT_VAL_SIZE = 50  # held-out set for candidate comparison on the gate metric. Kept modest (vs
+                       # the 100+ production stages) because every candidate is re-scored on the
+                       # whole val set each iteration; 50 halves the noise of 30 (seed 42 => stable set)
 IMPROVEMENT_EPSILON = 0.01  # candidate must beat incumbent by at least this much
 
 DEFAULT_HOLDOUT_SIZE = 30  # records held out ENTIRELY from candidate selection; used only for the
@@ -47,6 +46,16 @@ def _default_holdout_models(model_id: str) -> list[str]:
     if ref.split("/")[-1].lower() in model_id.lower():
         ref = _HOLDOUT_REFERENCE_ALT
     return [model_id, ref]
+
+
+def _gate_score(field_name: str, predictions: list[tuple[Any, Any]]) -> tuple[float, int]:
+    """The production gate metric (F1 for list fields, accuracy for categorical)
+    computed over (predicted, truth) pairs -- the SAME metric the dashboard and
+    supervisor gate on, so "what the optimizer chases" == "what the gate checks".
+    """
+    rows = [{"predicted": p, "truth": t} for p, t in predictions]
+    gm = analytics.gate_metrics(field_name, rows)
+    return gm["metric"], gm["n"]
 
 
 @dataclass
@@ -427,10 +436,11 @@ def _holdout_generalization(
     batch_id: str,
     max_workers: int,
 ) -> tuple[float, dict[str, float]]:
-    """Run `instruction` on the held-out set with each model in `models`, judge
-    each with its cross-family judge, and return (mean judged accuracy across
-    models, per-model judged accuracy). Runs are logged (they are real, costed
-    extractions) so their carbon/cost show up in the audit trail too.
+    """Run `instruction` on the held-out set with each model in `models`, score
+    each against the ground truth with the production gate metric (F1 for list
+    fields, accuracy for categorical), and return (mean across models, per-model
+    metric). Runs are logged (they are real, costed extractions) so their
+    carbon/cost show up in the audit trail too.
     """
     per_model: dict[str, float] = {}
     for m in models:
@@ -438,10 +448,8 @@ def _holdout_generalization(
             field_name, instruction, holdout, m, conn=conn, project_id=project_id,
             prompt_version_id=prompt_version_id, batch_id=batch_id, max_workers=max_workers,
         )
-        judged, _n = judging.judge_accuracy(
-            field_name, outcome.predictions, judging.judge_for(m), max_workers=max_workers
-        )
-        per_model[m] = judged
+        metric, _n = _gate_score(field_name, outcome.predictions)
+        per_model[m] = metric
     avg = sum(per_model.values()) / len(per_model) if per_model else 0.0
     return avg, per_model
 
@@ -484,11 +492,7 @@ def _run_optimization(
             prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
         )
     best_score = baseline_outcome.mean_score  # honesty score, used only to rank candidates cheaply
-    judge_model = judging.judge_for(model_id)
-    baseline_judged, baseline_judged_n = judging.judge_accuracy(
-        field_name, baseline_outcome.predictions, judge_model, max_workers=max_workers
-    )
-    best_judged = baseline_judged
+    best_gate, best_gate_n = _gate_score(field_name, baseline_outcome.predictions)
     best_holdout_avg = 0.0
     if gen_gate:
         with db.get_conn() as conn:
@@ -499,8 +503,8 @@ def _run_optimization(
             )
     if verbose:
         print(
-            f"[iter 0] baseline judged-accuracy={baseline_judged:.3f} "
-            f"(n={baseline_judged_n}, honesty={best_score:.3f}); judge={judge_model}"
+            f"[iter 0] baseline gate-metric={best_gate:.3f} "
+            f"(n={best_gate_n}, honesty={best_score:.3f})"
         )
         if gen_gate:
             per = ", ".join(f"{m.split('/')[-1]}={v:.2f}" for m, v in base_per.items())
@@ -508,7 +512,7 @@ def _run_optimization(
         else:
             print(f"          (cross-model holdout gate disabled: only {len(holdout)} holdout records)")
 
-    result = OptimizeResult(field_name=field_name, baseline_score=baseline_judged, best_instruction=best_instruction, best_score=baseline_judged)
+    result = OptimizeResult(field_name=field_name, baseline_score=best_gate, best_instruction=best_instruction, best_score=best_gate)
     no_improve_count = 0
     rejected_history: list[dict[str, Any]] = []  # {"instruction", "diagnosis"}, most recent last
 
@@ -572,17 +576,15 @@ def _run_optimization(
             diagnosis = best_candidate["diagnosis"]
             pv = best_candidate["pv"]
             candidate_outcome = best_candidate["outcome"]
-            # Accept on LLM-judged accuracy -- the same metric the production gate
-            # uses -- not the cheap string-match honesty score (that only ranks
-            # candidates within an iteration). Judge just the winning candidate.
-            cand_judged, cand_judged_n = judging.judge_accuracy(
-                field_name, candidate_outcome.predictions, judge_model, max_workers=max_workers
-            )
-            passes_val = cand_judged > best_judged + IMPROVEMENT_EPSILON
+            # Accept on the production gate metric (F1 for lists / accuracy for
+            # categorical) -- the SAME metric the dashboard/supervisor gate on --
+            # computed on the winning candidate's val predictions.
+            cand_gate, cand_gate_n = _gate_score(field_name, candidate_outcome.predictions)
+            passes_val = cand_gate > best_gate + IMPROVEMENT_EPSILON
             # Cross-model generalization gate: a candidate that beats val must also
-            # not regress the mean judged accuracy on the untouched holdout set
-            # across the optimized model + a different-family reference. This is
-            # what blocks single-model overfits (e.g. the diacritics flip).
+            # not regress the mean gate metric on the untouched holdout set across
+            # the optimized model + a different-family reference. This is what
+            # blocks single-model overfits (e.g. the diacritics flip).
             cand_holdout_avg: float | None = None
             cand_holdout_per: dict[str, float] = {}
             if passes_val and gen_gate:
@@ -603,7 +605,7 @@ def _run_optimization(
 
             db.add_iteration(
                 conn, project_id=project_id, field_name=field_name, iteration_num=it, prompt_version_id=pv["id"],
-                model_id=model_id, mean_score=cand_judged, n_records=cand_judged_n,
+                model_id=model_id, mean_score=cand_gate, n_records=cand_gate_n,
                 feedback=diagnosis, accepted=int(accepted),
             )
 
@@ -612,7 +614,7 @@ def _run_optimization(
                 n_tried = len(candidates)
                 suffix = f" (best of {n_tried})" if n_tried > 1 else ""
                 print(
-                    f"[iter {it}] judged-accuracy={cand_judged:.3f} (best={best_judged:.3f}, "
+                    f"[iter {it}] gate-metric={cand_gate:.3f} (best={best_gate:.3f}, "
                     f"honesty={candidate_outcome.mean_score:.3f}) -> {tag}{suffix}"
                 )
                 if cand_holdout_avg is not None:
@@ -625,18 +627,18 @@ def _run_optimization(
 
             result.iterations.append(IterationLog(
                 iteration_num=it, candidate_instruction=candidate_instruction, diagnosis=diagnosis,
-                val_score=cand_judged, accepted=accepted, prompt_version_id=pv["id"],
+                val_score=cand_gate, accepted=accepted, prompt_version_id=pv["id"],
             ))
 
             if accepted:
                 best_instruction = candidate_instruction
                 best_pv_id = pv["id"]
                 best_score = candidate_outcome.mean_score  # honesty, for ranking the next minibatch
-                best_judged = cand_judged
+                best_gate = cand_gate
                 if cand_holdout_avg is not None:
                     best_holdout_avg = cand_holdout_avg
                 result.best_instruction = candidate_instruction
-                result.best_score = cand_judged
+                result.best_score = cand_gate
                 no_improve_count = 0
             else:
                 no_improve_count += 1

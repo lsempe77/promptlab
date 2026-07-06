@@ -67,8 +67,8 @@ def main() -> None:
 
     print("\n=== Optimization summary ===")
     print(f"Field: {result.field_name} | model: {args.model} | reflector: {args.reflector_model}")
-    print(f"Baseline judged accuracy (val): {result.baseline_score:.3f}")
-    print(f"Best judged accuracy (val):     {result.best_score:.3f}")
+    print(f"Baseline gate metric (val): {result.baseline_score:.3f}")
+    print(f"Best gate metric (val):     {result.best_score:.3f}")
     print(f"Iterations run:     {len(result.iterations)}")
     print(f"\nBest instruction:\n{result.best_instruction}")
 

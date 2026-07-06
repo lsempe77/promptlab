@@ -134,16 +134,16 @@ flowchart LR
   everything else by `~anthropic/claude-opus-latest`, so a model is never self-critiqued by a
   same-family model; one failing pair doesn't stop the sweep). Prompts are **per-model** (each
   model optimizes its own lineage, falling back to a shared v1 baseline until it diverges). A
-  rewrite is **accepted only if it (a) raises LLM-judged accuracy** (`app/judging.py`) on a fixed
-  **50-record held-out val set** **and (b) does not regress** the mean judged accuracy on a
-  separate **held-out set across the optimized model + a cheap different-family reference** — a
-  **cross-model generalization gate** that blocks single-model overfits. After `bold_after` (2)
-  consecutive rejections it switches to **bold** mode (structural rewrites, shown the cases the
-  prompt already gets right); it stops after `no_improve_limit` (4) non-improving iterations. The
-  cheap honesty-adjusted score only *ranks* candidates within an iteration. (Note: the
-  **production gate** the dashboard + supervisor use is field-type-aware — **F1** for list fields,
-  **accuracy** for categorical, ≥ `GATE_THRESHOLD` 0.90 — computed from runs via
-  `app/analytics.gate_metrics`; LLM-judged accuracy is kept as a corroborating companion.)
+  rewrite is **accepted only if it (a) raises the gate metric** — F1 (list fields) / accuracy
+  (categorical), the **same** `app/analytics.gate_metrics` the production gate uses — on a fixed
+  **50-record held-out val set** **and (b) does not regress** that metric on a separate **held-out
+  set across the optimized model + a cheap different-family reference** (a **cross-model
+  generalization gate** that blocks single-model overfits). After `bold_after` (2) consecutive
+  rejections it switches to **bold** mode (structural rewrites, shown the cases the prompt already
+  gets right); it stops after `no_improve_limit` (4) non-improving iterations. The cheap
+  honesty-adjusted score only *ranks* candidates within an iteration, and LLM-judged accuracy is
+  kept as a reported corroborating companion — so "what the optimizer chases" == "what the gate
+  checks" (both are F1/accuracy ≥ `GATE_THRESHOLD` 0.90).
 - **Autonomous supervisor** (`scripts/supervisor.py`): the always-on orchestrator ("Loop A"). Each
   cycle it reads per-(field, model) state and picks one action — extract the next rollout stage,
   judge unjudged runs, optimize a below-gate model on its own prompt lineage, or advance — shelling

@@ -28,10 +28,11 @@ distribution, and the precision/recall trade-off — so the choice is informed b
 error-cost preference (is a *wrong* value worse than a *missing* one?). Store thresholds per
 `(project, field)`; treat a change as an eval-policy decision (human-gated, see Loop B).
 
-**Planned — align the optimizer's acceptance metric with the gate:** the optimizer currently
-accepts a prompt rewrite on **LLM-judged accuracy** (val + cross-model holdout), while the *gate*
-now uses F1/accuracy. These are correlated but not identical; consider making the optimizer accept
-on the same field-type-aware gate metric so "what the optimizer chases" == "what the gate checks".
+**Done (2026-07-06) — optimizer acceptance aligned with the gate:** the optimizer now accepts a
+rewrite on the **same field-type-aware gate metric** (`analytics.gate_metrics` — F1 for lists,
+accuracy for categorical) on both the val set and the cross-model holdout, so "what the optimizer
+chases" == "what the gate checks." We aligned to the deterministic/reproducible/cheap metric rather
+than gating on the LLM judge; judged accuracy is kept only as a reported companion.
 
 ## Data-quality control loop ("Loop B")
 
