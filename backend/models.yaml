@@ -24,18 +24,33 @@ free:
   - google/gemma-4-26b-a4b-it:free
   - poolside/laguna-xs-2.1:free
 
+# Balanced roster: ~2 models per lab (a small + a bigger sibling), so each lab is
+# tested at two capability points. Tiers reflect REAL cost (prompt $/1M checked
+# against the live OpenRouter catalog on 2026-07-06), NOT marketing labels.
+# claude-opus dropped as dominated (same ~73% accuracy as the cheap models at
+# ~70x the cost). Grok excluded (no cheap tier). Open-weight small models
+# (Qwen/Llama/Mistral/GLM/DeepSeek) are 10-100x cheaper per token than the
+# premium APIs, so breadth here barely moves the budget.
 cheap:
   - "~openai/gpt-mini-latest"
   - "~anthropic/claude-haiku-latest"
+  - "~google/gemini-flash-latest"
   - deepseek/deepseek-v4-flash
+  - qwen/qwen3-30b-a3b-instruct-2507
+  - meta-llama/llama-4-scout
+  - mistralai/mistral-small-3.2-24b-instruct
+  - z-ai/glm-4.7-flash
+  - moonshotai/kimi-k2.5
 
 mid:
-  - "~openai/gpt-latest"
-  - "~google/gemini-flash-latest"
   - "~anthropic/claude-sonnet-latest"
+  - deepseek/deepseek-v4-pro
+  - qwen/qwen3-235b-a22b-2507
+  - meta-llama/llama-4-maverick
   - mistralai/mistral-medium-3-5
+  - z-ai/glm-5.2
+  - "~moonshotai/kimi-latest"
 
 expensive:
+  - "~openai/gpt-latest"
   - "~google/gemini-pro-latest"
-  - "~anthropic/claude-opus-latest"
-  - z-ai/glm-5.2
