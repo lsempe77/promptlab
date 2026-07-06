@@ -14,6 +14,7 @@ import {
   type Thresholds,
 } from "./api";
 import { ModelComparisonTable } from "./components/ModelComparisonTable";
+import { AggregateCharts } from "./components/AggregateCharts";
 import { ModelCard } from "./components/ModelCard";
 import { ModelFilter } from "./components/ModelFilter";
 import { Methodology } from "./components/Methodology";
@@ -314,18 +315,27 @@ function App() {
                       <>
                         <section className="panel panel-aggregate">
                           <h3>All models — summary</h3>
-                          {thresholds && (
-                            <p className="muted panel-caption">
-                              Accuracy here = share of references scoring ≥ {thresholds.correct_threshold.toFixed(2)}
-                              (fuzzy matches count as correct). Each model card below also shows a
-                              stricter exact-match accuracy and an LLM-judged accuracy — see "How to
-                              read this dashboard" above for what each one means and why they can
-                              differ. Every model is optimized and evaluated against its own prompt
-                              history — see the per-model cards below for each model's own iteration
-                              progress, prompt lineage, and confusion matrix.
-                            </p>
-                          )}
-                          <ModelComparisonTable summaries={summaries} />
+                          <p className="muted panel-caption">
+                            Sorted by <strong>Quality</strong> — the production gate metric for this{" "}
+                            {activeField.value_type === "single_categorical" ? "categorical" : "list"} field
+                            {activeField.value_type === "single_categorical"
+                              ? " (accuracy, with Cohen's κ)"
+                              : " (element-level F1, with precision & recall)"}.
+                            {" "}Green passes the {stageStatus ? Math.round(stageStatus.gate_threshold * 100) : 90}% gate, red is below it.
+                            {" "}<em>Concordance</em> is an independent cross-family LLM-judge check; <em>Fuzzy-match</em> is a
+                            demoted string-match heuristic. Click any column header to sort.
+                          </p>
+                          <ModelComparisonTable
+                            summaries={summaries}
+                            stageModels={stageStatus?.models ?? []}
+                            valueType={activeField.value_type}
+                          />
+                          <AggregateCharts
+                            summaries={summaries}
+                            stageModels={stageStatus?.models ?? []}
+                            valueType={activeField.value_type}
+                            gateThreshold={stageStatus?.gate_threshold ?? null}
+                          />
                         </section>
 
                         {summaries.length === 0 ? (

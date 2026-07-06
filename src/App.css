@@ -216,6 +216,37 @@ body {
   color: #8a6200;
 }
 
+/* Quality (gate) cell colouring in the comparison table. */
+.model-table .gate-ok {
+  color: #1f6b41;
+  font-weight: 700;
+}
+
+.model-table .gate-bad {
+  color: #8a6200;
+  font-weight: 700;
+}
+
+/* Aggregate comparison charts (leaderboard + cost/quality scatter). */
+.aggregate-charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-top: 18px;
+}
+
+@media (max-width: 900px) {
+  .aggregate-charts {
+    grid-template-columns: 1fr;
+  }
+}
+
+.agg-chart-title {
+  margin: 0 0 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
 /* Reliability diagram scales to fill the card width (viewBox keeps aspect). */
 .reliability {
   width: 100%;
