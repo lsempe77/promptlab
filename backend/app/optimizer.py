@@ -19,6 +19,7 @@ from dataclasses import dataclass, field as dataclass_field
 from typing import Any
 
 from . import db, gateway, judging, prompt_store, prompts, scoring
+from . import carbon
 from .corpus import read_md
 from .parsing import ParseError, parse_field_response, parse_json_object
 
@@ -157,7 +158,9 @@ def evaluate_instruction(
                        outcome=result.outcome, honesty_score=result.honesty_score,
                        score=result.score, is_correct=int(result.is_correct), latency_ms=resp.latency_ms,
                        prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
-                       cost_usd=resp.cost_usd, error=None)
+                       cost_usd=resp.cost_usd,
+                       co2e_grams=carbon.estimate_co2e_grams(model_id, resp.completion_tokens, resp.latency_ms),
+                       error=None)
 
     mean_score = sum(scores) / len(scores) if scores else 0.0
     return EvalOutcome(mean_score=mean_score, n=len(scores), failures=failures, predictions=predictions)

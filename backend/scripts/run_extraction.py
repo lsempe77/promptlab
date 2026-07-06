@@ -40,6 +40,7 @@ except Exception:
     pass
 
 from backend.app import config, db, gateway, prompts, scoring  # noqa: E402
+from backend.app import carbon  # noqa: E402
 from backend.app.corpus import read_md  # noqa: E402
 from backend.app.parsing import ParseError, parse_field_response  # noqa: E402
 from backend.app.prompt_store import get_or_create_baseline  # noqa: E402
@@ -227,7 +228,9 @@ def main() -> None:
                                        logprob_confidence=resp.logprob_confidence,
                                        score=result.score, is_correct=int(result.is_correct), latency_ms=resp.latency_ms,
                                        prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
-                                       cost_usd=resp.cost_usd, error=None)
+                                       cost_usd=resp.cost_usd,
+                                       co2e_grams=carbon.estimate_co2e_grams(model_id, resp.completion_tokens, resp.latency_ms),
+                                       error=None)
                             results[model_id].append(result.score)
 
                 job_id = job_ids.get(model_id)

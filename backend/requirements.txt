@@ -5,3 +5,4 @@ pyyaml
 rapidfuzz
 fastapi
 uvicorn[standard]
+ecologits

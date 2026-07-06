@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS runs (
     prompt_tokens INTEGER,
     completion_tokens INTEGER,
     cost_usd REAL,
+    co2e_grams REAL,
     error TEXT,
     batch_id TEXT,
     created_at TEXT NOT NULL,
@@ -183,7 +184,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
     for col, coltype in (("excerpt", "TEXT"), ("notes", "TEXT"), ("outcome", "TEXT"),
                          ("honesty_score", "REAL"), ("logprob_confidence", "REAL"),
-                         ("excerpt_verified", "INTEGER"), ("confidence", "REAL")):
+                         ("excerpt_verified", "INTEGER"), ("confidence", "REAL"),
+                         ("co2e_grams", "REAL")):
         if col not in existing:
             conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {coltype}")
 

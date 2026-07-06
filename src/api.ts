@@ -41,6 +41,7 @@ export interface ModelSummary {
   wrong_rate: number;
   excerpt_verified_rate: number | null;
   prompt_version: number | null;
+  total_co2e_grams: number | null;
 }
 
 export interface LlmJudgeSummary {

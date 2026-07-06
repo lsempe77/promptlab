@@ -16,7 +16,13 @@ function ms(x: number | null) {
   return `${Math.round(x)} ms`;
 }
 
-type SortKey = "model_id" | "n" | "prompt_version" | "accuracy" | "n_errors" | "mean_latency_ms" | "total_cost_usd";
+function co2(x: number | null) {
+  if (x == null) return "—";
+  if (x < 1) return `${(x * 1000).toFixed(0)} mg`;
+  return `${x.toFixed(1)} g`;
+}
+
+type SortKey = "model_id" | "n" | "prompt_version" | "accuracy" | "n_errors" | "mean_latency_ms" | "total_cost_usd" | "total_co2e_grams";
 
 const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "model_id", label: "Model" },
@@ -26,6 +32,7 @@ const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "n_errors", label: "Errors" },
   { key: "mean_latency_ms", label: "Mean latency" },
   { key: "total_cost_usd", label: "Total cost" },
+  { key: "total_co2e_grams", label: "CO₂e" },
 ];
 
 export function ModelComparisonTable({ summaries }: { summaries: ModelSummary[] }) {
@@ -82,6 +89,7 @@ export function ModelComparisonTable({ summaries }: { summaries: ModelSummary[] 
             <td className={s.n_errors > 0 ? "has-errors" : ""}>{s.n_errors}</td>
             <td>{ms(s.mean_latency_ms)}</td>
             <td>{usd(s.total_cost_usd)}</td>
+            <td>{co2(s.total_co2e_grams)}</td>
           </tr>
         ))}
       </tbody>

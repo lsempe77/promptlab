@@ -155,6 +155,7 @@ def models_summary(project_slug: str, field_name: str, prompt_version: int | Non
                 SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) AS n_errors,
                 AVG(latency_ms) AS mean_latency_ms,
                 SUM(cost_usd) AS total_cost_usd,
+                SUM(co2e_grams) AS total_co2e_grams,
                 MAX(pv.version) AS prompt_version
             FROM runs
             LEFT JOIN prompt_versions pv ON pv.id = runs.prompt_version_id
