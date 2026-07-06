@@ -10,7 +10,6 @@ import {
   type ProjectInfo,
   type SelfConsistency,
   type StageStatus,
-  type RunVersion,
   type Thresholds,
 } from "./api";
 import { ModelComparisonTable } from "./components/ModelComparisonTable";
@@ -70,8 +69,6 @@ function App() {
   const [selfConsistency, setSelfConsistency] = useState<SelfConsistency[]>([]);
   const [calibration, setCalibration] = useState<Calibration[]>([]);
   const [stageStatus, setStageStatus] = useState<StageStatus | null>(null);
-  const [runVersionList, setRunVersionList] = useState<RunVersion[]>([]);
-  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [loadingField, setLoadingField] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -103,39 +100,16 @@ function App() {
       .catch((e) => setApiError(String(e)));
   }, [selectedProject]);
 
-  // On project/field change: reset the version selector, load the versions that
-  // have runs (default to the latest = the current "best"), and fetch the
-  // version-independent data (self-consistency study + rollout/gate status).
+  // On project/field change: fetch version-independent data (self-consistency + gate status)
+  // and version-dependent metrics — always using the backend default (best/latest version).
   useEffect(() => {
     if (!selectedProject || !selected) return;
-    setSelectedVersion(null);
-    api
-      .runVersions(selectedProject, selected)
-      .then((vs) => {
-        setRunVersionList(vs);
-        // Default to the version with the most runs (the real production
-        // dataset) rather than the highest version number, which may be a thin
-        // optimizer-trial version with only a handful of validation runs.
-        const best = vs.reduce<RunVersion | null>((a, b) => (a && a.n_runs >= b.n_runs ? a : b), null);
-        setSelectedVersion(best ? best.version : null);
-      })
-      .catch(() => {
-        setRunVersionList([]);
-        setSelectedVersion(null);
-      });
     api.selfConsistency(selectedProject, selected).then(setSelfConsistency).catch(() => setSelfConsistency([]));
     api.stageStatus(selectedProject, selected).then(setStageStatus).catch(() => setStageStatus(null));
-  }, [selectedProject, selected]);
-
-  // On project/field/version change: fetch the version-dependent metrics for the
-  // selected prompt version (undefined => backend defaults to the latest/best).
-  useEffect(() => {
-    if (!selectedProject || !selected) return;
-    const v = selectedVersion ?? undefined;
     setLoadingField(true);
     prevRunningCount.current = 0;
     api
-      .modelsSummary(selectedProject, selected, v)
+      .modelsSummary(selectedProject, selected)
       .then((s) => {
         setSummaries(s);
         setSelectedModels(new Set(s.map((m) => m.model_id)));
@@ -143,10 +117,10 @@ function App() {
       })
       .catch((e) => setApiError(String(e)))
       .finally(() => setLoadingField(false));
-    api.llmJudgeSummary(selectedProject, selected, v).then(setLlmJudge).catch(() => setLlmJudge([]));
-    api.crossModelAgreement(selectedProject, selected, v).then(setCrossAgreement).catch(() => setCrossAgreement([]));
-    api.calibration(selectedProject, selected, v).then(setCalibration).catch(() => setCalibration([]));
-  }, [selectedProject, selected, selectedVersion]);
+    api.llmJudgeSummary(selectedProject, selected).then(setLlmJudge).catch(() => setLlmJudge([]));
+    api.crossModelAgreement(selectedProject, selected).then(setCrossAgreement).catch(() => setCrossAgreement([]));
+    api.calibration(selectedProject, selected).then(setCalibration).catch(() => setCalibration([]));
+  }, [selectedProject, selected]);
 
   // Poll for running extraction/optimization jobs so the dashboard can show a
   // "currently running" indicator even though the backend has no push/websocket
@@ -346,7 +320,6 @@ function App() {
                                   selfConsistency={selfConsistency.find((c) => c.model_id === s.model_id) ?? null}
                                   calibration={calibration.find((c) => c.model_id === s.model_id) ?? null}
                                   gateThreshold={stageStatus?.gate_threshold ?? null}
-                                  promptVersion={selectedVersion ?? undefined}
                                 />
                               ))}
                           </>
