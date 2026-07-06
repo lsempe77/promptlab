@@ -1,0 +1,115 @@
+import type { ModelSummary } from "../api";
+
+interface VersionData {
+  version: number;
+  accepted: number;
+  summaries: ModelSummary[];
+}
+
+interface Props {
+  versionData: VersionData[];
+  gateThreshold: number | null;
+}
+
+function pct(x: number | null) {
+  if (x == null) return "—";
+  return `${(x * 100).toFixed(1)}%`;
+}
+
+function cellClass(score: number | null, threshold: number): string {
+  if (score == null) return "vprog-cell-na";
+  if (score >= threshold) return "vprog-cell-pass";
+  if (score >= threshold * 0.78) return "vprog-cell-close";
+  return "vprog-cell-fail";
+}
+
+export function VersionProgressionTable({ versionData, gateThreshold }: Props) {
+  if (versionData.length < 2) return null;
+
+  const threshold = gateThreshold ?? 0.9;
+  const versions = versionData.map((v) => v.version); // already sorted ascending
+
+  // Collect all model IDs
+  const modelSet = new Set<string>();
+  for (const vd of versionData) {
+    for (const s of vd.summaries) modelSet.add(s.model_id);
+  }
+
+  // Build a lookup: version → modelId → score
+  const lookup = new Map<number, Map<string, number>>();
+  for (const vd of versionData) {
+    const m = new Map<string, number>();
+    for (const s of vd.summaries) {
+      if (s.mean_score != null) m.set(s.model_id, s.mean_score);
+    }
+    lookup.set(vd.version, m);
+  }
+
+  const getScore = (modelId: string, version: number): number | null =>
+    lookup.get(version)?.get(modelId) ?? null;
+
+  // Sort models by latest-version score descending (fallback to first version)
+  const latestV = versions[versions.length - 1];
+  const firstV = versions[0];
+  const models = [...modelSet].sort((a, b) => {
+    const sa = getScore(a, latestV) ?? getScore(a, firstV) ?? 0;
+    const sb = getScore(b, latestV) ?? getScore(b, firstV) ?? 0;
+    return sb - sa;
+  });
+
+  return (
+    <section className="panel panel-vprog">
+      <h3>Quality across prompt versions</h3>
+      <p className="muted panel-caption">
+        Mean fuzzy-match quality score per model for each production prompt version.
+        Green ≥ {Math.round(threshold * 100)}% gate · ★ = accepted version.
+        Last column (Δ) = change from v{firstV} → v{latestV}.
+      </p>
+      <div className="table-scroll">
+        <table className="comparison-table vprog-table">
+          <thead>
+            <tr>
+              <th className="col-model">Model</th>
+              {versionData.map((vd) => (
+                <th key={vd.version} className="col-version">
+                  v{vd.version}
+                  {vd.accepted ? <span className="vprog-star" title="accepted version"> ★</span> : null}
+                </th>
+              ))}
+              <th className="col-delta">Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {models.map((modelId) => {
+              const first = getScore(modelId, firstV);
+              const last = getScore(modelId, latestV);
+              const delta = first != null && last != null ? last - first : null;
+              return (
+                <tr key={modelId}>
+                  <td className="model-id">{modelId}</td>
+                  {versions.map((v) => {
+                    const score = getScore(modelId, v);
+                    return (
+                      <td key={v} className={`numeric ${cellClass(score, threshold)}`}>
+                        {pct(score)}
+                      </td>
+                    );
+                  })}
+                  <td
+                    className={`numeric vprog-delta ${
+                      delta == null ? "" : delta > 0.005 ? "vprog-delta-up" : delta < -0.005 ? "vprog-delta-down" : ""
+                    }`}
+                  >
+                    {delta != null
+                      ? `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(1)}%`
+                      : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}

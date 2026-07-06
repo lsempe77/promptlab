@@ -243,6 +243,66 @@ body {
   font-weight: 700;
 }
 
+/* ── Version Progression Table ──────────────────────────────── */
+.panel-vprog { overflow-x: auto; }
+
+.vprog-table {
+  font-size: 0.82rem;
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.vprog-table th,
+.vprog-table td {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.vprog-table th {
+  background: var(--bg-elevated-2);
+  font-weight: 600;
+  text-align: center;
+}
+
+.vprog-table th.col-model { text-align: left; }
+
+.vprog-table td.model-id {
+  font-size: 0.78rem;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vprog-table .vprog-star { color: var(--accent); }
+
+/* cell backgrounds */
+.vprog-table .vprog-cell-pass {
+  background: var(--good-soft);
+  color: #1f6b41;
+  font-weight: 700;
+  text-align: right;
+}
+.vprog-table .vprog-cell-close {
+  background: #fef9ec;
+  color: #7a5200;
+  text-align: right;
+}
+.vprog-table .vprog-cell-fail {
+  background: var(--bad-soft);
+  color: #8b2020;
+  text-align: right;
+}
+.vprog-table .vprog-cell-na {
+  color: var(--text-muted);
+  text-align: right;
+}
+
+/* delta column */
+.vprog-table .vprog-delta { font-weight: 600; text-align: right; }
+.vprog-table .vprog-delta-up { color: var(--good); }
+.vprog-table .vprog-delta-down { color: var(--bad); }
+
 /* Aggregate comparison charts (leaderboard + cost/quality scatter). */
 .aggregate-charts {
   display: grid;

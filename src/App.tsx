@@ -8,6 +8,7 @@ import {
   type LlmJudgeSummary,
   type ModelSummary,
   type ProjectInfo,
+  type RunVersion,
   type SelfConsistency,
   type StageStatus,
   type Thresholds,
@@ -18,6 +19,7 @@ import { ModelCard } from "./components/ModelCard";
 import { ModelFilter } from "./components/ModelFilter";
 import { Methodology } from "./components/Methodology";
 import { About } from "./components/About";
+import { VersionProgressionTable } from "./components/VersionProgressionTable";
 import { useWalkthrough } from "./components/Walkthrough";
 import "./App.css";
 
@@ -69,6 +71,7 @@ function App() {
   const [selfConsistency, setSelfConsistency] = useState<SelfConsistency[]>([]);
   const [calibration, setCalibration] = useState<Calibration[]>([]);
   const [stageStatus, setStageStatus] = useState<StageStatus | null>(null);
+  const [versionData, setVersionData] = useState<{version: number; accepted: number; summaries: ModelSummary[]}[]>([]);
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [loadingField, setLoadingField] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -102,10 +105,25 @@ function App() {
 
   // On project/field change: fetch version-independent data (self-consistency + gate status)
   // and version-dependent metrics — always using the backend default (best/latest version).
+  // Also fetch all production prompt versions in parallel for the progression table.
   useEffect(() => {
     if (!selectedProject || !selected) return;
     api.selfConsistency(selectedProject, selected).then(setSelfConsistency).catch(() => setSelfConsistency([]));
     api.stageStatus(selectedProject, selected).then(setStageStatus).catch(() => setStageStatus(null));
+    // Multi-version progression: fetch run-version list then summaries for each.
+    api.runVersions(selectedProject, selected)
+      .then((vs: RunVersion[]) => {
+        const prod = vs.filter((v) => v.n_models >= 2).sort((a, b) => a.version - b.version);
+        return Promise.all(
+          prod.map((v) =>
+            api.modelsSummary(selectedProject, selected, v.version)
+              .then((summaries) => ({ version: v.version, accepted: v.accepted, summaries }))
+              .catch(() => ({ version: v.version, accepted: v.accepted, summaries: [] as ModelSummary[] }))
+          )
+        );
+      })
+      .then(setVersionData)
+      .catch(() => setVersionData([]));
     setLoadingField(true);
     prevRunningCount.current = 0;
     api
@@ -266,6 +284,10 @@ function App() {
                       <p className="muted">Loading…</p>
                     ) : (
                       <>
+                        <VersionProgressionTable
+                          versionData={versionData}
+                          gateThreshold={stageStatus?.gate_threshold ?? null}
+                        />
                         <section className="panel panel-aggregate">
                           <h3>All models — summary</h3>
                           <p className="muted panel-caption">
