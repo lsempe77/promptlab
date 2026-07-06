@@ -265,32 +265,6 @@ function App() {
                       <h2>{activeField.label}</h2>
                       <p className="muted">{activeField.description}</p>
                       {stageStatus && <div id="tour-stage-badge"><StageBadge s={stageStatus} /></div>}
-                      {(() => {
-                        // Only offer versions from a real production run (many
-                        // models); hide the optimizer's single-model 12-paper
-                        // trial versions that would otherwise clutter this.
-                        const prod = runVersionList.filter((v) => v.n_models >= 2);
-                        if (prod.length === 0) return null;
-                        const bestV = prod.reduce((a, b) => (b.n_runs > a.n_runs ? b : a)).version;
-                        return (
-                          <div className="version-select">
-                            <label>
-                              Prompt version:{" "}
-                              <select
-                                value={selectedVersion ?? ""}
-                                onChange={(e) => setSelectedVersion(Number(e.target.value))}
-                              >
-                                {prod.map((v) => (
-                                  <option key={v.version} value={v.version}>
-                                    v{v.version}{v.version === bestV ? " (current)" : ""} · {v.n_runs} runs
-                                  </option>
-                                ))}
-                              </select>
-                            </label>{" "}
-                            <span className="muted">metrics &amp; plots below reflect this version</span>
-                          </div>
-                        );
-                      })()}
                     </section>
 
                     {runningJobs.length > 0 && (
