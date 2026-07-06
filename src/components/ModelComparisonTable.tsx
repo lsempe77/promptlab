@@ -86,7 +86,6 @@ export function ModelComparisonTable({
   const cols: Col[] = [
     { key: "model_id", label: "Model", numeric: false, get: (r) => r.model_id, render: (r) => <span className="model-id">{r.model_id}</span> },
     { key: "n", label: "# Refs", numeric: true, get: (r) => r.n, render: (r) => r.n },
-    { key: "prompt_version", label: "Prompt v.", numeric: true, get: (r) => r.prompt_version, render: (r) => (r.prompt_version != null ? `v${r.prompt_version}` : "—") },
     {
       key: "gate_metric",
       label: qualityLabel,
