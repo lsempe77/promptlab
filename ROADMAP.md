@@ -51,20 +51,54 @@ A second autonomous loop alongside the prompt-optimizer supervisor ("Loop A"), f
 - Known GT issues already surfaced by the audit: `sector_name` taxonomy is comma-stripped vs the
   comma-using ground truth (fix the *taxonomy*, not the GT); a few `sub_sector` records list two
   values with ` | ` (now accepted as "either is correct" in scoring); author name-order variants.
+- **Automated human-review queue (extension):** rather than only *surfacing* cases in the dashboard,
+  route items that need a person into a queue — the model **abstained** or was **low-confidence**,
+  the **judge disagreed**, or **all models agree but disagree with the ground truth** (a strong
+  "answer key is wrong" signal). This closes the feedback loop so ground truth **improves over time**
+  instead of staying fixed.
 
-## Pending deploys (committed, not yet in production)
+## Recently shipped (2026-07-06)
 
-- **Carbon footprint tracking** (EcoLogits per-run gCO₂e) — committed, safe to deploy (runs no
-  models); backfill fills history from stored tokens.
-- **Per-model prompts** + **18-model roster** — committed; deploying starts a (carbon-costed)
-  18-model benchmark, so weigh the footprint first.
+- **Deployed to production (Fly.io) + fresh start:** carbon tracking (EcoLogits per-run gCO₂e),
+  per-model prompts, and the 18-model roster are live; the DB was wiped to a clean slate (reference
+  data kept, backup archived) and the autonomous supervisor is rebuilding v1 baselines across 18
+  models × 5 fields under the new F1/accuracy gate. The frontend metric-clarity overhaul
+  (Quality-led comparison table, leaderboard + cost/quality plots, slim glossary) is committed on
+  `feature/eval-hardening`, pending merge to `main` (GitHub Pages).
 
 ## Future
 
-- **Prompt caching** (record-major execution) — benchmark savings before refactoring
-  `run_extraction.py` (see README).
+- **Confidence-based model triage / cascade** — cut cost/carbon by not sending everything to the
+  priciest model. Two tiers: (a) *simple* — pick the **cheapest gate-passing model per field** (the
+  cost-vs-quality frontier already identifies it); (b) *cascade* — a cheap first pass, **escalate to
+  a reasoning model (or a human) only when confidence is low or the judge disagrees**. The needed
+  signals already exist (logprob confidence, self-consistency, cross-model agreement, verbalized
+  confidence + calibration).
+- **Shared base-prompt library + per-project overlays** — DEP-learned prompts are **only partly
+  portable** to HSF/GE/SM (fields, taxonomy, and document types differ; prompts overfit even across
+  models within DEP, which is why the cross-model holdout gate exists). Rather than each workspace
+  rediscovering from scratch, factor prompts into a **shared base** (general extraction discipline:
+  excerpt-first, null convention, injection guard, "don't guess") **+ project/field overlays** (the
+  taxonomy, field definition, examples), and optimize mainly the overlay. `prompts.build_prompt`
+  already does this at the field level within one project; extend it across projects.
+- **Validation study (evidence for the human-on-the-loop value)** — to *show* the tool reduces
+  effort without loss of quality: agreement vs. independent human dual-extraction, workload-saved
+  (WSS), and a downstream-impact analysis (do extraction errors change synthesis conclusions?).
+- **Prompt caching** (record-major execution) — **raised priority** given the cost/carbon focus and
+  the fresh 18-model run: the `<paper>` block is the stable prefix, but extraction runs *field-major*
+  so the cache goes cold; benefiting needs a *record-major* rewrite. Benchmark the savings before
+  refactoring `run_extraction.py` (see README).
 - **Screening project** — a second project (title/abstract include/exclude). Screening is a binary
   classification task where **recall/sensitivity** is the dominant metric (missing an includable
   study is the costly error), reported with specificity + workload-saved (WSS); gate on high recall,
   not accuracy. Requires generalizing `prompts`/`scoring`/`taxonomy` beyond the single `fields.FIELDS`
   dict.
+
+## Open questions (strategy — for leadership, not eng tasks)
+
+- **Publish the method vs. keep it for BD / cost advantage.** The techniques (GEPA-lite
+  optimization, LLM-as-judge, holdout gates, honesty scoring) are largely public in the literature,
+  so the algorithmic moat is thin; the durable assets are the **curated ground truth, the domain
+  taxonomy, and the operational pipeline**. Publishing the *method* costs little competitively and
+  builds credibility/adoption (aligns with 3ie's open-evidence mission) while the *data +
+  operations* stay proprietary. Decision owner: leadership.

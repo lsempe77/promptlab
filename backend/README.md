@@ -192,6 +192,53 @@ flowchart LR
   GitHub Pages origin. Polls `/api/fields/{f}/jobs` every 6s while a field is selected to drive
   the running-job banner/badges.
 
+## When is a field "done"? (stopping criteria)
+
+The pipeline has explicit, no-manual-state stopping rules — "good enough" and "run long enough" are
+both defined:
+
+- **Good enough (per field, model):** the pair clears the **gate** — F1 (list fields) / accuracy
+  (categorical) **≥ 0.90** — with a **tight 95% Wilson CI** (a wide band means "not enough references
+  yet", not necessarily a bad model).
+- **Run long enough (per field):** the staged rollout is **capped at 300 references**
+  (`MAX_PRODUCTION_RECORDS`, stages 100→200→300); the optimizer **stops after 4 consecutive
+  non-improving iterations** (or 10 total); and the supervisor reports **"converged"** once every
+  (field, model) either passes the gate or is optimizer-exhausted, after which it idles and spends
+  nothing.
+- **Caveat:** "good enough" is bounded by **ground-truth quality** — the human reference standard is
+  itself error-prone (benchmark bias; ~60%+ of human extractions contain ≥1 error in the
+  literature), and **0.90 is a policy choice**, not a law (per-field, evidence-supported thresholds
+  are on the roadmap). A field stuck below the gate is often a signal to fix the *data*, not the
+  prompt.
+
+## Human oversight (human-on-the-loop)
+
+This system **reduces** human effort by automating the extract → score → judge → optimize loop; it
+does **not remove the human**. Human judgement stays load-bearing at these points — the machine does
+the repetitive work in between and *surfaces* the cases that need a person:
+
+1. **The model is unsure → abstains.** Honesty scoring rewards an honest "I don't know" over a
+   confident wrong guess (abstention credit 0.5) and tags it `abstain_miss` — a value existed, the
+   model punted, a human fills it in.
+2. **A field can't clear the gate ("stuck").** The optimizer exhausts its attempts and the pair is
+   left *gated* → "needs prompt / ground-truth work."
+3. **Ground-truth correction (Loop B).** Humans approve the GT/taxonomy fixes the audit proposes;
+   the strongest trigger is **all models agree but disagree with the ground truth** → the answer key
+   is probably wrong.
+4. **Fabricated-evidence flag.** A cited excerpt not found in the source is flagged even when the
+   answer looks right.
+5. **Confidence red flags.** Low self-consistency, cross-model disagreement, or poor calibration.
+6. **Policy / thresholds.** Humans set the gate, rollout size, abstention credit, per-field metric —
+   the agent can't move its own bar.
+7. **Code / eval-logic changes.** Always PR → human review → deploy; the agent can never edit its own
+   scoring or answer key.
+8. **Final sign-off** of the production dataset, and **new-project onboarding** (defining fields,
+   taxonomy, and the initial ground truth).
+
+Today the dashboard **surfaces** these cases; routing them into an explicit human-review *queue* is
+on the roadmap. So the honest claim is **human-*on*-the-loop** — humans own the rules, the answer
+key, and adjudicate uncertainty/disagreement — not "no human needed."
+
 ## Data model (SQLite)
 
 `projects(id, slug, name, description, created_at)` ·

@@ -129,6 +129,24 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
           </p>
         )}
       </details>
+
+      <details className="method-group">
+        <summary>When a field is "done" &amp; where humans decide</summary>
+        <p className="muted">
+          <strong>Good enough:</strong> a (field, model) clears the gate (F1/accuracy ≥ 90%) with a
+          tight 95% CI. <strong>Long enough:</strong> the rollout is capped at 300 references, the
+          optimizer stops after 4 non-improving iterations, and a field is "converged" once every
+          model passes the gate or the optimizer is exhausted. A field stuck below the gate is often
+          a signal to fix the <em>ground truth</em>, not the prompt.
+        </p>
+        <p className="muted">
+          This automates the loop but keeps <strong>humans on the loop</strong>: the model's own
+          uncertainty (an honest abstention) is the first tripwire that pulls a person in — plus
+          stuck fields, ground-truth corrections, fabricated-excerpt flags, and all
+          policy/threshold and code changes. Humans own the rules and the answer key; the machine
+          does the repetitive work and surfaces what needs a decision.
+        </p>
+      </details>
     </details>
   );
 }
