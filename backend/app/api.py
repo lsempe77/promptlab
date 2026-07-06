@@ -141,7 +141,7 @@ def models_summary(project_slug: str, field_name: str, prompt_version: int | Non
         rows = conn.execute(
             """
             SELECT
-                model_id,
+                runs.model_id AS model_id,
                 COUNT(*) AS n,
                 AVG(score) AS mean_score,
                 AVG(honesty_score) AS mean_honesty_score,
@@ -160,7 +160,7 @@ def models_summary(project_slug: str, field_name: str, prompt_version: int | Non
             FROM runs
             LEFT JOIN prompt_versions pv ON pv.id = runs.prompt_version_id
             WHERE runs.project_id = ? AND runs.field_name = ? AND runs.prompt_version_id = ?
-            GROUP BY model_id
+            GROUP BY runs.model_id
             ORDER BY mean_score DESC
             """,
             (project_id, field_name, pvid),
