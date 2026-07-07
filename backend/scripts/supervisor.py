@@ -244,19 +244,13 @@ def main() -> None:
                     _run(["backend.scripts.llm_judge", "--project", args.project, "--field", field,
                           "--n", "100000", "--cross-family"])
                 elif action == "optimize":
-                    # per-model prompts: optimize each below-gate model on its own lineage
-                    if args.parallelism > 1:
-                        cmds = [
-                            ["backend.scripts.optimize_prompt", "--project", args.project,
-                             "--field", field, "--model", m,
-                             "--reflector-model", args.reflector_model]
-                            for m in opt_models
-                        ]
-                        _run_parallel(cmds, max_workers=args.parallelism)
-                    else:
-                        for m in opt_models:
-                            _run(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
-                                  "--model", m, "--reflector-model", args.reflector_model])
+                    # Optimization ALWAYS runs sequentially: the optimizer holds a DB write
+                    # transaction open for the entire loop (many minutes), so parallelising
+                    # it causes SQLITE_LOCKED on all but the first process. Extraction is
+                    # the bottleneck that benefits from --parallelism; optimization is not.
+                    for m in opt_models:
+                        _run(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
+                              "--model", m, "--reflector-model", args.reflector_model])
 
             if not any_action:
                 _log("Converged: no field has an actionable step this run.")
