@@ -191,6 +191,11 @@ export function ModelCard({
     <section className="panel model-card">
       <div className="model-card-header">
         <h4>{summary.model_id}</h4>
+        {summary.prompt_version != null && (
+          <span className="model-version-badge" title="Prompt version shown in this card">
+            prompt v{summary.prompt_version}
+          </span>
+        )}
         {runningJobs.map((j) => (
           <span key={j.id} className="badge badge-running">
             <span className="job-spinner" aria-hidden="true" />

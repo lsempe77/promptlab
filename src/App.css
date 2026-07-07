@@ -737,6 +737,17 @@ table.glossary .glossary-dir {
   }
 }
 
+.model-version-badge {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg-elevated-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px 8px;
+  align-self: center;
+}
+
 .badge-running {
   display: inline-flex;
   align-items: center;
