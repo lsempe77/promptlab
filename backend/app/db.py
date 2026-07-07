@@ -166,14 +166,14 @@ def now() -> str:
 @contextmanager
 def get_conn(db_path: Path = DB_PATH) -> Iterator[sqlite3.Connection]:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    # timeout=30: Python-native busy-wait — more reliable than PRAGMA for
+    # multi-process concurrent writers (--parallelism > 1).
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    # WAL mode allows concurrent readers while a writer holds the lock, and
-    # serialises multiple concurrent writers without immediate SQLITE_BUSY.
+    # WAL mode: concurrent readers + serialised writers, no reader blocking.
     conn.execute("PRAGMA journal_mode=WAL")
-    # Wait up to 30 s before raising OperationalError: database is locked.
-    # Critical for --parallelism > 1 (multiple optimizer subprocesses).
+    # Belt-and-suspenders: also set at the SQLite C-library level.
     conn.execute("PRAGMA busy_timeout=30000")
     try:
         yield conn

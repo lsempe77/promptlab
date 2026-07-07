@@ -47,8 +47,10 @@ def _log(msg: str) -> None:
     print(f"[{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S}Z] {msg}", flush=True)
 
 
-def _run(args: list[str]) -> int:
+def _run(args: list[str], stagger_s: float = 0.0) -> int:
     """Run one of the pipeline scripts as a subprocess, streaming its output."""
+    if stagger_s:
+        time.sleep(stagger_s)
     cmd = [sys.executable, "-m", *args]
     _log(f"$ {' '.join(args)}")
     proc = subprocess.run(cmd, cwd=str(ROOT))
@@ -57,12 +59,13 @@ def _run(args: list[str]) -> int:
 
 def _run_parallel(cmds: list[list[str]], max_workers: int) -> list[int]:
     """Run multiple pipeline-script commands concurrently (one subprocess each).
+    Workers are staggered by 2 s to avoid simultaneous DB write collisions at startup.
     Each command is a list of module+args as passed to _run. Returns exit codes."""
     if len(cmds) == 1:
         return [_run(cmds[0])]
     _log(f"Launching {len(cmds)} tasks in parallel (max_workers={max_workers})")
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_run, cmd): cmd for cmd in cmds}
+        futures = {pool.submit(_run, cmd, stagger_s=i * 2.0): cmd for i, cmd in enumerate(cmds)}
         results = []
         for f in as_completed(futures):
             results.append(f.result())
