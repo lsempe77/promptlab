@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from backend.app import gateway, optimizer  # noqa: E402
 from backend.app.optimizer import optimize_field  # noqa: E402
 from backend.app.prompts import BASELINE_INSTRUCTIONS  # noqa: E402
+from backend.app import optimizer as _opt  # noqa: E402
 
 
 def main() -> None:
@@ -38,6 +39,8 @@ def main() -> None:
                      help="comma-separated models for the cross-model generalization check (default: the optimized model + a cheap different-family reference)")
     ap.add_argument("--bold-after", type=int, default=optimizer.DEFAULT_BOLD_AFTER,
                      help="after this many consecutive rejections, ask the reflector for a bold/structural rewrite instead of a small edit")
+    ap.add_argument("--improvement-epsilon", type=float, default=None,
+                     help="minimum gate-metric improvement to accept a candidate (default: per-field from FIELD_IMPROVEMENT_EPSILON, e.g. 0.03 for list fields, 0.01 otherwise)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--concurrency", type=int, default=gateway.DEFAULT_MAX_CONCURRENCY,
                      help="max concurrent API calls per evaluation batch")
@@ -59,6 +62,7 @@ def main() -> None:
         holdout_size=args.holdout_size,
         holdout_models=[m.strip() for m in args.holdout_models.split(",") if m.strip()] if args.holdout_models else None,
         bold_after=args.bold_after,
+        improvement_epsilon=args.improvement_epsilon,
         seed=args.seed,
         max_workers=args.concurrency,
         candidates_per_iteration=args.candidates_per_iter,

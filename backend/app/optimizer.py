@@ -27,7 +27,17 @@ DEFAULT_MINIBATCH_SIZE = 8
 DEFAULT_VAL_SIZE = 50  # held-out set for candidate comparison on the gate metric. Kept modest (vs
                        # the 100+ production stages) because every candidate is re-scored on the
                        # whole val set each iteration; 50 halves the noise of 30 (seed 42 => stable set)
-IMPROVEMENT_EPSILON = 0.01  # candidate must beat incumbent by at least this much
+DEFAULT_IMPROVEMENT_EPSILON = 0.01  # candidate must beat incumbent by at least this much
+IMPROVEMENT_EPSILON = DEFAULT_IMPROVEMENT_EPSILON  # backwards-compat alias
+
+# Per-field minimum improvement thresholds.  List fields (authors,
+# author_affiliation) have high F1 variance on ~35 val records (100 GT records
+# limits the split), so a small epsilon causes false-positive acceptances.
+# Categorical fields (sector_name, sub_sector) can stay at the default.
+FIELD_IMPROVEMENT_EPSILON: dict[str, float] = {
+    "authors": 0.03,
+    "author_affiliation": 0.03,
+}
 
 DEFAULT_HOLDOUT_SIZE = 30  # records held out ENTIRELY from candidate selection; used only for the
                            # cross-model generalization check, never to pick which candidate wins.
@@ -357,6 +367,13 @@ def propose_revision(
     # whole optimizer iteration.
     last_err: Exception | None = None
     system_prompt = _REFLECTOR_SYSTEM_BOLD if bold else _REFLECTOR_SYSTEM
+    # Thinking models (e.g. ~anthropic/claude-sonnet-latest) return content=null
+    # when response_format=json_object is combined with extended thinking — all
+    # output lands in an internal thinking block the gateway can't see.  Disabling
+    # json_mode lets the model output prose + JSON freely; _extract_json_object
+    # already finds the {...} via regex fallback.  Bold mode also gets a larger
+    # token budget so thinking tokens don't crowd out the actual JSON reply.
+    reflector_max_tokens = 4000 if bold else 2000
     for attempt in range(max_attempts):
         user_prompt = base_prompt
         if attempt > 0:
@@ -369,7 +386,8 @@ def propose_revision(
             system_prompt,
             user_prompt,
             temperature=(0.9 if bold else 0.7) if attempt == 0 else 0.3,
-            max_tokens=2000,
+            max_tokens=reflector_max_tokens,
+            json_mode=False,
         )
         try:
             obj = parse_json_object(resp.content)
@@ -397,6 +415,7 @@ def optimize_field(
     holdout_size: int = DEFAULT_HOLDOUT_SIZE,
     holdout_models: list[str] | None = None,
     bold_after: int = DEFAULT_BOLD_AFTER,
+    improvement_epsilon: float | None = None,
     seed: int = 42,
     verbose: bool = True,
     max_workers: int = gateway.DEFAULT_MAX_CONCURRENCY,
@@ -418,6 +437,8 @@ def optimize_field(
     (structural) rewrites.
     """
     batch_id = uuid.uuid4().hex[:8]
+    if improvement_epsilon is None:
+        improvement_epsilon = FIELD_IMPROVEMENT_EPSILON.get(field_name, DEFAULT_IMPROVEMENT_EPSILON)
     if holdout_models is None:
         holdout_models = _default_holdout_models(model_id)
 
@@ -440,8 +461,9 @@ def optimize_field(
             project_id=project_id, baseline_pv=baseline_pv, all_records=all_records, batch_id=batch_id,
             max_iterations=max_iterations, no_improve_limit=no_improve_limit,
             minibatch_size=minibatch_size, val_size=val_size, holdout_size=holdout_size,
-            holdout_models=holdout_models, bold_after=bold_after, seed=seed, verbose=verbose,
-            max_workers=max_workers, candidates_per_iteration=candidates_per_iteration,
+            holdout_models=holdout_models, bold_after=bold_after, improvement_epsilon=improvement_epsilon,
+            seed=seed, verbose=verbose, max_workers=max_workers,
+            candidates_per_iteration=candidates_per_iteration,
             history_window=history_window, job_id=job_id,
         )
     except Exception as exc:
@@ -497,6 +519,7 @@ def _run_optimization(
     holdout_size: int,
     holdout_models: list[str],
     bold_after: int,
+    improvement_epsilon: float,
     seed: int,
     verbose: bool,
     max_workers: int,
@@ -610,7 +633,7 @@ def _run_optimization(
             # categorical) -- the SAME metric the dashboard/supervisor gate on --
             # computed on the winning candidate's val predictions.
             cand_gate, cand_gate_n = _gate_score(field_name, candidate_outcome.predictions)
-            passes_val = cand_gate > best_gate + IMPROVEMENT_EPSILON
+            passes_val = cand_gate > best_gate + improvement_epsilon
             # Cross-model generalization gate: a candidate that beats val must also
             # not regress the mean gate metric on the untouched holdout set across
             # the optimized model + a different-family reference. This is what
@@ -623,7 +646,7 @@ def _run_optimization(
                     project_id=project_id, prompt_version_id=pv["id"], batch_id=batch_id,
                     max_workers=max_workers,
                 )
-                accepted = cand_holdout_avg >= best_holdout_avg - IMPROVEMENT_EPSILON
+                accepted = cand_holdout_avg >= best_holdout_avg - improvement_epsilon
             else:
                 accepted = passes_val
 

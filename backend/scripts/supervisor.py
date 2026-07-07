@@ -40,6 +40,7 @@ except Exception:
     pass
 
 from backend.app import analytics, config, db, prompt_store, scoring  # noqa: E402
+from backend.app.optimizer import FIELD_IMPROVEMENT_EPSILON, DEFAULT_IMPROVEMENT_EPSILON  # noqa: E402
 from backend.app.prompts import BASELINE_INSTRUCTIONS  # noqa: E402
 
 
@@ -248,9 +249,11 @@ def main() -> None:
                     # transaction open for the entire loop (many minutes), so parallelising
                     # it causes SQLITE_LOCKED on all but the first process. Extraction is
                     # the bottleneck that benefits from --parallelism; optimization is not.
+                    eps = FIELD_IMPROVEMENT_EPSILON.get(field, DEFAULT_IMPROVEMENT_EPSILON)
                     for m in opt_models:
                         _run(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
-                              "--model", m, "--reflector-model", args.reflector_model])
+                              "--model", m, "--reflector-model", args.reflector_model,
+                              "--improvement-epsilon", str(eps)])
 
             if not any_action:
                 _log("Converged: no field has an actionable step this run.")
