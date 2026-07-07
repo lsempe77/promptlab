@@ -71,7 +71,36 @@ FIELDS: dict[str, FieldSpec] = {
         label="Sector",
         value_type="single_categorical",
         taxonomy_key="sectors",
-        description="The single World Bank sector that best matches the paper's subject.",
+        description=(
+            "Select the single World Bank sector that is the PRIMARY focus of the paper. "
+            "Papers often touch multiple sectors; pick the one that is most central to the intervention evaluated.\n\n"
+            "Sector definitions:\n"
+            "- Agriculture fishing and forestry: Primary food/raw-material production — crop cultivation, livestock, "
+            "irrigation, fisheries, forestry. NOT agri-business or trade.\n"
+            "- Education: Learning systems — early childhood, primary, secondary, tertiary, vocational training, adult literacy.\n"
+            "- Energy and extractives: Power generation, oil/gas extraction, mining, energy transmission and distribution.\n"
+            "- Financial sector: Banking, insurance, capital markets, microfinance, financial inclusion for the unbanked.\n"
+            "- Health: Medical care, disease prevention/treatment, nutrition programmes, maternal/child health, "
+            "health system capacity — any intervention delivered through clinics, hospitals or health workers.\n"
+            "- Social protection: Cash transfers (conditional or unconditional), food vouchers, pensions, social "
+            "insurance, safety nets, labour market programmes. Distinguishable from Health because the core "
+            "intervention is a monetary transfer or entitlement, not medical care.\n"
+            "- Industry trade and services: Manufacturing, trade policy, agri-business/commercialisation, tourism, "
+            "housing construction, retail and hospitality services.\n"
+            "- Information and communications technologies: Internet infrastructure, mobile networks, digital services.\n"
+            "- Public administration: Governance reform, institutional capacity, law and justice, decentralisation — "
+            "ONLY when government management or governance itself is the primary subject, NOT when the paper "
+            "evaluates a programme that happens to be administered by government.\n"
+            "- Transportation: Roads, railways, aviation, ports, urban transit.\n"
+            "- Water sanitation and waste management: Water supply, sanitation facilities, sewerage, solid-waste management.\n\n"
+            "Key disambiguation rules:\n"
+            "1. Health vs Social protection: A deworming campaign → Health. A conditional cash transfer requiring "
+            "health check-ups → Social protection. A vitamin supplementation programme → Health.\n"
+            "2. Public administration vs any sector: A paper about reforming the health ministry → Health "
+            "(not Public administration). A paper about fiscal decentralisation itself → Public administration.\n"
+            "3. Agriculture vs Industry/trade: Growing maize → Agriculture. Selling/marketing maize or "
+            "agri-business → Industry trade and services."
+        ),
     ),
     "sub_sector": FieldSpec(
         name="sub_sector",
@@ -79,10 +108,43 @@ FIELDS: dict[str, FieldSpec] = {
         value_type="single_categorical",
         taxonomy_key="sub_sectors_flat",
         description=(
-            "The single World Bank sub-sector that best matches the paper's subject, chosen ONLY from the "
-            "allowed list. First decide the paper's main sector, then pick the sub-sector that falls under "
-            "that sector; if several could apply, choose the most specific one the paper's intervention is "
-            "actually about. Use an 'Other - ...' option only when no specific sub-sector fits."
+            "Select the most specific World Bank sub-sector using a two-step approach:\n\n"
+            "STEP 1 — Identify the main sector from the 11 options: Agriculture fishing and forestry | "
+            "Education | Energy and extractives | Financial sector | Health | Social protection | "
+            "Industry trade and services | Information and communications technologies | "
+            "Public administration | Transportation | Water sanitation and waste management\n\n"
+            "STEP 2 — Pick the sub-sector ONLY from within that sector:\n"
+            "Agriculture fishing and forestry → Crops | Livestock | Irrigation and drainage | "
+            "Agricultural extension, research and other support activities | Forestry | Fisheries | "
+            "Public admin - Agriculture, fishing and forestry | Other - Agriculture, fishing and forestry\n"
+            "Education → Early childhood education | Primary education | Secondary education | "
+            "Tertiary education | Workforce development and vocational education | "
+            "Adult basic and continuing education | Public admin - Education | Other - Education\n"
+            "Energy and extractives → Mining | Oil and gas | Renewable energy - Hydro | "
+            "Renewable energy - Solar | Renewable energy - Wind | Renewable energy - Biomass | "
+            "Renewable energy - Geothermal | Non-renewable energy generation | "
+            "Energy transmission and distribution | Public admin - Energy and extractives | "
+            "Other - Energy and extractives\n"
+            "Financial sector → Banking institutions | Insurance and pension | Capital markets | "
+            "Financial Inclusion | Other non-bank financial institutions | Public admin - Financial sector\n"
+            "Health → Health | Health facilities and construction | Public admin - Health\n"
+            "Social protection → Social protection | Public admin - Social protection\n"
+            "Industry trade and services → Agricultural markets, commercialization and agri-business | "
+            "Housing contruction | Trade | Services | Manufacturing | Tourism | "
+            "Public admin - Industry, trade and services | Other - Industry, trade and services\n"
+            "Information and communications technologies → ICT infrastructure | ICT services | "
+            "Public admin - Information and communications technologies | "
+            "Other - Information and communications technologies\n"
+            "Public administration → Law and justice | Central government or agencies | "
+            "Sub-national government | Other - Public administration\n"
+            "Transportation → Rural and inter-urban roads | Railways | Aviation | Ports/waterways | "
+            "Urban transportation | Public admin - Transportation | Other - Transportation\n"
+            "Water sanitation and waste management → Sanitation | Waste management | Water supply | "
+            "Public admin - Water, sanitation and waste management | "
+            "Other - Water, sanitation and waste management\n\n"
+            "Rules: Use 'Other - [Sector]' only when no specific sub-sector fits. "
+            "Use 'Public admin - [Sector]' only when the paper is about managing the sector's "
+            "administration, not evaluating service delivery."
         ),
     ),
 }
