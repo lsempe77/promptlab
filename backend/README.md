@@ -150,6 +150,23 @@ flowchart LR
   out to the tested `run_extraction` / `llm_judge` / `optimize_prompt` scripts. Deployed as a
   `--loop` daemon on Fly so the pipeline runs without a laptop; self-terminating via the guardrails
   (`MAX_PRODUCTION_RECORDS`, `PRODUCTION_ROLLOUT_STAGES`, `no_improve_limit`).
+
+  **Concurrency / parallelism rules (critical — do not violate):**
+  - `--parallelism N` controls how many **extraction** subprocesses run concurrently. Each
+    `run_extraction --models <single-model>` call makes short, model-isolated writes (one row per
+    result) that commit immediately, so N concurrent writers are safe with WAL mode + `timeout=30`.
+  - **Optimization is always sequential**, regardless of `--parallelism`. The reason:
+    `_run_optimization` in `optimizer.py` opens a single `get_conn()` block that wraps the entire
+    multi-iteration loop (up to 10 iterations × LLM API calls). This holds a SQLite write
+    transaction open for **10–60 minutes**, starving every other writer with `SQLITE_LOCKED`. The
+    parallelism benefit for optimization is marginal anyway — the bottleneck is LLM API latency,
+    not process scheduling, and each model's optimization is already internally concurrent via
+    `gateway.call_model_batch`.
+  - **Judging is a single call** (not split per model) and runs sequentially. It is already
+    internally concurrent (`--concurrency` controls parallelism within the call).
+  - DB concurrency settings: `sqlite3.connect(timeout=30)` + `PRAGMA journal_mode=WAL` +
+    `PRAGMA busy_timeout=30000`. WAL allows concurrent reads with one writer; `timeout=30` makes
+    Python wait up to 30 s before raising `OperationalError: database is locked`.
 - **Ground-truth audit** (`scripts/audit_ground_truth.py`, `scripts/propose_gt_fixes.py`):
   read-only diagnostics (no model calls, no DB writes) that flag reference-data issues (encoding,
   name-order, values outside the taxonomy, duplicates, rare categories) and propose canonical
