@@ -27,6 +27,7 @@ import json
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -52,6 +53,20 @@ def _run(args: list[str]) -> int:
     _log(f"$ {' '.join(args)}")
     proc = subprocess.run(cmd, cwd=str(ROOT))
     return proc.returncode
+
+
+def _run_parallel(cmds: list[list[str]], max_workers: int) -> list[int]:
+    """Run multiple pipeline-script commands concurrently (one subprocess each).
+    Each command is a list of module+args as passed to _run. Returns exit codes."""
+    if len(cmds) == 1:
+        return [_run(cmds[0])]
+    _log(f"Launching {len(cmds)} tasks in parallel (max_workers={max_workers})")
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_run, cmd): cmd for cmd in cmds}
+        results = []
+        for f in as_completed(futures):
+            results.append(f.result())
+    return results
 
 
 def _target_models(tiers: list[str] | None) -> list[str]:
@@ -167,6 +182,10 @@ def main() -> None:
     ap.add_argument("--interval", type=int, default=10800, help="seconds to sleep between runs when --loop (default 3h)")
     ap.add_argument("--max-runs", type=int, default=0, help="stop the daemon after this many runs (0 = unlimited)")
     ap.add_argument("--dry-run", action="store_true", help="print the decision plan without running anything")
+    ap.add_argument("--parallelism", type=int, default=1,
+                    help="max concurrent model-level tasks (extract / optimize). "
+                         "Each task is a subprocess. Default 1 = sequential (safe for any machine size). "
+                         "Set to 4-8 on a 2+ CPU Fly machine for N× throughput.")
     args = ap.parse_args()
 
     fields = [f.strip() for f in args.fields.split(",")] if args.fields else list(BASELINE_INSTRUCTIONS.keys())
@@ -177,7 +196,7 @@ def main() -> None:
 
     _log(f"Supervisor start | project={args.project} | fields={fields} | models={len(models)} "
          f"| stages={config.PRODUCTION_ROLLOUT_STAGES} | gate={scoring.GATE_THRESHOLD:.0%} "
-         f"| max_cycles={args.max_cycles}"
+         f"| max_cycles={args.max_cycles} | parallelism={args.parallelism}"
          f"{' | LOOP every %ds' % args.interval if args.loop else ''}"
          f"{' | DRY RUN' if args.dry_run else ''}")
 
@@ -207,16 +226,34 @@ def main() -> None:
                     continue
 
                 if action == "extract":
-                    _run(["backend.scripts.run_extraction", "--project", args.project, "--field", field,
-                          "--n", str(arg), "--tiers", args.tiers, "--logprobs"])
+                    if args.parallelism > 1:
+                        # Split into one subprocess per model so they run concurrently.
+                        cmds = [
+                            ["backend.scripts.run_extraction", "--project", args.project,
+                             "--field", field, "--n", str(arg), "--models", m, "--logprobs"]
+                            for m in models
+                        ]
+                        _run_parallel(cmds, max_workers=args.parallelism)
+                    else:
+                        _run(["backend.scripts.run_extraction", "--project", args.project, "--field", field,
+                              "--n", str(arg), "--tiers", args.tiers, "--logprobs"])
                 elif action == "judge":
                     _run(["backend.scripts.llm_judge", "--project", args.project, "--field", field,
                           "--n", "100000", "--cross-family"])
                 elif action == "optimize":
                     # per-model prompts: optimize each below-gate model on its own lineage
-                    for m in opt_models:
-                        _run(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
-                              "--model", m, "--reflector-model", args.reflector_model])
+                    if args.parallelism > 1:
+                        cmds = [
+                            ["backend.scripts.optimize_prompt", "--project", args.project,
+                             "--field", field, "--model", m,
+                             "--reflector-model", args.reflector_model]
+                            for m in opt_models
+                        ]
+                        _run_parallel(cmds, max_workers=args.parallelism)
+                    else:
+                        for m in opt_models:
+                            _run(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
+                                  "--model", m, "--reflector-model", args.reflector_model])
 
             if not any_action:
                 _log("Converged: no field has an actionable step this run.")

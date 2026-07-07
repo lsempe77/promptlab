@@ -69,6 +69,31 @@ A second autonomous loop alongside the prompt-optimizer supervisor ("Loop A"), f
 
 ## Future
 
+- **[Phase 1 — shipped on `feature/parallel-workers`] Intra-machine parallelism** — supervisor
+  `--parallelism N` flag spawns N concurrent subprocesses for extraction and optimization. Each
+  subprocess handles one model; SQLite WAL handles concurrent writes safely. No infra changes
+  needed. Activate on Fly by updating `launch_supervisor.sh` to add `--parallelism 4` and scaling
+  the machine to 2+ CPUs (`fly scale vm performance-2x`). Expected: **N× throughput** on
+  extraction and optimization cycles (judging is already one call; harder to split without a
+  `llm_judge` per-model flag).
+
+- **[Phase 2] True multi-machine parallelism (horizontal scaling)** — SQLite volumes are
+  single-machine on Fly.io, so Phase 1 exhausts single-machine concurrency. Horizontal scale
+  requires a shared DB:
+  - Move `runs` (and `llm_judgments`) to **Fly Postgres** (or Neon). Ground truth / prompt
+    versions / projects can stay in SQLite on the coordinator machine.
+  - Add a **job-claim table** in Postgres:
+    `worker_tasks(id, field, model_id, kind, args_json, status, worker_id, claimed_at, finished_at)`
+    with an atomic `UPDATE ... WHERE status='pending' ORDER BY priority LIMIT 1 RETURNING *`
+    claim query.
+  - Coordinator machine runs the supervisor loop (decides what to do, writes pending tasks).
+  - Worker machines run `backend/scripts/worker.py` — polls, claims, executes, marks done.
+  - Deploy workers as additional Fly machines (`fly machine clone`) each mounting **no volume**
+    (they need only Postgres connectivity and `OPENROUTER_API_KEY`).
+
+- **[Phase 3] Elastic workers via Fly Machines API** — coordinator spawns an ephemeral Fly machine
+  per task batch using the Fly Machines REST API, runs the task, machine exits. Fully elastic:
+  zero idle cost, burst to many machines for a big extraction wave. Requires Phase 2's shared DB.
 - **Confidence-based model triage / cascade** — cut cost/carbon by not sending everything to the
   priciest model. Two tiers: (a) *simple* — pick the **cheapest gate-passing model per field** (the
   cost-vs-quality frontier already identifies it); (b) *cascade* — a cheap first pass, **escalate to
