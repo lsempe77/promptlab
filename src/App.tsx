@@ -10,6 +10,7 @@ import {
   type ProjectInfo,
   type RunVersion,
   type SelfConsistency,
+  type StageModelGate,
   type StageStatus,
   type Thresholds,
 } from "./api";
@@ -71,7 +72,7 @@ function App() {
   const [selfConsistency, setSelfConsistency] = useState<SelfConsistency[]>([]);
   const [calibration, setCalibration] = useState<Calibration[]>([]);
   const [stageStatus, setStageStatus] = useState<StageStatus | null>(null);
-  const [versionData, setVersionData] = useState<{version: number; accepted: number; summaries: ModelSummary[]}[]>([]);
+  const [versionData, setVersionData] = useState<{version: number; accepted: number; models: StageModelGate[]}[]>([]);
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [loadingField, setLoadingField] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -110,15 +111,15 @@ function App() {
     if (!selectedProject || !selected) return;
     api.selfConsistency(selectedProject, selected).then(setSelfConsistency).catch(() => setSelfConsistency([]));
     api.stageStatus(selectedProject, selected).then(setStageStatus).catch(() => setStageStatus(null));
-    // Multi-version progression: fetch run-version list then summaries for each.
+    // Multi-version progression: fetch run-version list then gate metrics (real F1/accuracy) for each.
     api.runVersions(selectedProject, selected)
       .then((vs: RunVersion[]) => {
         const prod = vs.filter((v) => v.n_models >= 2).sort((a, b) => a.version - b.version);
         return Promise.all(
           prod.map((v) =>
-            api.modelsSummary(selectedProject, selected, v.version)
-              .then((summaries) => ({ version: v.version, accepted: v.accepted, summaries }))
-              .catch(() => ({ version: v.version, accepted: v.accepted, summaries: [] as ModelSummary[] }))
+            api.stageStatus(selectedProject, selected, v.version)
+              .then((s) => ({ version: v.version, accepted: v.accepted, models: s.models }))
+              .catch(() => ({ version: v.version, accepted: v.accepted, models: [] as StageModelGate[] }))
           )
         );
       })
@@ -287,6 +288,7 @@ function App() {
                         <VersionProgressionTable
                           versionData={versionData}
                           gateThreshold={stageStatus?.gate_threshold ?? null}
+                          valueType={activeField.value_type}
                         />
                         <section className="panel panel-aggregate">
                           <h3>All models — summary</h3>

@@ -1,18 +1,19 @@
-import type { ModelSummary } from "../api";
+import type { StageModelGate } from "../api";
 
 interface VersionData {
   version: number;
   accepted: number;
-  summaries: ModelSummary[];
+  models: StageModelGate[];
 }
 
 interface Props {
   versionData: VersionData[];
   gateThreshold: number | null;
+  valueType: string;
 }
 
 function pct(x: number | null) {
-  if (x == null) return "—";
+  if (x == null) return "\u2014";
   return `${(x * 100).toFixed(1)}%`;
 }
 
@@ -23,24 +24,22 @@ function cellClass(score: number | null, threshold: number): string {
   return "vprog-cell-fail";
 }
 
-export function VersionProgressionTable({ versionData, gateThreshold }: Props) {
+export function VersionProgressionTable({ versionData, gateThreshold, valueType }: Props) {
   if (versionData.length < 2) return null;
 
   const threshold = gateThreshold ?? 0.9;
-  const versions = versionData.map((v) => v.version); // already sorted ascending
+  const isList = valueType !== "single_categorical";
+  const metricLabel = isList ? "Element-level F1" : "Accuracy";
+  const versions = versionData.map((v) => v.version);
 
-  // Collect all model IDs
+  // Build lookup: version → modelId → gate_metric (F1 or accuracy)
+  const lookup = new Map<number, Map<string, number>>();
   const modelSet = new Set<string>();
   for (const vd of versionData) {
-    for (const s of vd.summaries) modelSet.add(s.model_id);
-  }
-
-  // Build a lookup: version → modelId → score
-  const lookup = new Map<number, Map<string, number>>();
-  for (const vd of versionData) {
     const m = new Map<string, number>();
-    for (const s of vd.summaries) {
-      if (s.mean_score != null) m.set(s.model_id, s.mean_score);
+    for (const g of vd.models) {
+      m.set(g.model_id, g.gate_metric);
+      modelSet.add(g.model_id);
     }
     lookup.set(vd.version, m);
   }
@@ -48,9 +47,9 @@ export function VersionProgressionTable({ versionData, gateThreshold }: Props) {
   const getScore = (modelId: string, version: number): number | null =>
     lookup.get(version)?.get(modelId) ?? null;
 
-  // Sort models by latest-version score descending (fallback to first version)
   const latestV = versions[versions.length - 1];
   const firstV = versions[0];
+
   const models = [...modelSet].sort((a, b) => {
     const sa = getScore(a, latestV) ?? getScore(a, firstV) ?? 0;
     const sb = getScore(b, latestV) ?? getScore(b, firstV) ?? 0;
@@ -59,11 +58,10 @@ export function VersionProgressionTable({ versionData, gateThreshold }: Props) {
 
   return (
     <section className="panel panel-vprog">
-      <h3>Fuzzy-match rate across prompt versions</h3>
+      <h3>{metricLabel} across prompt versions</h3>
       <p className="muted panel-caption">
-        Mean fuzzy-match rate per model for each production prompt version (a string-match
-        heuristic — <strong>not</strong> the gate metric; see the table below for element-level F1
-        / accuracy). Green ≥ {Math.round(threshold * 100)}% · ★ = accepted version.
+        {metricLabel} per model for each production prompt version — the actual gate metric
+        (same as the main table below). Green ≥ {Math.round(threshold * 100)}% gate · ★ = accepted version.
         Δ = change from v{firstV} → v{latestV}.
       </p>
       <div className="table-scroll">
@@ -103,7 +101,7 @@ export function VersionProgressionTable({ versionData, gateThreshold }: Props) {
                   >
                     {delta != null
                       ? `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(1)}%`
-                      : "—"}
+                      : "\u2014"}
                   </td>
                 </tr>
               );

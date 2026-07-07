@@ -242,6 +242,6 @@ export const api = {
     ),
   runVersions: (project: string, field: string) =>
     getJson<RunVersion[]>(`/api/projects/${project}/fields/${field}/run-versions`),
-  stageStatus: (project: string, field: string) =>
-    getJson<StageStatus>(`/api/projects/${project}/fields/${field}/stage-status`),
+  stageStatus: (project: string, field: string, promptVersion?: number) =>
+    getJson<StageStatus>(`/api/projects/${project}/fields/${field}/stage-status${qs({ prompt_version: promptVersion })}`),
 };

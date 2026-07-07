@@ -350,34 +350,40 @@ def calibration(project_slug: str, field_name: str, prompt_version: int | None =
 
 
 @app.get("/api/projects/{project_slug}/fields/{field_name}/stage-status")
-def stage_status(project_slug: str, field_name: str) -> dict:
+def stage_status(project_slug: str, field_name: str, prompt_version: int | None = None) -> dict:
     """Derived staged-rollout status for a field (no manual state): how many
     references it has reached (= current stage), and the quality gate evaluated
     PER MODEL within the field (each model's own LLM-judged accuracy vs. the
     gate threshold), plus how many prompt versions have been tried. The gate is
     per (field, model) -- a field is not uniformly 'passed'/'gated'; individual
-    models pass or fail it -- so the dashboard summarises as 'N/M models pass'."""
+    models pass or fail it -- so the dashboard summarises as 'N/M models pass'.
+    When prompt_version is given, gate metrics are computed only over runs from
+    that version so the frontend can show per-version F1/accuracy progression."""
     _field_or_404(project_slug, field_name)
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
+        pvid = _resolve_pvid(conn, project_id, field_name, prompt_version)
         row = conn.execute(
             "SELECT COUNT(DISTINCT record_id) AS recs FROM runs "
             "WHERE project_id = ? AND field_name = ? AND error IS NULL",
             (project_id, field_name),
         ).fetchone()
         references = (row["recs"] if row else 0) or 0
+        # Optional version filter appended to queries that touch runs.
+        v_clause = "AND r.prompt_version_id = ?" if pvid is not None else ""
+        v_params: tuple = (pvid,) if pvid is not None else ()
         jrows = conn.execute(
             "SELECT r.model_id, AVG(CASE WHEN j.verdict = 1 THEN 1.0 ELSE 0.0 END) AS acc, "
-            "COUNT(*) AS n FROM llm_judgments j JOIN runs r ON r.id = j.run_id "
-            "WHERE r.project_id = ? AND r.field_name = ? GROUP BY r.model_id",
-            (project_id, field_name),
+            f"COUNT(*) AS n FROM llm_judgments j JOIN runs r ON r.id = j.run_id "
+            f"WHERE r.project_id = ? AND r.field_name = ? {v_clause} GROUP BY r.model_id",
+            (project_id, field_name) + v_params,
         ).fetchall()
         rrows = conn.execute(
             "SELECT r.model_id, r.parsed_value_json, g.value_json FROM runs r "
             "JOIN ground_truth g ON g.project_id = r.project_id AND g.record_id = r.record_id "
-            "AND g.field_name = r.field_name "
-            "WHERE r.project_id = ? AND r.field_name = ? AND r.parsed_value_json IS NOT NULL",
-            (project_id, field_name),
+            f"AND g.field_name = r.field_name "
+            f"WHERE r.project_id = ? AND r.field_name = ? AND r.parsed_value_json IS NOT NULL {v_clause}",
+            (project_id, field_name) + v_params,
         ).fetchall()
         pv = conn.execute(
             "SELECT COUNT(*) AS total, SUM(CASE WHEN accepted = 1 THEN 1 ELSE 0 END) AS accepted "
