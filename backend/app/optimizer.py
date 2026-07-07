@@ -284,6 +284,25 @@ def _format_avoid_history(avoid: list[dict[str, Any]]) -> str:
     )
 
 
+def _format_categorical_confusion(failures: list[dict[str, Any]], max_pairs: int = 10) -> str:
+    """For classification fields: summarise which (truth, predicted) pairs appear
+    most often so the reflector can spot systematic label confusion at a glance."""
+    from collections import Counter
+    pairs: Counter = Counter()
+    for f in failures:
+        t = f.get("truth")
+        p = f.get("predicted")
+        if t is not None and p is not None and str(t) != str(p):
+            pairs[(str(t), str(p))] += 1
+    if not pairs:
+        return ""
+    lines = [
+        f"  - expected {t!r} \u2192 predicted {p!r}: {n} case{'s' if n > 1 else ''}"
+        for (t, p), n in pairs.most_common(max_pairs)
+    ]
+    return "\nPER-CATEGORY CONFUSION PATTERN (most common mislabellings):\n" + "\n".join(lines)
+
+
 def propose_revision(
     field_name: str,
     current_instruction: str,
@@ -294,6 +313,7 @@ def propose_revision(
     max_attempts: int = 3,
     bold: bool = False,
     successes: list[dict[str, Any]] | None = None,
+    field_value_type: str | None = None,
 ) -> tuple[str, str | None]:
     """Calls the reflector model and returns (revised_instruction, diagnosis).
     `avoid` is a list of {"instruction", "diagnosis"} dicts for recently
@@ -310,10 +330,18 @@ def propose_revision(
             "\n\nCASES THE CURRENT INSTRUCTION ALREADY GETS RIGHT (your rewrite must keep these correct):\n"
             + _format_successes(successes or [], max_cases)
         )
+    # For categorical fields, include a per-category confusion breakdown so the
+    # reflector can spot systematic mislabellings (e.g. Health vs Social protection)
+    # and propose targeted disambiguation rules without having to infer the pattern
+    # from individual cases alone.
+    confusion_text = ""
+    if field_value_type == "single_categorical" and failures:
+        confusion_text = _format_categorical_confusion(failures)
     base_prompt = (
         f"FIELD BEING EXTRACTED: {field_name}\n\n"
         f"CURRENT INSTRUCTION:\n{current_instruction}\n\n"
         f"FAILURE CASES (predicted vs. expected ground truth):\n{cases_text}"
+        f"{confusion_text}"
         f"{keep_text}"
         f"{avoid_text}\n\n"
         "RESPOND IN VALID JSON:\n"
@@ -536,12 +564,14 @@ def _run_optimization(
             if bold and verbose:
                 print(f"[iter {it}] bold mode ON ({no_improve_count} consecutive rejections >= bold_after={bold_after})")
 
+            field_value_type = prompts.FIELDS[field_name].value_type if field_name in prompts.FIELDS else None
             candidates: list[dict[str, Any]] = []
             for k in range(candidates_per_iteration):
                 try:
                     candidate_instruction, diagnosis = propose_revision(
                         field_name, best_instruction, train_outcome.failures, reflector_model,
                         avoid=avoid, bold=bold, successes=train_outcome.successes,
+                        field_value_type=field_value_type,
                     )
                 except (ParseError, gateway.GatewayError) as exc:
                     if verbose:
