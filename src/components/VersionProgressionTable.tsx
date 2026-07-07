@@ -59,11 +59,12 @@ export function VersionProgressionTable({ versionData, gateThreshold }: Props) {
 
   return (
     <section className="panel panel-vprog">
-      <h3>Quality across prompt versions</h3>
+      <h3>Fuzzy-match rate across prompt versions</h3>
       <p className="muted panel-caption">
-        Mean fuzzy-match quality score per model for each production prompt version.
-        Green ≥ {Math.round(threshold * 100)}% gate · ★ = accepted version.
-        Last column (Δ) = change from v{firstV} → v{latestV}.
+        Mean fuzzy-match rate per model for each production prompt version (a string-match
+        heuristic — <strong>not</strong> the gate metric; see the table below for element-level F1
+        / accuracy). Green ≥ {Math.round(threshold * 100)}% · ★ = accepted version.
+        Δ = change from v{firstV} → v{latestV}.
       </p>
       <div className="table-scroll">
         <table className="comparison-table vprog-table">
