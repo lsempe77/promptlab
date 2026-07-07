@@ -26,8 +26,9 @@ JUDGE_SYSTEM = (
 # Cross-family judge: to avoid self-preference bias, a model's output is judged
 # by a model from a DIFFERENT family. Anthropic outputs are judged by GPT; every
 # other family (OpenAI, Google, DeepSeek, xAI, Qwen, ...) is judged by Claude.
-GPT_JUDGE = "~openai/gpt-latest"
-CLAUDE_JUDGE = "~anthropic/claude-opus-latest"
+# Using explicit versioned model IDs (not ~ aliases) for reliability.
+GPT_JUDGE = "openai/gpt-4o"
+CLAUDE_JUDGE = "anthropic/claude-sonnet-4-5"
 
 
 def judge_for(model_id: str) -> str:

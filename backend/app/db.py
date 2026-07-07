@@ -169,6 +169,12 @@ def get_conn(db_path: Path = DB_PATH) -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL mode allows concurrent readers while a writer holds the lock, and
+    # serialises multiple concurrent writers without immediate SQLITE_BUSY.
+    conn.execute("PRAGMA journal_mode=WAL")
+    # Wait up to 30 s before raising OperationalError: database is locked.
+    # Critical for --parallelism > 1 (multiple optimizer subprocesses).
+    conn.execute("PRAGMA busy_timeout=30000")
     try:
         yield conn
         conn.commit()
