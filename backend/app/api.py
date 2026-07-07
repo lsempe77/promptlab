@@ -51,9 +51,9 @@ def _field_or_404(project_slug: str, field_name: str) -> None:
 
 def _resolve_pvid(conn, project_id: int, field_name: str, requested_version: int | None) -> int | None:
     """Which prompt_version_id the run-derived metrics should filter on. Default
-    (requested_version None) = the best version for this field: the latest
-    *accepted* version that has runs (the optimizer's approved prompt), falling
-    back to the most-run version if no accepted version has runs yet.
+    (requested_version None) = the version with the most runs across all models
+    for this field — in a per-model prompt system, that is always the shared v1
+    baseline which every model ran with, ensuring all models appear in the summary.
     A specific version resolves to its id; an unknown version returns -1."""
     if requested_version is not None:
         row = conn.execute(
@@ -61,19 +61,8 @@ def _resolve_pvid(conn, project_id: int, field_name: str, requested_version: int
             (project_id, field_name, requested_version),
         ).fetchone()
         return row["id"] if row else -1
-    # Prefer the latest accepted version that has runs (best optimized prompt).
-    row = conn.execute(
-        "SELECT r.prompt_version_id AS pvid FROM runs r "
-        "JOIN prompt_versions pv ON pv.id = r.prompt_version_id "
-        "WHERE r.project_id = ? AND r.field_name = ? AND r.prompt_version_id IS NOT NULL "
-        "AND pv.accepted = 1 "
-        "GROUP BY r.prompt_version_id "
-        "ORDER BY pv.version DESC LIMIT 1",
-        (project_id, field_name),
-    ).fetchone()
-    if row:
-        return row["pvid"]
-    # Fall back to the version with the most runs (baseline, before optimization).
+    # Pick the version with the most total runs (= the shared baseline v1 that
+    # all models ran with). This keeps all models visible in the summary table.
     row = conn.execute(
         "SELECT r.prompt_version_id AS pvid FROM runs r "
         "JOIN prompt_versions pv ON pv.id = r.prompt_version_id "
