@@ -50,28 +50,40 @@ def _field_or_404(project_slug: str, field_name: str) -> None:
 
 
 def _resolve_pvid(conn, project_id: int, field_name: str, requested_version: int | None) -> int | None:
-    """Which prompt_version_id the run-derived metrics should filter on. Default
-    (requested_version None) = the version with the most runs across all models
-    for this field — in a per-model prompt system, that is always the shared v1
-    baseline which every model ran with, ensuring all models appear in the summary.
-    A specific version resolves to its id; an unknown version returns -1."""
-    if requested_version is not None:
-        row = conn.execute(
-            "SELECT id FROM prompt_versions WHERE project_id = ? AND field_name = ? AND version = ?",
-            (project_id, field_name, requested_version),
-        ).fetchone()
-        return row["id"] if row else -1
-    # Pick the version with the most total runs (= the shared baseline v1 that
-    # all models ran with). This keeps all models visible in the summary table.
+    """Resolve a specific requested version to its DB id.
+    Returns -1 for unknown versions so the caller yields an empty result."""
+    if requested_version is None:
+        return None
     row = conn.execute(
-        "SELECT r.prompt_version_id AS pvid FROM runs r "
-        "JOIN prompt_versions pv ON pv.id = r.prompt_version_id "
-        "WHERE r.project_id = ? AND r.field_name = ? AND r.prompt_version_id IS NOT NULL "
-        "GROUP BY r.prompt_version_id "
-        "ORDER BY COUNT(*) DESC, pv.version DESC LIMIT 1",
-        (project_id, field_name),
+        "SELECT id FROM prompt_versions WHERE project_id = ? AND field_name = ? AND version = ?",
+        (project_id, field_name, requested_version),
     ).fetchone()
-    return row["pvid"] if row else None
+    return row["id"] if row else -1
+
+
+def _best_pvids_per_model(conn, project_id: int, field_name: str) -> dict[str, int]:
+    """Return {model_id: best_pvid} so the dashboard can show every model at
+    its own best prompt version (not all forced to one shared version).
+
+    Best = latest accepted version that has runs; fallback = version with the
+    most runs. This is the correct default for per-model prompt lineages."""
+    rows = conn.execute(
+        "SELECT r.model_id, r.prompt_version_id, pv.accepted, pv.version, COUNT(*) AS n_runs "
+        "FROM runs r JOIN prompt_versions pv ON pv.id = r.prompt_version_id "
+        "WHERE r.project_id = ? AND r.field_name = ? AND r.prompt_version_id IS NOT NULL "
+        "GROUP BY r.model_id, r.prompt_version_id",
+        (project_id, field_name),
+    ).fetchall()
+    model_candidates: dict[str, list[dict]] = {}
+    for row in rows:
+        model_candidates.setdefault(row["model_id"], []).append(dict(row))
+    result: dict[str, int] = {}
+    for mid, candidates in model_candidates.items():
+        accepted = [c for c in candidates if c["accepted"]]
+        best = (max(accepted, key=lambda c: c["version"]) if accepted
+                else max(candidates, key=lambda c: (c["n_runs"], c["version"])))
+        result[mid] = best["prompt_version_id"]
+    return result
 
 
 @app.get("/api/health")
@@ -139,9 +151,26 @@ def models_summary(project_slug: str, field_name: str, prompt_version: int | Non
     _field_or_404(project_slug, field_name)
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
-        pvid = _resolve_pvid(conn, project_id, field_name, prompt_version)
+
+        if prompt_version is None:
+            # Per-model best version: each model shown at its own latest accepted
+            # (or most-run fallback) prompt version, so all models are visible.
+            model_pvids = _best_pvids_per_model(conn, project_id, field_name)
+            if not model_pvids:
+                return []
+            or_clauses = " OR ".join(
+                "(runs.model_id = ? AND runs.prompt_version_id = ?)" for _ in model_pvids
+            )
+            or_params = [p for mid, pvid in model_pvids.items() for p in (mid, pvid)]
+            version_filter = f"AND ({or_clauses})"
+            query_params = (project_id, field_name) + tuple(or_params)
+        else:
+            pvid = _resolve_pvid(conn, project_id, field_name, prompt_version)
+            version_filter = "AND runs.prompt_version_id = ?"
+            query_params = (project_id, field_name, pvid)
+
         rows = conn.execute(
-            """
+            f"""
             SELECT
                 runs.model_id AS model_id,
                 COUNT(*) AS n,
@@ -161,11 +190,11 @@ def models_summary(project_slug: str, field_name: str, prompt_version: int | Non
                 MAX(pv.version) AS prompt_version
             FROM runs
             LEFT JOIN prompt_versions pv ON pv.id = runs.prompt_version_id
-            WHERE runs.project_id = ? AND runs.field_name = ? AND runs.prompt_version_id = ?
+            WHERE runs.project_id = ? AND runs.field_name = ? {version_filter}
             GROUP BY runs.model_id
             ORDER BY mean_score DESC
             """,
-            (project_id, field_name, pvid),
+            query_params,
         ).fetchall()
     result = []
     for r in rows:
