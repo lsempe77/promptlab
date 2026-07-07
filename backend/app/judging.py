@@ -20,7 +20,8 @@ JUDGE_SYSTEM = (
     "the prediction is CORRECT \u2014 i.e. conveys the same real-world information as the ground "
     "truth, allowing for harmless differences in spelling, abbreviation, ordering, or "
     "formatting, but NOT allowing genuinely different entities/values. "
-    'Respond with a JSON object: {"correct": true|false, "reasoning": "<one sentence>"}.'
+    'Respond with ONLY a JSON object \u2014 no preamble, no explanation before it: '
+    '{"correct": true|false, "reasoning": "<one sentence>"}'
 )
 
 # Cross-family judge: to avoid self-preference bias, a model's output is judged
@@ -79,7 +80,8 @@ def judge_accuracy(
             "system_prompt": JUDGE_SYSTEM,
             "user_prompt": judge_prompt(field_name, predicted, truth),
             "temperature": 0.0,
-            "max_tokens": 200,
+            "max_tokens": 400,
+            "json_mode": True,
         }
         for predicted, truth in items
     ]

@@ -106,7 +106,8 @@ def main() -> None:
                         "system_prompt": _JUDGE_SYSTEM,
                         "user_prompt": _judge_prompt(args.field, predicted, truth),
                         "temperature": 0.0,
-                        "max_tokens": 200,
+                        "max_tokens": 400,
+                        "json_mode": True,
                     }
                 )
 
