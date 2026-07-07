@@ -87,6 +87,35 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
         diagnostic.
       </p>
 
+      <details className="method-group">
+        <summary>Threshold rationale &amp; references</summary>
+        <p className="muted">
+          <strong>List fields (authors, affiliations, countries) — F1 ≥ 90%.</strong>{" "}
+          Ground truth is verifiable (a name either appears in the paper or it doesn't), so a high
+          bar is justified. Element-level F1 balances precision and recall symmetrically, penalising
+          both missed names and hallucinated ones.
+        </p>
+        <p className="muted">
+          <strong>Categorical fields (sector, sub-sector) — accuracy ≥ 90%.</strong>{" "}
+          This threshold is aspirational and serves as a direction-of-travel target. Published
+          benchmarks for structurally comparable tasks (11–28 imbalanced classes, specialised domain,
+          zero-shot LLMs) show state-of-the-art performance of 40–58% macro-F1 and 60–72% accuracy:{" "}
+          OSDG trained classifier on 17 SDG categories reaches ~70% F1 (Pukelis et al. 2022,{" "}
+          <em>arXiv:2211.11252</em>); zero-shot GPT-4 on SDG detection reaches macro-F1 45–58%
+          (Cadeddu et al. 2025, <em>arXiv:2509.19833</em>); ChatGPT on rare NER classes drops to
+          F1 4–27% (Qin et al. 2023, <em>arXiv:2302.06476</em>). The 90% gate therefore functions
+          as a ceiling that the optimizer works toward; it is not expected to be cleared by baseline
+          zero-shot prompts alone. A field stuck at 60–70% accuracy signals that prompt engineering
+          has reached its ceiling and a ground-truth or taxonomy review is needed (Loop B).
+        </p>
+        <p className="muted">
+          Cohen's κ is reported alongside accuracy as a diagnostic: it penalises majority-class
+          exploitation (e.g. always guessing "Health" when 44% of papers are health papers) that raw
+          accuracy rewards. κ ≥ 0.60 corresponds to "substantial agreement" (Landis &amp; Koch 1977)
+          and is the threshold used in inter-annotator agreement studies in the same domain.
+        </p>
+      </details>
+
       <details className="method-group" open>
         <summary>The pipeline at a glance</summary>
         <MermaidDiagram
