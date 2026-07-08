@@ -32,6 +32,12 @@ GATE_THRESHOLD = 0.90  # per-(field, model) quality bar for production-readiness
                        # standard is itself noisy (benchmark bias), so 0.95 was chasing label noise;
                        # ~0.90 is a defensible bar (lit. often uses ~0.70-0.90). Per-user thresholds
                        # are a planned enhancement (see ROADMAP.md).
+RECALL_FLOOR = 0.85    # Hard-floor on recall for LIST fields alongside the F1 gate.
+                       # A model that achieves F1=0.92 by over-predicting but only recalls 85% of
+                       # true values is NOT production-ready — missing values are invisible in QA
+                       # while extra values are visible and fixable. Categorical fields (sector,
+                       # sub_sector) have no meaningful precision/recall split so this floor is
+                       # not applied to them.
 ABSTENTION_CREDIT = 0.5  # honesty-adjusted credit for an honest abstention (null/empty output)
                          # when a value actually existed -- rewards "I don't know" over a
                          # confident wrong guess. Only affects `honesty_score` (the optimizer's

@@ -41,6 +41,7 @@ except Exception:
 
 from backend.app import analytics, config, db, prompt_store, scoring  # noqa: E402
 from backend.app.optimizer import FIELD_IMPROVEMENT_EPSILON, DEFAULT_IMPROVEMENT_EPSILON  # noqa: E402
+from backend.app.scoring import RECALL_FLOOR  # noqa: E402
 from backend.app.prompts import BASELINE_INSTRUCTIONS  # noqa: E402
 
 
@@ -125,7 +126,9 @@ def _field_state(conn, project_id: int, field: str, models: list[str]) -> dict:
             mrows = [{"predicted": json.loads(x["parsed_value_json"]), "truth": json.loads(x["value_json"])}
                      for x in grows]
             gm = analytics.gate_metrics(field, mrows)
-            gate[m] = (gm["metric"], gm["n"])
+            # gate[m] = (primary_metric, n, recall_or_None)
+            # recall is only meaningful for list fields; None for categorical.
+            gate[m] = (gm["metric"], gm["n"], gm.get("recall"))
         # per-model persistent exhaustion: a rejected candidate off THIS model's
         # current prompt means don't re-optimize this model on this prompt.
         exhausted[m] = conn.execute(
@@ -154,9 +157,19 @@ def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str],
     if not evaluated:
         return "judge", None, [], "runs exist but no gate metric yet -> judge"
 
+    def _passes_gate(m: str) -> bool:
+        """True if model passes both F1/accuracy gate AND the recall floor (list fields only)."""
+        metric, _n, recall = gate[m]
+        if metric < scoring.GATE_THRESHOLD:
+            return False
+        # Recall floor applies only to list fields (recall is None for categorical)
+        if recall is not None and recall < RECALL_FLOOR:
+            return False
+        return True
+
     # Gate on the runs-based quality metric (F1 for list fields, accuracy for
     # categorical) -- same metric the dashboard shows -- not judged accuracy.
-    below = [m for m in evaluated if gate[m][0] < scoring.GATE_THRESHOLD]
+    below = [m for m in evaluated if not _passes_gate(m)]
     optimizable = [m for m in below if not state["exhausted"].get(m)]
     if optimizable:
         return "optimize", None, optimizable, (
@@ -166,7 +179,7 @@ def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str],
     # Advance when the BEST model passes gate (not "all must pass").
     # Weaker models continue to be optimized at the next stage level.
     # This prevents a single broken/weak model from blocking field progression.
-    best_metric = max((gate[m][0] for m in evaluated if m in gate), default=0.0)
+    best_metric = max((gate[m][0] for m in evaluated if _passes_gate(m)), default=0.0)
     if best_metric >= scoring.GATE_THRESHOLD:
         next_stage = next((s for s in stages if s > refs), None)
         if next_stage is not None:
@@ -226,7 +239,10 @@ def main() -> None:
                     project_id = db.get_project_id(conn, args.project)
                     state = _field_state(conn, project_id, field, models)
                 action, arg, opt_models, reason = _decide(state, models)
-                passing = sum(1 for _m, (score, _n) in state["gate"].items() if score >= scoring.GATE_THRESHOLD)
+                passing = sum(
+                    1 for _m, (score, _n, recall) in state["gate"].items()
+                    if score >= scoring.GATE_THRESHOLD and (recall is None or recall >= RECALL_FLOOR)
+                )
                 _log(f"[{field}] refs={state['refs']} unjudged={state['unjudged']} "
                      f"judged={len(state['judged'])} passing={passing}/{len(models)} "
                      f"-> {action.upper()} {arg if arg is not None else ''} ({reason})")
