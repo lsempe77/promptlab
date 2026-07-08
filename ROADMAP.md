@@ -58,27 +58,49 @@ A second autonomous loop alongside the prompt-optimizer supervisor ("Loop A"), f
   "answer key is wrong" signal). This closes the feedback loop so ground truth **improves over time**
   instead of staying fixed.
 
-## Recently shipped (2026-07-08)
+## Recently shipped (2026-07-08) — fresh start, metric overhaul, roster pruning
 
-- **Optimizer robustness fixes:**
-  - Bold-mode reflector null content fixed (`json_mode=False` + `max_tokens=4000` for Claude Sonnet
-    extended-thinking calls in `optimizer.propose_revision`).
-  - Per-field `IMPROVEMENT_EPSILON` — list fields (`authors`, `author_affiliation`) raised 0.01→0.03
-    to prevent false-positive acceptances on the noisy ~35-record val split (all fields are capped
-    at 100 GT records → splits of ~30/35/35 holdout/val/train, giving high F1 variance). Wired
-    through `optimize_prompt --improvement-epsilon` and the supervisor.
-  - Gateway default `max_tokens` raised 1024→2048 to fix JSON truncation on verbose models.
-- **Pending (do after current supervisor cycle):** retire `z-ai/glm-4.7-flash` from `models.yaml`
-  — consistently broken: first truncates JSON at 1024 tokens (verbose excerpts), then returns
-  `content=null` under `json_object` response format. `glm-5.2` (same family) works fine.
+**Fresh start:** Full DB wipe after a complete first production run (50,535 runs archived to
+`../DEP/backups/promptlab_prod_20260708_214047.db`). GT + v1 shared baselines preserved.
 
-## Model reliability — known broken models
-- **`z-ai/glm-4.7-flash`**: returns `content=null` for ~95% of calls under `json_object` mode
-  (OpenRouter routing issue or model update, 2026-07-08). Old runs show JSON truncation; new runs
-  show null. **Retire from roster** after current supervisor cycle completes. Keep existing DB runs
-  for the record.
-- **`moonshotai/kimi-latest`** and **`moonshotai/kimi-k2.5`**: occasional job failures (API errors
-  from the provider); otherwise functional but with lower gate metrics than other models.
+**Roster pruned to 13 models:** Retired glm-4.7-flash (96-100% error rate), gemini-pro-latest
+(54% errors, 0.075 F1 on authors), kimi-k2.5 (25-36% errors), kimi-latest (40-59% errors),
+llama-4-scout (marginal value). Both kimi variants removed. `backend/models.yaml` updated.
+
+**Stage ceiling 200:** `PRODUCTION_ROLLOUT_STAGES=(100, 200)`, `MAX_PRODUCTION_RECORDS=200`.
+Stage 300 retired — 200 records gives reliable metrics at lower cost.
+
+**Advancement rule: best model passes (not all):** Field advances when the best model crosses
+the gate; weaker models keep being optimized at the next stage level.
+
+**Recall floor:** Gate for list fields is now **F1 ≥ 0.90 AND recall ≥ 0.85** (`RECALL_FLOOR`
+in `scoring.py`). Enforced in supervisor advancement, supervisor logging, and optimizer candidate
+acceptance. Rationale: missing values are invisible in QA; extras are visible and fixable.
+
+**Previously shipped (2026-07-07–08):**
+- Bold-mode null content fixed (`json_mode=False` + `max_tokens=4000` for Claude Sonnet).
+- Per-field `IMPROVEMENT_EPSILON` (0.03 list, 0.01 categorical).
+- `max_tokens` 1024→2048 (fixed glm-4.7-flash JSON truncation; model now retired anyway).
+- `from pathlib import Path` added to `api.py` (was causing 500 on all upload endpoints).
+- JWT auth (HS256 stdlib) replacing in-memory token set — survives machine restarts.
+- New-project wizard (5-step extraction + 3-step screening with EPPI upload + LLM-assisted
+  question generation).
+
+## Model reliability — known broken models (historical; all retired)
+- **`z-ai/glm-4.7-flash`**: `content=null` for ~95% of calls under `json_object` mode. Retired.
+- **`~google/gemini-pro-latest`**: 54% error rate on authors, 0.075 F1. Retired.
+- **`~moonshotai/kimi-latest`** and **`moonshotai/kimi-k2.5`**: 25-59% errors. Retired.
+- **`meta-llama/llama-4-scout`**: Consistently 0.05-0.10 below top models. Retired.
+
+## Recently shipped (2026-07-08) — analysis documents
+
+- `analysis.qmd`: deep analysis covering gate metric validity, recall vs F1, optimizer impact,
+  error pattern analysis, model roster consequences, GT reliability risks, and recommendations.
+- `examine_wrong_labels.py` + `wrong_labels_report.txt`: systematic analysis of "wrong" labels
+  across fields/models. Key finding: most apparent "artefacts" are already handled by
+  `token_set_ratio` in the scorer; the net bias is small (±0.01-0.02 F1).
+
+## Recently shipped (2026-07-06)
 
 ## Recently shipped (2026-07-06)
 

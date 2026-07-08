@@ -6,9 +6,13 @@ only one project is registered, `dep-extraction`, covering the **data extraction
 metadata fields: `authors`, `author_affiliation` (institution), `author_country`, `sector_name`,
 `sub_sector`.
 
-Stack: FastAPI + SQLite (no task queue), OpenRouter as a single unified model gateway (free ->
-expensive tiers), plateau-based stopping ("stop after N iterations with no improvement") for the
-prompt optimizer.
+Stack: FastAPI + SQLite (no task queue), OpenRouter as a single unified model gateway,
+plateau-based stopping ("stop after N iterations with no improvement") for the prompt optimizer.
+
+**Model roster (13 models, revised 2026-07-08):** six broken/weak models retired after a full
+production run (glm-4.7-flash, gemini-pro-latest, kimi-k2.5, kimi-latest, llama-4-scout).
+Remaining: Claude Sonnet/Haiku, GPT-4o/mini, Gemini Flash, DeepSeek Flash/Pro,
+Mistral Medium/Small, Qwen3 235B/30B, GLM-5.2.
 
 ## Setup
 
@@ -32,15 +36,13 @@ flowchart TD
     EX --> SC["Score vs truth — concordance-aware:<br/>accents/mojibake folded · 'A or B' = either accepted"]
     SC --> LOG["Log per run:<br/>outcome · honesty · cost · CO₂e"]
     SC --> JUDGE["Cross-family LLM judge<br/>(concordance)"]
-    LOG --> GATE{"Per-model gate:<br/>F1 (lists) / accuracy (categorical) ≥ 90%?"}
+    GATE{"Per-model gate:<br/>F1 ≥ 90% + recall ≥ 85% (lists)<br/>accuracy ≥ 90% (categorical)?"}
     JUDGE -. corroborates .-> GATE
     GATE -- "below gate" --> REFLECT
-    GATE -- "passes" --> STAGE{"Sample size<br/>reached this stage?"}
+    GATE -- "BEST model passes" --> STAGE{"Sample size<br/>reached this stage?"}
     STAGE -- "100 → grow" --> G200["Extract to 200 refs"]
-    STAGE -- "200 → grow" --> G300["Extract to 300 refs"]
-    STAGE -- "300 (capped)" --> DONE(["Production-ready<br/>(field, model) pairs"])
+    STAGE -- "200 (capped)" --> DONE(["Production-ready<br/>(field, model) pairs"])
     G200 --> EX
-    G300 --> EX
     subgraph OPT["Optimizer (autonomous, per-model)"]
       direction TB
       REFLECT["Reflector proposes revision<br/>(bold structural rewrite after 2 rejects)"] --> RETEST["Re-test on 50-paper held-out val<br/>+ cross-model holdout"]
@@ -135,21 +137,22 @@ flowchart LR
   same-family model; one failing pair doesn't stop the sweep). Prompts are **per-model** (each
   model optimizes its own lineage, falling back to a shared v1 baseline until it diverges). A
   rewrite is **accepted only if it (a) raises the gate metric** — F1 (list fields) / accuracy
-  (categorical), the **same** `app/analytics.gate_metrics` the production gate uses — on a fixed
-  **50-record held-out val set** **and (b) does not regress** that metric on a separate **held-out
-  set across the optimized model + a cheap different-family reference** (a **cross-model
-  generalization gate** that blocks single-model overfits). After `bold_after` (2) consecutive
-  rejections it switches to **bold** mode (structural rewrites, shown the cases the prompt already
-  gets right); it stops after `no_improve_limit` (4) non-improving iterations. The cheap
-  honesty-adjusted score only *ranks* candidates within an iteration, and LLM-judged accuracy is
-  kept as a reported corroborating companion — so "what the optimizer chases" == "what the gate
-  checks" (both are F1/accuracy ≥ `GATE_THRESHOLD` 0.90).
+  (categorical) — on a fixed **~35-record held-out val set** (split from 100 GT records),
+  **(b) recall stays ≥ 0.85** (list fields only — prevents gaming F1 by sacrificing recall —
+  missing values are invisible in QA while extras are visible and fixable), **and (c) does not
+  regress** on a separate **holdout across the optimized model + a cheap different-family
+  reference** (cross-model generalization gate that blocks single-model overfits).
+  `IMPROVEMENT_EPSILON` is **per-field**: 0.03 for list fields (higher noise floor on ~35-record
+  val splits) and 0.01 for categorical. After `bold_after` (2) consecutive rejections it switches
+  to **bold** mode (structural rewrites, `json_mode=False` + `max_tokens=4000` so extended-thinking
+  models don't return null content); stops after `no_improve_limit` (4) non-improving iterations.
 - **Autonomous supervisor** (`scripts/supervisor.py`): the always-on orchestrator ("Loop A"). Each
-  cycle it reads per-(field, model) state and picks one action — extract the next rollout stage,
-  judge unjudged runs, optimize a below-gate model on its own prompt lineage, or advance — shelling
-  out to the tested `run_extraction` / `llm_judge` / `optimize_prompt` scripts. Deployed as a
-  `--loop` daemon on Fly so the pipeline runs without a laptop; self-terminating via the guardrails
-  (`MAX_PRODUCTION_RECORDS`, `PRODUCTION_ROLLOUT_STAGES`, `no_improve_limit`).
+  cycle it reads per-(field, model) state and picks one action — extract, judge, optimize, or
+  advance — shelling out to the tested scripts. **Advancement rule (2026-07-08)**: a field advances
+  when **the best model passes both F1 ≥ 0.90 AND recall ≥ 0.85** (not "all models must pass");
+  weaker models keep being optimized at the next stage level. **Stages**: `(100, 200)` —
+  200 records is the production ceiling (`MAX_PRODUCTION_RECORDS=200`). Deployed as a `--loop`
+  daemon on Fly; self-terminating via the guardrails.
 
   **Concurrency / parallelism rules (critical — do not violate):**
   - `--parallelism N` controls how many **extraction** subprocesses run concurrently. Each

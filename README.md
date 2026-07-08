@@ -44,9 +44,11 @@ dashboard" panel.
 
 Metrics are tiered so the one that matters leads:
 
-- **Quality gate (per model)** — the production metric: **F1** for list fields (authors,
-  affiliations, countries) and **accuracy** for categorical fields (sector, sub-sector); a
-  (field, model) is production-ready at **≥ 90%**.
+- **Quality gate (per model)** — the production metric. For **list fields** (authors, affiliations,
+  countries): **element-level F1 ≥ 90% AND recall ≥ 85%**. The recall floor is separate because F1
+  alone allows a model to "pass" by over-predicting while still missing 20% of true values — missing
+  values are invisible in QA while extras are visible and fixable. For **categorical fields**
+  (sector, sub-sector): **accuracy ≥ 90%** (no recall concept for a single-pick classification).
 - **Explains the gate** — precision & recall (lists) or **Cohen's κ** (categorical), with 95%
   Wilson confidence intervals.
 - **Corroboration** — cross-family **LLM-judge concordance**; confidence **calibration** (Brier).

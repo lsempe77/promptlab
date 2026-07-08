@@ -20,15 +20,18 @@ DEP, scores every model against human-curated ground truth, and improves prompts
 - The DB + corpus are **not** in the repo (gitignored). A local production subset is built by
   `python -m backend.scripts.export_production_subset` → `backend/deploy/{promptlab.db,corpus/}`.
 
-## Current production state (as of 2026-07-06)
+## Current production state (as of 2026-07-08 evening — fresh start)
 - **Deployed on Fly.io**: app `dep-promptlab-api`, region `iad`, machine `82547dc7995668`, volume
   `dep_data` at `/data`, `min_machines_running=1`, `memory=1024mb`. Env: `DEP_DB_PATH=/data/promptlab.db`,
-  `DEP_MD_DIR=/data/corpus`. **`OPENROUTER_API_KEY` secret IS set** (the supervisor calls models;
-  the read-only `api.py` does not).
-- **Fully aligned:** gate == optimizer-accept == **F1 (list fields) / accuracy (categorical) ≥ 0.90**.
-- **Autonomous supervisor daemon is RUNNING** on a freshly-wiped DB (reference data kept), rebuilding
-  v1 baselines across **18 models × 5 fields** → judge → gate → optimize → advance (stages
-  100→200→300). Pre-wipe backup archived at `../DEP/backups/promptlab_prod_20260706_104247.db`.
+  `DEP_MD_DIR=/data/corpus`. **`OPENROUTER_API_KEY` and `JWT_SECRET` and `PROMPTLAB_PASSWORD` secrets are set**.
+- **Fresh start executed 2026-07-08:** all runs/iterations/jobs wiped. 5×100 GT records + 5 v1
+  shared baselines preserved. Backup: `../DEP/backups/promptlab_prod_20260708_214047.db`.
+- **13-model roster** (retired: glm-4.7-flash, gemini-pro-latest, kimi-k2.5, kimi-latest, llama-4-scout).
+- **Stages: (100, 200)** only. `MAX_PRODUCTION_RECORDS=200`. No stage 300.
+- **Gate: F1 ≥ 0.90 AND recall ≥ 0.85** for list fields; accuracy ≥ 0.90 for categorical.
+- **Advancement**: best model passes gate → advance (not "all must pass").
+- **Autonomous supervisor daemon is RUNNING** (PID ~671) on a fresh DB, rebuilding v1 baselines
+  across 13 models × 5 fields. Pre-wipe backup at `../DEP/backups/promptlab_prod_20260708_214047.db`.
 - Dashboard + docs are merged to `main` → live on GitHub Pages.
 
 ## Architecture — two loops + governance (do not weaken)
@@ -55,11 +58,13 @@ DEP, scores every model against human-curated ground truth, and improves prompts
   verify with `sh /data/list_sup.sh`; stop with `sh /data/kill_all.sh`.
 
 ## Stop rules / guardrails (don't remove without asking the user)
-- `config.MAX_PRODUCTION_RECORDS = 300`, `config.PRODUCTION_ROLLOUT_STAGES = (100, 200, 300)` —
+- `config.MAX_PRODUCTION_RECORDS = 200`, `config.PRODUCTION_ROLLOUT_STAGES = (100, 200)` —
   `run_extraction.py` clamps `--n` and warns if exceeded.
-- Optimizer: `no_improve_limit` default **4**, `bold_after` **2**, `val_size` **50**, `holdout_size`
-  **30**, `IMPROVEMENT_EPSILON` 0.01. Deterministic (`seed=42`), self-terminating batch jobs.
-- `scoring.GATE_THRESHOLD = 0.90`.
+- Optimizer: `no_improve_limit` default **4**, `bold_after` **2**, `val_size` **50** (clamped to
+  ~35 on 100 GT records), `holdout_size` **30**, `IMPROVEMENT_EPSILON` **0.03** (list fields) /
+  **0.01** (categorical). Deterministic (`seed=42`), self-terminating batch jobs.
+- `scoring.GATE_THRESHOLD = 0.90` (primary); `scoring.RECALL_FLOOR = 0.85` (hard floor for list
+  fields — prevents F1 gaming at the expense of recall).
 
 ## Metrics quick reference
 - **Gate metric** (`app/analytics.gate_metrics`): **F1** for list fields (`authors`,
