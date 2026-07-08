@@ -881,64 +881,59 @@ async def upload_ground_truth(request: Request, project_slug: str, file: UploadF
 
 @app.post("/api/screening/parse-eppi")
 async def parse_eppi(request: Request, file: UploadFile):
-    """Parse an EPPI-Reviewer Excel export. Returns detected record counts and
-    unique exclusion tags (auto-detected from the ta_decision column)."""
+    """Parse an EPPI-Reviewer Excel export."""
     _require_auth(dict(request.headers))
-
-    import tempfile
+    import tempfile, traceback as _tb, re
     import pandas as pd
 
-    raw = await file.read()
-    suffix = ".xlsx" if (file.filename or "").lower().endswith(".xlsx") else ".csv"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(raw)
-        tmp_path = tmp.name
-
     try:
-        df = pd.read_excel(tmp_path, engine="calamine") if suffix == ".xlsx" else pd.read_csv(tmp_path)
-    except Exception as exc:
-        raise HTTPException(422, f"Could not read file: {exc}")
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+        raw = await file.read()
+        suffix = ".xlsx" if (file.filename or "").lower().endswith((".xlsx", ".xls")) else ".csv"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(raw)
+            tmp_path = tmp.name
 
-    # Normalise column names
-    col_map = {c.lower().strip(): c for c in df.columns}
-    decision_col = col_map.get("ta_decision") or col_map.get("decision")
-    id_col = col_map.get("u1") or col_map.get("record_id") or col_map.get("id")
+        try:
+            df = pd.read_excel(tmp_path, engine="calamine") if suffix != ".csv" else pd.read_csv(tmp_path)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
 
-    if decision_col is None:
-        raise HTTPException(422, "Could not find ta_decision column. Expected column name: ta_decision")
+        col_map = {c.lower().strip(): c for c in df.columns}
+        decision_col = col_map.get("ta_decision") or col_map.get("decision")
+        id_col = col_map.get("u1") or col_map.get("record_id") or col_map.get("id")
 
-    decisions = df[decision_col].dropna().str.strip()
-    include_count = int(decisions.str.upper().str.startswith("INCLUDE").sum())
-    exclude_count = int(decisions.str.upper().str.startswith("EXCLUDE").sum())
-    total = len(df)
+        if decision_col is None:
+            raise HTTPException(422, "Could not find ta_decision column.")
 
-    # Extract unique exclusion tags ordered by frequency
-    tag_counts: dict[str, dict] = {}
-    for val in decisions:
-        val = str(val).strip()
-        if val.upper().startswith("EXCLUDE"):
-            rest = val[7:].strip()  # everything after "EXCLUDE "
-            tag = rest.lower().replace(r"[^a-z0-9]+", "_")
-            import re
-            tag = re.sub(r"[^a-z0-9]+", "_", rest.lower()).strip("_")
-            if tag:
-                if tag not in tag_counts:
-                    tag_counts[tag] = {"tag": tag, "label": rest, "count": 0}
-                tag_counts[tag]["count"] += 1
+        decisions = df[decision_col].dropna().astype(str).str.strip()
+        include_count = int(decisions.str.upper().str.startswith("INCLUDE").sum())
+        exclude_count = int(decisions.str.upper().str.startswith("EXCLUDE").sum())
+        total = int(len(df))
 
-    tags = sorted(tag_counts.values(), key=lambda x: -x["count"])
+        tag_counts: dict[str, dict] = {}
+        for val in decisions:
+            if val.upper().startswith("EXCLUDE"):
+                rest = val[7:].strip()
+                tag = re.sub(r"[^a-z0-9]+", "_", rest.lower()).strip("_")
+                if tag:
+                    if tag not in tag_counts:
+                        tag_counts[tag] = {"tag": tag, "label": rest, "count": 0}
+                    tag_counts[tag]["count"] += 1
 
-    return {
-        "total": total,
-        "include_count": include_count,
-        "exclude_count": exclude_count,
-        "tags": tags,
-        "id_col": id_col,
-        "has_abstract": "ab" in col_map or "abstract" in col_map,
-        "has_title": "t1" in col_map or "title" in col_map,
-    }
+        tags = sorted(tag_counts.values(), key=lambda x: -x["count"])
+        return {
+            "total": total,
+            "include_count": include_count,
+            "exclude_count": exclude_count,
+            "tags": tags,
+            "id_col": id_col,
+            "has_abstract": "ab" in col_map or "abstract" in col_map,
+            "has_title": "t1" in col_map or "title" in col_map,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(500, f"parse-eppi error: {_tb.format_exc()}")
 
 
 @app.post("/api/projects/{project_slug}/process-eppi")
