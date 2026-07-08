@@ -6,3 +6,5 @@ rapidfuzz
 fastapi
 uvicorn[standard]
 ecologits
+python-multipart
+pymupdf4llm

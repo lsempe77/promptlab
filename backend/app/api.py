@@ -18,7 +18,7 @@ import secrets
 from collections import defaultdict
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -134,10 +134,23 @@ def health() -> dict:
 
 @app.get("/api/projects")
 def list_projects() -> list[dict]:
-    return [
+    static = [
         {"slug": spec.slug, "name": spec.name, "description": spec.description}
         for spec in PROJECTS.values()
     ]
+    # Also include any projects created via the wizard (stored in DB)
+    try:
+        with db.get_conn() as conn:
+            rows = conn.execute(
+                "SELECT slug, name, description FROM projects WHERE slug NOT IN ({})".format(
+                    ",".join("?" * len(PROJECTS))
+                ),
+                list(PROJECTS.keys()),
+            ).fetchall()
+        db_projects = [{"slug": r["slug"], "name": r["name"], "description": r["description"] or ""} for r in rows]
+    except Exception:
+        db_projects = []
+    return static + db_projects
 
 
 @app.get("/api/projects/{project_slug}/fields")
@@ -623,3 +636,258 @@ def thresholds() -> dict:
         "fuzzy_match_threshold": scoring.FUZZY_MATCH_THRESHOLD,
         "improvement_epsilon": IMPROVEMENT_EPSILON,
     }
+
+
+# ── Project creation & corpus management ─────────────────────────────────────
+
+def _field_type_to_value_type(wizard_type: str) -> str:
+    """Map wizard field type → FieldSpec.value_type."""
+    return {"list": "list_text", "categorical": "single_categorical"}.get(wizard_type, "list_text")
+
+
+def _load_db_project(slug: str) -> "ProjectSpec | None":
+    """Load a dynamically-created project from the DB. Returns None if not found."""
+    from .projects import ProjectSpec
+    from .fields import FieldSpec
+    try:
+        with db.get_conn() as conn:
+            row = conn.execute(
+                "SELECT name, description, project_type, config_json FROM projects WHERE slug = ?",
+                (slug,),
+            ).fetchone()
+        if not row:
+            return None
+        cfg = json.loads(row["config_json"] or "{}")
+        fields_cfg = cfg.get("fields", [])
+        field_specs: dict[str, FieldSpec] = {}
+        for f in fields_cfg:
+            vtype = _field_type_to_value_type(f.get("type", "text"))
+            # Categorical fields may have a taxonomy stored in the config
+            spec = FieldSpec(
+                name=f["name"],
+                label=f.get("label", f["name"]),
+                value_type=vtype,
+                taxonomy_key=None,  # user taxonomy stored separately, not keyed into taxonomy.json
+                description=f.get("description", ""),
+            )
+            field_specs[f["name"]] = spec
+        return ProjectSpec(
+            slug=slug,
+            name=row["name"],
+            description=row["description"] or "",
+            fields=field_specs,
+        )
+    except Exception:
+        return None
+
+
+# Monkey-patch _project_or_404 to include DB lookup
+_orig_project_or_404 = _project_or_404
+
+
+def _project_or_404(project_slug: str):  # type: ignore[redefinition]
+    if project_slug in PROJECTS:
+        return PROJECTS[project_slug]
+    p = _load_db_project(project_slug)
+    if p:
+        return p
+    raise HTTPException(status_code=404, detail=f"Unknown project: {project_slug!r}")
+
+
+class CreateProjectBody(BaseModel):
+    name: str
+    slug: str
+    description: str = ""
+    project_type: str = "extraction"  # extraction | screening_ta | screening_ft
+    password: str = ""
+    config: dict = {}
+
+
+@app.post("/api/projects")
+async def create_project(request: Request, body: CreateProjectBody):
+    """Create a new project from the onboarding wizard."""
+    _require_auth(dict(request.headers))
+
+    # Basic slug validation
+    import re
+    if not re.match(r'^[a-z0-9][a-z0-9\-]{1,60}$', body.slug):
+        raise HTTPException(400, "Slug must be lowercase alphanumeric + hyphens, 2-61 chars.")
+
+    # Optional password hash
+    pw_hash: str | None = None
+    if body.password:
+        import hashlib
+        pw_hash = hashlib.sha256(body.password.encode()).hexdigest()
+
+    with db.get_conn() as conn:
+        existing = conn.execute("SELECT id FROM projects WHERE slug = ?", (body.slug,)).fetchone()
+        if existing:
+            raise HTTPException(409, f"Project slug '{body.slug}' already exists.")
+        conn.execute(
+            "INSERT INTO projects (slug, name, description, project_type, config_json, password_hash, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (body.slug, body.name, body.description, body.project_type,
+             json.dumps(body.config), pw_hash, db.now()),
+        )
+        project_id = conn.execute("SELECT id FROM projects WHERE slug = ?", (body.slug,)).fetchone()["id"]
+
+        # Create baseline prompt version for each field
+        fields_cfg = body.config.get("fields", [])
+        for f in fields_cfg:
+            existing_pv = conn.execute(
+                "SELECT id FROM prompt_versions WHERE project_id = ? AND field_name = ? AND model_id IS NULL",
+                (project_id, f["name"]),
+            ).fetchone()
+            if not existing_pv:
+                conn.execute(
+                    "INSERT INTO prompt_versions (project_id, field_name, model_id, version, template, "
+                    "parent_id, notes, accepted, created_at) VALUES (?, ?, NULL, 1, ?, NULL, 'baseline v1', 1, ?)",
+                    (project_id, f["name"], f.get("description", ""), db.now()),
+                )
+
+    # Create corpus directory
+    corpus_dir = config.PROJECTS_DATA_DIR / body.slug / "corpus"
+    corpus_dir.mkdir(parents=True, exist_ok=True)
+
+    return {"slug": body.slug, "project_id": project_id, "status": "created"}
+
+
+@app.post("/api/projects/{project_slug}/corpus")
+async def upload_corpus(request: Request, project_slug: str, files: list[UploadFile]):
+    """Upload corpus files (PDF or markdown). PDFs are converted to markdown."""
+    _require_auth(dict(request.headers))
+    _project_or_404(project_slug)
+
+    corpus_dir = config.PROJECTS_DATA_DIR / project_slug / "corpus"
+    corpus_dir.mkdir(parents=True, exist_ok=True)
+
+    with db.get_conn() as conn:
+        project_id = db.get_project_id(conn, project_slug)
+
+    saved: list[dict] = []
+    errors: list[dict] = []
+
+    for upload in files:
+        stem = Path(upload.filename or "unnamed").stem
+        raw = await upload.read()
+
+        if (upload.filename or "").lower().endswith(".pdf"):
+            try:
+                import tempfile, pymupdf4llm  # type: ignore
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                    tmp.write(raw)
+                    tmp_path = tmp.name
+                md_text = pymupdf4llm.to_markdown(tmp_path)
+                Path(tmp_path).unlink(missing_ok=True)
+            except Exception as exc:
+                errors.append({"file": upload.filename, "error": f"PDF conversion failed: {exc}"})
+                continue
+        else:
+            md_text = raw.decode("utf-8", errors="replace")
+
+        out_path = corpus_dir / f"{stem}.md"
+        out_path.write_text(md_text, encoding="utf-8")
+
+        # Register record in DB (use stem as record_id placeholder)
+        with db.get_conn() as conn:
+            # Use a hash of the filename as a stable integer record_id
+            record_id = abs(hash(stem)) % (2**31)
+            conn.execute(
+                "INSERT OR IGNORE INTO records (project_id, id, title, md_path) VALUES (?, ?, ?, ?)",
+                (project_id, record_id, stem, str(out_path)),
+            )
+        saved.append({"file": upload.filename, "record_id": record_id, "md_path": str(out_path)})
+
+    return {"saved": len(saved), "errors": errors, "records": saved}
+
+
+@app.post("/api/projects/{project_slug}/ground-truth")
+async def upload_ground_truth(request: Request, project_slug: str, file: UploadFile):
+    """Upload a CSV of ground-truth labels into the ground_truth table."""
+    _require_auth(dict(request.headers))
+    _project_or_404(project_slug)
+
+    import csv, io
+    text = (await file.read()).decode("utf-8", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    headers = reader.fieldnames or []
+
+    is_screening = "decision" in headers
+    if is_screening:
+        required = {"record_id", "decision"}
+    else:
+        required = {"record_id", "field_name", "value"}
+
+    missing = required - set(headers)
+    if missing:
+        raise HTTPException(422, f"CSV missing required columns: {sorted(missing)}")
+
+    with db.get_conn() as conn:
+        project_id = db.get_project_id(conn, project_slug)
+        inserted = skipped = 0
+        for row in reader:
+            rid_raw = row.get("record_id", "").strip()
+            if not rid_raw:
+                continue
+            try:
+                record_id = int(rid_raw)
+            except ValueError:
+                record_id = abs(hash(rid_raw)) % (2**31)
+
+            if is_screening:
+                field_name = "screening_decision"
+                value = json.dumps({
+                    "decision": row.get("decision", "").strip().upper(),
+                    "exclusion_tag": row.get("exclusion_tag", "").strip(),
+                })
+            else:
+                field_name = row.get("field_name", "").strip()
+                raw_val = row.get("value", "").strip()
+                # Pipe-separated → list
+                value = json.dumps([v.strip() for v in raw_val.split("|")] if "|" in raw_val else raw_val)
+
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO ground_truth (project_id, record_id, field_name, value_json) "
+                    "VALUES (?, ?, ?, ?)",
+                    (project_id, record_id, field_name, value),
+                )
+                inserted += 1
+            except Exception:
+                skipped += 1
+
+    return {"inserted": inserted, "skipped": skipped}
+
+
+@app.post("/api/projects/{project_slug}/launch")
+async def launch_extraction(request: Request, project_slug: str):
+    """Kick off the first extraction run for a newly created project."""
+    _require_auth(dict(request.headers))
+    project = _project_or_404(project_slug)
+
+    import subprocess, sys
+    cfg = {}
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT config_json FROM projects WHERE slug = ?", (project_slug,)).fetchone()
+        if row and row["config_json"]:
+            cfg = json.loads(row["config_json"])
+
+    selected_models = cfg.get("selected_models", [])
+    if not selected_models:
+        raise HTTPException(400, "No models selected. Add selected_models to project config.")
+
+    jobs = []
+    for field_name in project.fields:
+        for model_id in selected_models:
+            cmd = [
+                sys.executable, "-m", "backend.scripts.run_extraction",
+                "--project", project_slug,
+                "--field", field_name,
+                "--models", model_id,
+                "--n", "100",
+            ]
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            jobs.append({"field": field_name, "model": model_id, "pid": proc.pid})
+
+    return {"launched": len(jobs), "jobs": jobs}
+

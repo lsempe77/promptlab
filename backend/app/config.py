@@ -47,6 +47,11 @@ OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.
 MAX_PRODUCTION_RECORDS = 300
 PRODUCTION_ROLLOUT_STAGES = (100, 200, 300)
 
+# Directory for user-created project corpora (separate from the DEP corpus).
+# Mirrors where the DB lives: /data/projects/{slug}/corpus/ on Fly.
+_data_dir = Path(os.environ.get("DEP_DB_PATH", str(Path(__file__).resolve().parents[1] / "data" / "promptlab.db"))).parent
+PROJECTS_DATA_DIR = _data_dir / "projects"
+
 
 def load_models() -> list[dict]:
     """Return the configured model roster (see models.yaml), flattened to a
