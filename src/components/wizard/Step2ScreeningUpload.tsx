@@ -30,6 +30,7 @@ export default function Step2ScreeningUpload({ state, update, onNext, onBack, to
     new Set(state.exclusionCriteria.map((c) => c.tag))
   );
   const [suggesting, setSuggesting] = useState<string | null>(null);
+  const [detectedDecisionCol, setDetectedDecisionCol] = useState<string | null>(null);
 
   const screeningLabel = state.projectType === "screening_ta" ? "Title & Abstract" : "Full-Text";
 
@@ -52,6 +53,7 @@ export default function Step2ScreeningUpload({ state, update, onNext, onBack, to
       const data = await res.json();
       setDetectedTags(data.tags);
       setSelectedTags(new Set(data.tags.map((t: DetectedTag) => t.tag)));
+      setDetectedDecisionCol(data.decision_col || null);
       update({
         screeningFile: file,
         screeningRecordCount: data.total,
@@ -157,6 +159,11 @@ export default function Step2ScreeningUpload({ state, update, onNext, onBack, to
             <span className="count-pill include">✓ {state.screeningIncludeCount} INCLUDE</span>
             <span className="count-pill exclude">✕ {state.screeningExcludeCount} EXCLUDE</span>
             <span className="count-pill total">= {state.screeningRecordCount} total</span>
+            {detectedDecisionCol && (
+              <span className="count-pill" style={{ background: "#f0fdf4", color: "#166534" }}>
+                decision column: <code>{detectedDecisionCol}</code>
+              </span>
+            )}
           </div>
         </div>
         <p className="step-subtitle">

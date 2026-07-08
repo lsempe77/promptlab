@@ -975,12 +975,45 @@ async def parse_eppi(request: Request, file: UploadFile):
             Path(tmp_path).unlink(missing_ok=True)
 
         col_map = {c.lower().strip(): c for c in df.columns}
-        decision_col = col_map.get("ta_decision") or col_map.get("decision")
-        id_col = col_map.get("u1") or col_map.get("record_id") or col_map.get("id")
+
+        # --- Decision column detection (robust, column-name-independent) ---
+        # 1. Try common EPPI export names (case-insensitive)
+        _KNOWN_DECISION_NAMES = [
+            "ta_decision", "ft_decision", "decision", "screening_decision",
+            "include_exclude", "status", "screen_decision",
+        ]
+        decision_col: str | None = None
+        for name in _KNOWN_DECISION_NAMES:
+            if name in col_map:
+                decision_col = col_map[name]
+                break
+
+        # 2. Fallback: scan every column for one whose values are mostly INCLUDE/EXCLUDE
+        if decision_col is None:
+            best_col, best_score = None, 0.4  # require >40% match to avoid false positives
+            for col in df.columns:
+                try:
+                    vals = df[col].dropna().astype(str).str.upper()
+                    if len(vals) < 2:
+                        continue
+                    score = (vals.str.startswith("INCLUDE") | vals.str.startswith("EXCLUDE")).sum() / len(vals)
+                    if score > best_score:
+                        best_score, best_col = score, col
+                except Exception:
+                    continue
+            decision_col = best_col
 
         if decision_col is None:
-            raise HTTPException(422, "Could not find ta_decision column.")
+            all_cols = list(df.columns)
+            raise HTTPException(
+                422,
+                f"Could not detect the screening decision column. "
+                f"Available columns: {all_cols}. "
+                f"Rename your decision column to 'ta_decision' (TA) or 'ft_decision' (FT)."
+            )
+        # ----------------------------------------------------------------
 
+        id_col = col_map.get("u1") or col_map.get("record_id") or col_map.get("id") or col_map.get("eppi_id")
         decisions = df[decision_col].dropna().astype(str).str.strip()
         include_count = int(decisions.str.upper().str.startswith("INCLUDE").sum())
         exclude_count = int(decisions.str.upper().str.startswith("EXCLUDE").sum())
@@ -1002,6 +1035,7 @@ async def parse_eppi(request: Request, file: UploadFile):
             "include_count": include_count,
             "exclude_count": exclude_count,
             "tags": tags,
+            "decision_col": decision_col,   # tell the UI which column was detected
             "id_col": id_col,
             "has_abstract": "ab" in col_map or "abstract" in col_map,
             "has_title": "t1" in col_map or "title" in col_map,
