@@ -29,7 +29,6 @@ from backend.app import config, db, gateway, scoring  # noqa: E402
 from backend.app import carbon  # noqa: E402
 from backend.app.corpus import read_md  # noqa: E402
 from backend.app.parsing import ParseError, parse_json_object  # noqa: E402
-from backend.app.prompt_store import get_or_create_baseline  # noqa: E402
 
 SYSTEM_PROMPT = (
     "You are screening papers for a systematic review. You will be given a paper's title and "
@@ -179,12 +178,30 @@ def run_screening(
         ).fetchall():
             gt_map[row["record_id"]] = row["value_json"]
 
-        # Get / create baseline prompt version for the screening_decision "field"
-        pv = get_or_create_baseline(conn, project_id, field_name)
-        if pv is None:
-            print("Could not create baseline prompt version.", file=sys.stderr)
-            sys.exit(1)
-        pv_id = pv["id"]
+        # Get or create a prompt_version for the screening_decision "field".
+        # We can't use get_or_create_baseline because screening_decision is not
+        # in BASELINE_INSTRUCTIONS.  Instead look for an existing one or create
+        # a minimal record that links all screening runs for this project.
+        pv_row = conn.execute(
+            "SELECT id FROM prompt_versions "
+            "WHERE project_id = ? AND field_name = 'screening_decision' AND model_id IS NULL "
+            "ORDER BY version DESC LIMIT 1",
+            (project_id,),
+        ).fetchone()
+        if pv_row:
+            pv_id = pv_row["id"]
+        else:
+            conn.execute(
+                "INSERT INTO prompt_versions "
+                "(project_id, field_name, model_id, version, template, parent_id, notes, accepted, created_at) "
+                "VALUES (?, 'screening_decision', NULL, 1, ?, NULL, 'screening baseline v1', 1, ?)",
+                (project_id, json.dumps([c.get("question") for c in criteria]), db.now()),
+            )
+            pv_id = conn.execute(
+                "SELECT id FROM prompt_versions "
+                "WHERE project_id = ? AND field_name = 'screening_decision' ORDER BY id DESC LIMIT 1",
+                (project_id,),
+            ).fetchone()["id"]
 
     print(f"Screening project: {project_slug} ({project_type})")
     print(f"Records: {len(all_records)} | Criteria: {len(criteria)} | Models: {model_ids}")
@@ -251,7 +268,7 @@ def run_screening(
                     n_errors += 1
                     continue
 
-                parsed_value = json.dumps({"decision": decision, "tag": tag})
+                parsed_value_dict = {"decision": decision, "tag": tag}
 
                 # Score against ground truth
                 gt_val = gt_map.get(record_id)
@@ -265,7 +282,8 @@ def run_screening(
                 db.add_run(
                     conn, project_id=project_id, prompt_version_id=pv_id,
                     model_id=model_id, record_id=record_id, field_name=field_name,
-                    batch_id=batch_id, raw_response=resp.content, parsed_value=parsed_value,
+                    batch_id=batch_id, raw_response=resp.content,
+                    parsed_value=parsed_value_dict,  # add_run does json.dumps() on this
                     excerpt=excerpt, notes=notes,
                     excerpt_verified=excerpt_verified,
                     score=score, honesty_score=score, is_correct=is_correct,
