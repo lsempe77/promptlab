@@ -43,7 +43,7 @@ export interface WizardState {
   groundTruthFile: File | null;
 
   // Step 5
-  modelTiers: ("cheap" | "mid" | "expensive")[];
+  selectedModels: string[];
 }
 
 export const WIZARD_STEPS = [

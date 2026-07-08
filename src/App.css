@@ -415,6 +415,44 @@ body {
 .btn-launch:hover:not(:disabled) { background: #15803d; }
 .btn-launch:disabled { opacity: 0.5; cursor: default; }
 
+/* ── Model picker ── */
+.model-picker-section { display: flex; flex-direction: column; gap: 10px; }
+.model-picker-header { display: flex; align-items: baseline; justify-content: space-between; }
+.picker-title { margin: 0; font-size: 0.95rem; }
+.picker-hint { font-size: 0.82rem; color: var(--text-muted); }
+.model-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.model-card {
+  display: flex; flex-direction: column; gap: 4px; text-align: left;
+  padding: 10px; border: 2px solid var(--border); border-radius: 8px;
+  background: none; cursor: pointer; position: relative;
+  transition: border-color 0.12s, background 0.12s;
+}
+.model-card.selected { border-color: var(--accent); background: #eff6ff; }
+.model-card.recommended:not(.selected) { border-color: #fbbf24; }
+.model-card:hover:not(.selected) { border-color: #94a3b8; background: var(--surface, #f8fafc); }
+.model-badge {
+  font-size: 0.68rem; color: #92400e; background: #fef3c7;
+  padding: 1px 6px; border-radius: 99px; align-self: flex-start; margin-bottom: 2px;
+}
+.model-card-top { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.model-name { font-size: 0.82rem; font-weight: 700; }
+.model-tier-chip { font-size: 0.72rem; font-weight: 700; padding: 1px 5px; border-radius: 4px; }
+.model-provider { font-size: 0.74rem; color: var(--text-muted); }
+.model-metrics { display: flex; gap: 8px; font-size: 0.74rem; color: var(--text-muted); }
+.model-metrics strong { color: var(--text); }
+.model-note { font-size: 0.72rem; color: var(--text-muted); font-style: italic; }
+
+/* ── Login modal ── */
+.login-modal {
+  background: var(--bg, #fff); border-radius: 12px;
+  width: 100%; max-width: 420px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.22); overflow: hidden;
+}
+.login-form { padding: 20px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
+.login-subtitle { margin: 0; font-size: 0.88rem; color: var(--text-muted); }
+.login-domain-warn { font-size: 0.78rem; color: #dc2626; font-weight: 400; margin-top: 2px; }
+.login-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+
 .about-steps {
   padding-left: 20px;
   display: flex;

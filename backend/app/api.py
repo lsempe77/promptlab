@@ -13,11 +13,14 @@ or:
 from __future__ import annotations
 
 import json
+import os
+import secrets
 from collections import defaultdict
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from . import analytics, config, db, scoring
 from .projects import PROJECTS
@@ -41,6 +44,44 @@ def _project_or_404(project_slug: str):
     if project_slug not in PROJECTS:
         raise HTTPException(status_code=404, detail=f"Unknown project: {project_slug!r}")
     return PROJECTS[project_slug]
+
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+# Simple org-domain + shared-password gate for write operations (project
+# creation). Read endpoints remain public. The shared password is stored as
+# the PROMPTLAB_PASSWORD env var on Fly (never committed to source).
+_ALLOWED_DOMAIN = "@3ieimpact.org"
+_TOKENS: set[str] = set()  # in-memory; clears on restart (by design for a single-machine tool)
+
+
+class AuthRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/api/auth/token")
+def auth_token(body: AuthRequest):
+    """Issue a short-lived opaque token for a verified @3ieimpact.org email + shared password."""
+    if not body.email.lower().endswith(_ALLOWED_DOMAIN):
+        raise HTTPException(status_code=401, detail="Email must be a @3ieimpact.org address.")
+    env_password = os.environ.get("PROMPTLAB_PASSWORD", "")
+    if not env_password:
+        raise HTTPException(status_code=503, detail="PROMPTLAB_PASSWORD env var not set on this server.")
+    if not secrets.compare_digest(body.password, env_password):
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+    token = secrets.token_urlsafe(32)
+    _TOKENS.add(token)
+    return {"token": token}
+
+
+def _require_auth(request_headers) -> None:
+    """Dependency helper for write endpoints: validates Bearer token."""
+    auth = request_headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    token = auth.removeprefix("Bearer ").strip()
+    if token not in _TOKENS:
+        raise HTTPException(status_code=401, detail="Invalid or expired token. Please sign in again.")
 
 
 def _field_or_404(project_slug: str, field_name: str) -> None:

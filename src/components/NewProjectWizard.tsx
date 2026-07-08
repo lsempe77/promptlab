@@ -7,6 +7,7 @@ import Step2ExclusionCriteria from "./wizard/Step2ExclusionCriteria";
 import Step3CorpusUpload from "./wizard/Step3CorpusUpload";
 import Step4GroundTruth from "./wizard/Step4GroundTruth";
 import Step5Launch from "./wizard/Step5Launch";
+import LoginModal from "./LoginModal";
 
 interface Props {
   onClose: () => void;
@@ -24,7 +25,7 @@ const EMPTY: WizardState = {
   maybeStrategy: "cross_model",
   corpusFiles: [],
   groundTruthFile: null,
-  modelTiers: ["cheap", "mid", "expensive"],
+  selectedModels: ["~anthropic/claude-sonnet-latest", "~openai/gpt-mini-latest", "deepseek/deepseek-v4-flash"],
 };
 
 const STEP_LABELS: Record<WizardStepKey, string> = {
@@ -40,6 +41,14 @@ export default function NewProjectWizard({ onClose, onProjectCreated }: Props) {
   const [currentStep, setCurrentStep] = useState<WizardStepKey>("project");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(
+    () => sessionStorage.getItem("promptlab_token")
+  );
+
+  // Show login gate first if no valid token
+  if (!token) {
+    return <LoginModal onSuccess={setToken} onCancel={onClose} />;
+  }
 
   const stepKeys = WIZARD_STEPS.map((s) => s.key);
   const currentIdx = stepKeys.indexOf(currentStep);
@@ -61,7 +70,10 @@ export default function NewProjectWizard({ onClose, onProjectCreated }: Props) {
     try {
       const res = await fetch("/api/projects", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           name: state.projectName,
           slug: state.projectSlug,
@@ -72,7 +84,7 @@ export default function NewProjectWizard({ onClose, onProjectCreated }: Props) {
             fields: state.fields,
             exclusion_criteria: state.exclusionCriteria,
             maybe_strategy: state.maybeStrategy,
-            model_tiers: state.modelTiers,
+            selected_models: state.selectedModels,
           },
         }),
       });
