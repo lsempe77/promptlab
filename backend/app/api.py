@@ -731,18 +731,38 @@ async def create_project(request: Request, body: CreateProjectBody):
         )
         project_id = conn.execute("SELECT id FROM projects WHERE slug = ?", (body.slug,)).fetchone()["id"]
 
-        # Create baseline prompt version for each field
+        # Create baseline prompt version for each field/criterion.
+        # Extraction: fields list  →  each field description becomes the v1 template.
+        # Screening: exclusion_criteria list  →  each criterion's yes/no question becomes
+        #   the v1 template for a field named after the tag (e.g. "on_topic_interest").
         fields_cfg = body.config.get("fields", [])
-        for f in fields_cfg:
-            existing_pv = conn.execute(
+        criteria_cfg = body.config.get("exclusion_criteria", [])
+
+        def _upsert_pv(project_id: int, field_name: str, template: str, notes: str) -> None:
+            existing = conn.execute(
                 "SELECT id FROM prompt_versions WHERE project_id = ? AND field_name = ? AND model_id IS NULL",
-                (project_id, f["name"]),
+                (project_id, field_name),
             ).fetchone()
-            if not existing_pv:
+            if not existing:
                 conn.execute(
                     "INSERT INTO prompt_versions (project_id, field_name, model_id, version, template, "
-                    "parent_id, notes, accepted, created_at) VALUES (?, ?, NULL, 1, ?, NULL, 'baseline v1', 1, ?)",
-                    (project_id, f["name"], f.get("description", ""), db.now()),
+                    "parent_id, notes, accepted, created_at) VALUES (?, ?, NULL, 1, ?, NULL, ?, 1, ?)",
+                    (project_id, field_name, template, notes, db.now()),
+                )
+
+        for f in fields_cfg:
+            _upsert_pv(project_id, f["name"], f.get("description", ""), "baseline v1")
+
+        for c in criteria_cfg:
+            # Use the tag as the field_name; the yes/no question is the template.
+            tag = c.get("tag", "").strip()
+            question = c.get("question", "").strip()
+            label = c.get("label", tag)
+            order = c.get("order", 0)
+            if tag and question:
+                _upsert_pv(
+                    project_id, tag, question,
+                    f"baseline v1 (screening criterion {order}: {label})"
                 )
 
     # Create corpus directory
