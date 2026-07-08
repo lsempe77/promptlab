@@ -47,12 +47,57 @@ def _project_or_404(project_slug: str):
     return PROJECTS[project_slug]
 
 
-# ── Auth ─────────────────────────────────────────────────────────────────────
-# Simple org-domain + shared-password gate for write operations (project
-# creation). Read endpoints remain public. The shared password is stored as
-# the PROMPTLAB_PASSWORD env var on Fly (never committed to source).
+# ── Auth — JWT (HS256, stdlib only) ─────────────────────────────────────────
+# Tokens are signed with JWT_SECRET (Fly secret). No server-side storage →
+# survives machine restarts and redeploys without invalidating sessions.
+# PROMPTLAB_PASSWORD is the shared write-password for @3ieimpact.org users.
 _ALLOWED_DOMAIN = "@3ieimpact.org"
-_TOKENS: set[str] = set()  # in-memory; clears on restart (by design for a single-machine tool)
+_JWT_TTL_HOURS = 72  # token valid for 3 days
+
+
+def _jwt_secret() -> bytes:
+    s = os.environ.get("JWT_SECRET", "")
+    if not s:
+        # Fall back to the password itself so the system still works if
+        # JWT_SECRET hasn't been set yet (tokens won't survive password changes).
+        s = os.environ.get("PROMPTLAB_PASSWORD", "insecure-dev-secret")
+    return s.encode()
+
+
+def _make_jwt(email: str) -> str:
+    import base64, hmac as _hmac, hashlib, time as _time
+    header = base64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b"=").decode()
+    payload_data = json.dumps({"sub": email, "exp": int(_time.time()) + _JWT_TTL_HOURS * 3600}, separators=(",", ":"))
+    payload = base64.urlsafe_b64encode(payload_data.encode()).rstrip(b"=").decode()
+    sig_input = f"{header}.{payload}".encode()
+    sig = base64.urlsafe_b64encode(
+        _hmac.new(_jwt_secret(), sig_input, hashlib.sha256).digest()
+    ).rstrip(b"=").decode()
+    return f"{header}.{payload}.{sig}"
+
+
+def _verify_jwt(token: str) -> str:
+    """Verify signature + expiry. Returns the email subject or raises HTTPException."""
+    import base64, hmac as _hmac, hashlib, time as _time
+    try:
+        header, payload, sig = token.split(".")
+    except ValueError:
+        raise HTTPException(401, "Invalid token format.")
+    # Pad base64 as needed
+    def _decode(s: str) -> bytes:
+        return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+    expected_sig = base64.urlsafe_b64encode(
+        _hmac.new(_jwt_secret(), f"{header}.{payload}".encode(), hashlib.sha256).digest()
+    ).rstrip(b"=").decode()
+    if not secrets.compare_digest(sig, expected_sig):
+        raise HTTPException(401, "Invalid or expired token. Please sign in again.")
+    try:
+        data = json.loads(_decode(payload))
+    except Exception:
+        raise HTTPException(401, "Malformed token payload.")
+    if data.get("exp", 0) < _time.time():
+        raise HTTPException(401, "Token expired. Please sign in again.")
+    return data.get("sub", "")
 
 
 class AuthRequest(BaseModel):
@@ -62,7 +107,8 @@ class AuthRequest(BaseModel):
 
 @app.post("/api/auth/token")
 def auth_token(body: AuthRequest):
-    """Issue a short-lived opaque token for a verified @3ieimpact.org email + shared password."""
+    """Issue a signed JWT for a verified @3ieimpact.org email + shared password.
+    Token is valid for 72 hours and survives server restarts."""
     if not body.email.lower().endswith(_ALLOWED_DOMAIN):
         raise HTTPException(status_code=401, detail="Email must be a @3ieimpact.org address.")
     env_password = os.environ.get("PROMPTLAB_PASSWORD", "")
@@ -70,19 +116,15 @@ def auth_token(body: AuthRequest):
         raise HTTPException(status_code=503, detail="PROMPTLAB_PASSWORD env var not set on this server.")
     if not secrets.compare_digest(body.password, env_password):
         raise HTTPException(status_code=401, detail="Incorrect password.")
-    token = secrets.token_urlsafe(32)
-    _TOKENS.add(token)
-    return {"token": token}
+    return {"token": _make_jwt(body.email)}
 
 
 def _require_auth(request_headers) -> None:
-    """Dependency helper for write endpoints: validates Bearer token."""
+    """Validate Bearer JWT on write endpoints."""
     auth = request_headers.get("authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Authentication required.")
-    token = auth.removeprefix("Bearer ").strip()
-    if token not in _TOKENS:
-        raise HTTPException(status_code=401, detail="Invalid or expired token. Please sign in again.")
+    _verify_jwt(auth.removeprefix("Bearer ").strip())
 
 
 def _field_or_404(project_slug: str, field_name: str) -> None:
