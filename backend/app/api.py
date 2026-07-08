@@ -933,15 +933,16 @@ async def suggest_screening_question(request: Request):
         raise HTTPException(400, "label is required")
 
     system = (
-        "You help systematic review teams write screening questions for LLM-assisted title/abstract screening. "
-        "Given an exclusion criterion label from EPPI-Reviewer, write a single clear yes/no question that an LLM "
-        "can answer from a paper's title and abstract alone. "
-        "Rules: start with 'Is' or 'Does'; be specific; answerable from title+abstract only; one sentence."
+        "You help systematic review teams write title/abstract screening questions for LLM-assisted screening. "
+        "You are given an exclusion criterion label (the reason a paper gets excluded in EPPI-Reviewer). "
+        "Write a single, precise yes/no question that an LLM can answer from a paper's title and abstract alone. "
+        "The question asks whether the paper SHOULD BE EXCLUDED for this reason — answer YES means exclude. "
+        "Rules: (1) start with 'Is' or 'Does'; (2) one sentence only; "
+        "(3) answerable from title+abstract; (4) do NOT use the project name in the question text."
     )
     user = (
-        f"Exclusion criterion: \"{label}\"\n"
-        f"Systematic review: {project_name or 'not specified'}\n\n"
-        "Write ONLY the yes/no question, nothing else."
+        f"Exclusion criterion label: \"{label}\"\n\n"
+        "Write ONLY the yes/no question. YES = paper should be excluded for this reason."
     )
     try:
         resp = gateway.call_model(
