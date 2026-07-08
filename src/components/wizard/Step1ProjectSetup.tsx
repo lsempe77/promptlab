@@ -41,7 +41,7 @@ const PROJECT_TYPES: { value: ProjectType; icon: string; title: string; descript
 
 export default function Step1ProjectSetup({ state, update, onNext }: Props) {
   const canContinue =
-    state.projectName.trim().length >= 3 &&
+    state.projectName.trim().length >= 2 &&
     state.projectSlug.length >= 2 &&
     state.projectType !== null;
 
