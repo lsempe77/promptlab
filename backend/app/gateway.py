@@ -45,7 +45,7 @@ def call_model(
     user_prompt: str,
     *,
     temperature: float = 0.0,
-    max_tokens: int = 1024,
+    max_tokens: int = 2048,
     json_mode: bool = True,
     logprobs: bool = False,
     timeout: float = 60.0,
