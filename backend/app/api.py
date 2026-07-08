@@ -922,6 +922,38 @@ async def upload_ground_truth(request: Request, project_slug: str, file: UploadF
     return {"inserted": inserted, "skipped": skipped}
 
 
+@app.post("/api/screening/suggest-question")
+async def suggest_screening_question(request: Request):
+    """Use an LLM to generate a good yes/no screening question for an exclusion criterion."""
+    _require_auth(dict(request.headers))
+    body = await request.json()
+    label = str(body.get("label", "")).strip()
+    project_name = str(body.get("project_name", "")).strip()
+    if not label:
+        raise HTTPException(400, "label is required")
+
+    system = (
+        "You help systematic review teams write screening questions for LLM-assisted title/abstract screening. "
+        "Given an exclusion criterion label from EPPI-Reviewer, write a single clear yes/no question that an LLM "
+        "can answer from a paper's title and abstract alone. "
+        "Rules: start with 'Is' or 'Does'; be specific; answerable from title+abstract only; one sentence."
+    )
+    user = (
+        f"Exclusion criterion: \"{label}\"\n"
+        f"Systematic review: {project_name or 'not specified'}\n\n"
+        "Write ONLY the yes/no question, nothing else."
+    )
+    try:
+        resp = gateway.call_model(
+            "~openai/gpt-mini-latest", system, user,
+            temperature=0.3, max_tokens=120, json_mode=False,
+        )
+        question = (resp.content or "").strip().strip('"').strip("'")
+        return {"question": question}
+    except gateway.GatewayError as exc:
+        raise HTTPException(503, f"LLM call failed: {exc}")
+
+
 @app.post("/api/screening/parse-eppi")
 async def parse_eppi(request: Request, file: UploadFile):
     """Parse an EPPI-Reviewer Excel export."""
