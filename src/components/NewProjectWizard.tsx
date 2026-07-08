@@ -94,6 +94,7 @@ export default function NewProjectWizard({ onClose, onProjectCreated }: Props) {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
+        if (res.status === 401) sessionStorage.removeItem("promptlab_token");
         throw new Error(body.detail || `Server error ${res.status}`);
       }
 

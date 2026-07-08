@@ -38,6 +38,9 @@ export default function Step2ScreeningUpload({ state, update, onNext, onBack, to
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          sessionStorage.removeItem("promptlab_token");
+        }
         throw new Error(err.detail || `Server error ${res.status}`);
       }
       const data = await res.json();
