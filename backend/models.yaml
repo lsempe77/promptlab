@@ -1,46 +1,19 @@
-# Roster of OpenRouter models to compare, spanning free -> expensive tiers.
-#
-# Where available, paid entries use OpenRouter's "latest model resolution" aliases
-# (`~author/family-latest`, note the required leading `~` — it's part of the literal
-# model id, not a URL scheme) instead of a version-pinned slug, so the roster picks up
-# the newest release per family automatically instead of going stale.
-# See: https://openrouter.ai/docs/guides/routing/routers/latest-resolution
-#
-# Confirmed available `~...-latest` aliases as of 2026-07-04 (checked against the live
-# `GET /api/v1/models` catalog): anthropic/claude-opus-latest, claude-sonnet-latest,
-# claude-haiku-latest; openai/gpt-latest, gpt-mini-latest; google/gemini-pro-latest,
-# gemini-flash-latest; moonshotai/kimi-latest. No latest-alias exists yet for
-# xAI/Grok, Z.ai/GLM, Mistral, DeepSeek, Qwen, or Meta-Llama, so those stay pinned to
-# their current newest concrete release and should be refreshed by hand periodically.
-#
-# `id` must be a valid OpenRouter model slug (see https://openrouter.ai/models or
-# GET https://openrouter.ai/api/v1/models). Tier labels are just for grouping/reporting,
-# they don't affect behavior.
+﻿# Roster of OpenRouter models to compare.
+# Revised 2026-07-08: retired 6 broken/weak models after first full run:
+#   glm-4.7-flash    -- 96-100% error rate (json_object mode broken)
+#   gemini-pro-latest -- 54% error rate on authors, 0.075 F1
+#   kimi-k2.5         -- 25-36% errors, consistently weak
+#   kimi-latest       -- 40-59% errors, unstable
+#   llama-4-scout     -- 0.05-0.10 below top models, marginal value
+# Remaining 13 models span 3 tiers; each lab has 1-2 representatives.
 
-free:
-  - meta-llama/llama-3.3-70b-instruct:free
-  - openai/gpt-oss-20b:free
-  - qwen/qwen3-coder:free
-  - google/gemma-4-26b-a4b-it:free
-  - poolside/laguna-xs-2.1:free
-
-# Balanced roster: ~2 models per lab (a small + a bigger sibling), so each lab is
-# tested at two capability points. Tiers reflect REAL cost (prompt $/1M checked
-# against the live OpenRouter catalog on 2026-07-06), NOT marketing labels.
-# claude-opus dropped as dominated (same ~73% accuracy as the cheap models at
-# ~70x the cost). Grok excluded (no cheap tier). Open-weight small models
-# (Qwen/Llama/Mistral/GLM/DeepSeek) are 10-100x cheaper per token than the
-# premium APIs, so breadth here barely moves the budget.
 cheap:
   - "~openai/gpt-mini-latest"
   - "~anthropic/claude-haiku-latest"
   - "~google/gemini-flash-latest"
   - deepseek/deepseek-v4-flash
   - qwen/qwen3-30b-a3b-instruct-2507
-  - meta-llama/llama-4-scout
   - mistralai/mistral-small-3.2-24b-instruct
-  - z-ai/glm-4.7-flash
-  - moonshotai/kimi-k2.5
 
 mid:
   - "~anthropic/claude-sonnet-latest"
@@ -49,8 +22,6 @@ mid:
   - meta-llama/llama-4-maverick
   - mistralai/mistral-medium-3-5
   - z-ai/glm-5.2
-  - "~moonshotai/kimi-latest"
 
 expensive:
   - "~openai/gpt-latest"
-  - "~google/gemini-pro-latest"

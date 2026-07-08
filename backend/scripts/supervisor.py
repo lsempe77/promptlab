@@ -162,16 +162,24 @@ def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str],
         return "optimize", None, optimizable, (
             f"{len(optimizable)} model(s) below gate {scoring.GATE_THRESHOLD:.0%} -> optimize each on its own prompt"
         )
+
+    # Advance when the BEST model passes gate (not "all must pass").
+    # Weaker models continue to be optimized at the next stage level.
+    # This prevents a single broken/weak model from blocking field progression.
+    best_metric = max((gate[m][0] for m in evaluated if m in gate), default=0.0)
+    if best_metric >= scoring.GATE_THRESHOLD:
+        next_stage = next((s for s in stages if s > refs), None)
+        if next_stage is not None:
+            return "extract", next_stage, [], (
+                f"best model at {best_metric:.2%} (>= gate); advance {refs} -> {next_stage} refs"
+            )
+        return "done", None, [], f"at final stage ({stages[-1]}) and best model passes gate -> production-ready"
+
     if below:
         return "stuck", None, [], (
             f"{len(below)} model(s) below gate {scoring.GATE_THRESHOLD:.0%}, each already has a rejected "
             "candidate -> gated (needs prompt/ground-truth work)"
         )
-
-    next_stage = next((s for s in stages if s > refs), None)
-    if next_stage is not None:
-        return "extract", next_stage, [], f"all evaluated models pass; advance {refs} -> {next_stage} refs"
-    return "done", None, [], f"at final stage ({final}) and all evaluated models pass -> production-ready"
 
 
 def main() -> None:

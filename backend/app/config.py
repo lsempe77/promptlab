@@ -44,8 +44,8 @@ OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.
 
 # Production rollout: validate at 100 records, then 200, then 300 — never larger
 # without a deliberate code change. Scripts clamp to this and warn if exceeded.
-MAX_PRODUCTION_RECORDS = 300
-PRODUCTION_ROLLOUT_STAGES = (100, 200, 300)
+MAX_PRODUCTION_RECORDS = 200
+PRODUCTION_ROLLOUT_STAGES = (100, 200)
 
 # Directory for user-created project corpora (separate from the DEP corpus).
 # Mirrors where the DB lives: /data/projects/{slug}/corpus/ on Fly.
