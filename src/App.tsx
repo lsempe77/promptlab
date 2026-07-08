@@ -23,6 +23,7 @@ import { About } from "./components/About";
 import { VersionProgressionTable } from "./components/VersionProgressionTable";
 import { useWalkthrough } from "./components/Walkthrough";
 import NewProjectWizard from "./components/NewProjectWizard";
+import SupervisorStatusBar from "./components/SupervisorStatusBar";
 import "./App.css";
 
 const JOBS_POLL_MS = 6000;
@@ -239,6 +240,10 @@ function App() {
           )}
 
           {!apiError && !fields && <p className="muted">Loading fields…</p>}
+
+          {!apiError && selectedProject && (
+            <SupervisorStatusBar project={selectedProject} />
+          )}
 
           <div id="tour-methodology"><Methodology thresholds={thresholds} /></div>
 

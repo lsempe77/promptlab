@@ -910,6 +910,64 @@ table.glossary .glossary-dir {
   color: var(--text-muted);
 }
 
+/* ── Supervisor status bar ── */
+.sbar-card {
+  background: var(--bg, #fff);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+.sbar-header {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 0.82rem;
+}
+.sbar-title {
+  font-weight: 700; font-size: 0.85rem;
+  display: flex; align-items: center; gap: 5px;
+}
+.sbar-dot {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+}
+.sbar-dot.running { background: #16a34a; box-shadow: 0 0 0 2px #bbf7d0; animation: pulse 1.5s infinite; }
+.sbar-dot.idle    { background: #94a3b8; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 0 2px #bbf7d0; } 50% { box-shadow: 0 0 0 5px #bbf7d0; } }
+.sbar-overall { flex: 1; text-align: center; font-size: 0.82rem; }
+.sbar-pct { color: var(--text-muted); }
+.sbar-updated { font-size: 0.76rem; color: var(--text-muted); }
+
+.sbar-fields {
+  display: grid;
+  grid-template-columns: 90px 1fr 70px 180px;
+  gap: 5px 8px;
+  align-items: center;
+}
+.sbar-field { display: contents; }
+.sbar-field.sbar-done .sbar-fname { color: #16a34a; font-weight: 600; }
+.sbar-fname { font-size: 0.8rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sbar-minibar {
+  height: 6px; border-radius: 3px;
+  background: var(--border, #e2e8f0); overflow: hidden;
+}
+.sbar-minibar-fill {
+  height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, #16a34a, #4ade80);
+  transition: width 0.5s ease;
+}
+.sbar-counts { font-size: 0.78rem; color: var(--text-muted); text-align: right; white-space: nowrap; }
+.sbar-refs { color: #94a3b8; }
+.sbar-action {
+  font-size: 0.75rem; padding: 2px 8px; border-radius: 99px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sbar-action-extraction { background: #eff6ff; color: #2563eb; }
+.sbar-action-optimization { background: #fef3c7; color: #d97706; }
+.sbar-action-judge { background: #f5f3ff; color: #7c3aed; }
+.sbar-action-done { background: #f0fdf4; color: #16a34a; font-weight: 600; }
+.sbar-action-wait { background: var(--surface, #f8fafc); color: var(--text-muted); }
+
 .api-error {
   background: var(--bad-soft);
   border: 1px solid var(--bad);
