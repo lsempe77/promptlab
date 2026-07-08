@@ -52,9 +52,6 @@ export default function LoginModal({ onSuccess, onCancel }: Props) {
         </div>
 
         <form className="login-form" onSubmit={handleSubmit}>
-          <p className="login-subtitle">
-            Access is restricted to <strong>@3ieimpact.org</strong> email addresses.
-          </p>
 
           {error && <div className="wizard-error">{error}</div>}
 

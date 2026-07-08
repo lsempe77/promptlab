@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { WizardState, FieldDefinition, FieldType } from "./types";
 
 interface Props {
@@ -22,6 +22,33 @@ function newField(): FieldDefinition {
 
 function slugify(s: string) {
   return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
+/** Parse a CSV string into { headers, rows }.  Handles quoted fields. */
+function parseCSV(text: string): { headers: string[]; rows: string[][] } {
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  if (!lines.length) return { headers: [], rows: [] };
+  const splitLine = (line: string) => {
+    const cells: string[] = [];
+    let cur = "", inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { inQ = !inQ; }
+      else if (c === "," && !inQ) { cells.push(cur.trim()); cur = ""; }
+      else cur += c;
+    }
+    cells.push(cur.trim());
+    return cells;
+  };
+  return { headers: splitLine(lines[0]), rows: lines.slice(1, 6).map(splitLine) };
+}
+
+/** Pick up to 3 non-empty example values for a column. */
+function examplesForCol(rows: string[][], colIdx: number): string[] {
+  return rows
+    .map((r) => r[colIdx]?.trim() ?? "")
+    .filter(Boolean)
+    .slice(0, 3);
 }
 
 const FIELD_TYPES: { value: FieldType; label: string; hint: string }[] = [
@@ -159,30 +186,144 @@ export default function Step2FieldBuilder({ state, update, onNext, onBack }: Pro
   const changeField = (id: string, f: FieldDefinition) =>
     setFields(fields.map((x) => (x.id === id ? f : x)));
 
+  // CSV import state
+  const csvRef = useRef<HTMLInputElement>(null);
+  const [csvData, setCsvData] = useState<{ headers: string[]; rows: string[][] } | null>(null);
+  const [csvSelected, setCsvSelected] = useState<Set<number>>(new Set());
+
+  const handleCSVFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      const parsed = parseCSV(text);
+      setCsvData(parsed);
+      // Pre-select all columns
+      setCsvSelected(new Set(parsed.headers.map((_, i) => i)));
+    };
+    reader.readAsText(file);
+  };
+
+  const importFromCSV = () => {
+    if (!csvData) return;
+    const newFields: FieldDefinition[] = Array.from(csvSelected)
+      .sort((a, b) => a - b)
+      .map((colIdx) => {
+        const header = csvData.headers[colIdx];
+        const examples = examplesForCol(csvData.rows, colIdx);
+        // Guess type: if all examples look like they contain ";" or "|" → list
+        const looksLikeList = examples.some((v) => v.includes("|") || v.includes(";"));
+        return {
+          id: crypto.randomUUID(),
+          name: slugify(header),
+          label: header,
+          type: (looksLikeList ? "list" : "text") as FieldType,
+          description: "",
+          examples,
+          taxonomy: [],
+        };
+      });
+    setFields([...fields, ...newFields]);
+    setCsvData(null);
+    setCsvSelected(new Set());
+  };
+
   const canContinue = fields.length > 0 && fields.every((f) => f.name && f.description);
 
   return (
     <div className="wizard-step">
       <h3 className="step-title">Define your extraction fields</h3>
       <p className="step-subtitle">
-        Add one field per piece of information you want to extract from each document. The
-        description becomes the instruction the model follows.
+        Upload a CSV/Excel with your existing data — columns become fields and the values become
+        examples automatically. Or add fields manually below.
       </p>
 
-      <div className="field-list">
-        {fields.map((f) => (
-          <FieldCard
-            key={f.id}
-            field={f}
-            onChange={(nf) => changeField(f.id, nf)}
-            onRemove={() => removeField(f.id)}
-          />
-        ))}
+      {/* CSV import */}
+      <div className="csv-import-box">
+        <div className="csv-import-header">
+          <span className="csv-import-label">📂 Import from CSV / Excel</span>
+          <span className="label-hint"> — upload any file with a header row; select which columns to extract</span>
+        </div>
+
+        {!csvData ? (
+          <div
+            className="drop-zone drop-zone-sm"
+            onClick={() => csvRef.current?.click()}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleCSVFile(f); }}
+          >
+            <span>Drop CSV here or <u>click to browse</u></span>
+            <span className="label-hint"> (.csv — for Excel, export as CSV first)</span>
+            <input
+              ref={csvRef}
+              type="file"
+              accept=".csv,.tsv,.txt"
+              style={{ display: "none" }}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleCSVFile(f); }}
+            />
+          </div>
+        ) : (
+          <div className="csv-column-picker">
+            <p className="label-hint">
+              Select the columns you want to extract. Examples are pulled from the first rows.
+            </p>
+            <div className="csv-col-grid">
+              {csvData.headers.map((header, i) => {
+                const examples = examplesForCol(csvData.rows, i);
+                const checked = csvSelected.has(i);
+                return (
+                  <label key={i} className={`csv-col-card ${checked ? "selected" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        const next = new Set(csvSelected);
+                        checked ? next.delete(i) : next.add(i);
+                        setCsvSelected(next);
+                      }}
+                    />
+                    <strong className="col-header">{header}</strong>
+                    {examples.length > 0 && (
+                      <span className="col-examples">
+                        {examples.join(" · ")}
+                      </span>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+            <div className="csv-import-actions">
+              <button className="btn-secondary" onClick={() => setCsvData(null)}>Cancel</button>
+              <button
+                className="btn-primary"
+                onClick={importFromCSV}
+                disabled={csvSelected.size === 0}
+              >
+                Add {csvSelected.size} field{csvSelected.size !== 1 ? "s" : ""} →
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      <button className="btn-add-field" onClick={addField}>
-        + Add field
-      </button>
+      {/* Manual field list */}
+      {fields.length > 0 && (
+        <div className="field-list">
+          {fields.map((f) => (
+            <FieldCard
+              key={f.id}
+              field={f}
+              onChange={(nf) => changeField(f.id, nf)}
+              onRemove={() => removeField(f.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      <button className="btn-add-field" onClick={addField}>+ Add field manually</button>
+
+      {fields.length > 0 && fields.some((f) => !f.description) && (
+        <p className="wizard-hint">⚠ Fill in a description for each field — this becomes the model's instruction.</p>
+      )}
 
       <div className="wizard-footer">
         <button className="btn-secondary" onClick={onBack}>← Back</button>
