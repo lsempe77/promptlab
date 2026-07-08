@@ -32,17 +32,21 @@ export interface WizardState {
   // Step 2 — extraction
   fields: FieldDefinition[];
 
-  // Step 2 — screening
+  // Step 2 — screening (all comes from one EPPI file)
+  screeningFile: File | null;          // the uploaded EPPI Excel
   exclusionCriteria: ExclusionCriterion[];
   maybeStrategy: "cross_model" | "excerpt_verify" | "self_consistency";
+  screeningRecordCount: number;        // how many records were detected
+  screeningIncludeCount: number;
+  screeningExcludeCount: number;
 
-  // Step 3
+  // Step 3 — extraction only
   corpusFiles: File[];
 
-  // Step 4
+  // Step 4 — extraction only
   groundTruthFile: File | null;
 
-  // Step 5
+  // Step 5 / Launch
   selectedModels: string[];
 }
 

@@ -4,7 +4,7 @@ import type { WizardState, WizardStepKey } from "./wizard/types";
 import { WIZARD_STEPS } from "./wizard/types";
 import Step1ProjectSetup from "./wizard/Step1ProjectSetup";
 import Step2FieldBuilder from "./wizard/Step2FieldBuilder";
-import Step2ExclusionCriteria from "./wizard/Step2ExclusionCriteria";
+import Step2ScreeningUpload from "./wizard/Step2ScreeningUpload";
 import Step3CorpusUpload from "./wizard/Step3CorpusUpload";
 import Step4GroundTruth from "./wizard/Step4GroundTruth";
 import Step5Launch from "./wizard/Step5Launch";
@@ -22,20 +22,22 @@ const EMPTY: WizardState = {
   projectType: "extraction",
   password: "",
   fields: [],
+  screeningFile: null,
   exclusionCriteria: [],
   maybeStrategy: "cross_model",
+  screeningRecordCount: 0,
+  screeningIncludeCount: 0,
+  screeningExcludeCount: 0,
   corpusFiles: [],
   groundTruthFile: null,
   selectedModels: ["~anthropic/claude-sonnet-latest", "~openai/gpt-mini-latest", "deepseek/deepseek-v4-flash"],
 };
 
-const STEP_LABELS: Record<WizardStepKey, string> = {
-  project: "Project",
-  fields: "Fields",
-  corpus: "Corpus",
-  "ground-truth": "Ground Truth",
-  launch: "Launch",
-};
+// Screening projects skip corpus + ground-truth steps (all comes from one EPPI file)
+const SCREENING_STEPS: WizardStepKey[] = ["project", "fields", "launch"];
+const EXTRACTION_STEPS: WizardStepKey[] = ["project", "fields", "corpus", "ground-truth", "launch"];
+
+const _STEP_LABEL: Record<string, string> = { project: "Project", fields: "Fields", corpus: "Corpus", "ground-truth": "Ground Truth", launch: "Launch" };
 
 export default function NewProjectWizard({ onClose, onProjectCreated }: Props) {
   const [state, setState] = useState<WizardState>(EMPTY);
@@ -51,7 +53,8 @@ export default function NewProjectWizard({ onClose, onProjectCreated }: Props) {
     return <LoginModal onSuccess={setToken} onCancel={onClose} />;
   }
 
-  const stepKeys = WIZARD_STEPS.map((s) => s.key);
+  const isScreening = state.projectType !== "extraction";
+  const stepKeys = isScreening ? SCREENING_STEPS : EXTRACTION_STEPS;
   const currentIdx = stepKeys.indexOf(currentStep);
 
   const update = (patch: Partial<WizardState>) =>
@@ -114,17 +117,17 @@ export default function NewProjectWizard({ onClose, onProjectCreated }: Props) {
 
         {/* Step progress bar */}
         <div className="wizard-steps">
-          {WIZARD_STEPS.map((s, i) => (
-            <React.Fragment key={s.key}>
+          {stepKeys.map((key, i) => (
+            <React.Fragment key={key}>
               <button
-                className={`wizard-step-btn ${s.key === currentStep ? "active" : ""} ${i < currentIdx ? "done" : ""}`}
-                onClick={() => i <= currentIdx && setCurrentStep(s.key)}
+                className={`wizard-step-btn ${key === currentStep ? "active" : ""} ${i < currentIdx ? "done" : ""}`}
+                onClick={() => i <= currentIdx && setCurrentStep(key)}
                 disabled={i > currentIdx}
               >
                 <span className="step-num">{i < currentIdx ? "✓" : i + 1}</span>
-                <span className="step-label">{STEP_LABELS[s.key]}</span>
+                <span className="step-label">{isScreening && key === "fields" ? "EPPI Upload" : _STEP_LABEL[key] ?? key}</span>
               </button>
-              {i < WIZARD_STEPS.length - 1 && <div className={`wizard-step-connector ${i < currentIdx ? "done" : ""}`} />}
+              {i < stepKeys.length - 1 && <div className={`wizard-step-connector ${i < currentIdx ? "done" : ""}`} />}
             </React.Fragment>
           ))}
         </div>
@@ -135,11 +138,11 @@ export default function NewProjectWizard({ onClose, onProjectCreated }: Props) {
 
           {currentStep === "project" && <Step1ProjectSetup {...stepProps} />}
 
-          {currentStep === "fields" && state.projectType === "extraction" && (
+          {currentStep === "fields" && !isScreening && (
             <Step2FieldBuilder {...stepProps} />
           )}
-          {currentStep === "fields" && state.projectType !== "extraction" && (
-            <Step2ExclusionCriteria {...stepProps} />
+          {currentStep === "fields" && isScreening && (
+            <Step2ScreeningUpload {...stepProps} token={token} />
           )}
 
           {currentStep === "corpus" && <Step3CorpusUpload {...stepProps} />}
