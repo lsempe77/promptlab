@@ -45,7 +45,12 @@ OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.
 # Production rollout: validate at 100 records, then 200, then 300 — never larger
 # without a deliberate code change. Scripts clamp to this and warn if exceeded.
 MAX_PRODUCTION_RECORDS = 200
-PRODUCTION_ROLLOUT_STAGES = (100, 200)
+# Stage progression: only one stage because run_extraction.py is restricted to
+# ground-truth records (get_records_with_field JOINs records x ground_truth).
+# With 100 GT records per field, --n 200 still only finds 100 → nothing to run.
+# Stage 200 becomes reachable only after humans annotate 100 more GT records
+# and load them into the DB.  Until then, 100 is both the start and finish.
+PRODUCTION_ROLLOUT_STAGES = (100,)
 
 # Directory for user-created project corpora (separate from the DEP corpus).
 # Mirrors where the DB lives: /data/projects/{slug}/corpus/ on Fly.
