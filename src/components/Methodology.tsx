@@ -34,7 +34,7 @@ const TIERS: { tier: string; rows: Row[] }[] = [
   {
     tier: "Decision — the production gate",
     rows: [
-      ["Quality (gate)", "F1 for list fields (authors/institutions/countries); accuracy for categorical fields (sector/sub-sector). A (field, model) is production-ready at ≥ 90%.", "higher"],
+      ["Quality (gate)", "For list fields (authors/institutions/countries): F1 \u2265 90% AND recall \u2265 85%. Both conditions must hold \u2014 a model that reaches 91% F1 by over-predicting while missing 20% of true values is not production-ready. For categorical fields (sector/sub-sector): accuracy \u2265 90%.", "higher"],
     ],
   },
   {
@@ -80,20 +80,24 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
 
       <p className="muted">
         <strong>What to look at first:</strong> the <strong>Quality</strong> column (and the
-        leaderboard) is the production gate — <strong>F1</strong> for list fields and{" "}
-        <strong>accuracy</strong> for categorical fields; green passes the 90% gate. Precision &amp;
-        recall (lists) or Cohen's κ (categorical) explain <em>why</em>; <em>Concordance</em> (an
-        independent LLM judge) corroborates it; cost &amp; CO₂e show efficiency. Everything else is
-        diagnostic.
+        leaderboard) is the production gate. For <strong>list fields</strong> (authors, affiliations,
+        countries): <strong>F1 ≥ 90% AND recall ≥ 85%</strong> \u2014 missing values are invisible in
+        QA while extras are visible and fixable, so recall has a hard floor. For{" "}
+        <strong>categorical fields</strong> (sector, sub-sector): <strong>accuracy ≥ 90%</strong>.
+        Precision &amp; recall (lists) or Cohen\u2019s \u03ba (categorical) explain <em>why</em>;{" "}
+        <em>Concordance</em> (an independent LLM judge) corroborates it; cost &amp; CO\u2082e show
+        efficiency. Everything else is diagnostic.
       </p>
 
       <details className="method-group">
         <summary>Threshold rationale &amp; references</summary>
         <p className="muted">
-          <strong>List fields (authors, affiliations, countries) — F1 ≥ 90%.</strong>{" "}
-          Ground truth is verifiable (a name either appears in the paper or it doesn't), so a high
-          bar is justified. Element-level F1 balances precision and recall symmetrically, penalising
-          both missed names and hallucinated ones.
+          <strong>List fields (authors, affiliations, countries) \u2014 F1 \u2265 90% AND recall \u2265 85%.</strong>{" "}
+          Ground truth is verifiable (a name either appears in the paper or it doesn\u2019t), so a high
+          bar is justified. Element-level F1 balances precision and recall symmetrically, but recall
+          has a separate hard floor (\u2265 85%) because missing values are invisible in QA while extra
+          values are visible and correctable. A model that achieves F1 = 92% by over-predicting
+          while recalling only 80% of true values is not production-ready under this definition.
         </p>
         <p className="muted">
           <strong>Categorical fields (sector, sub-sector) — accuracy ≥ 90%.</strong>{" "}
@@ -120,7 +124,7 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
         <summary>The pipeline at a glance</summary>
         <MermaidDiagram
           chart={PIPELINE_CHART}
-          caption="Extract → score → gate → (reflect/rewrite & re-test | advance). Gate 90% (F1 for lists, accuracy for categorical); the optimizer accepts a rewrite only if it improves on a held-out set and generalizes across a second model."
+          caption="Extract \u2192 score \u2192 gate \u2192 (reflect/rewrite & re-test | advance). Gate: F1 \u2265 90% AND recall \u2265 85% for list fields; accuracy \u2265 90% for categorical. The best model crossing the gate advances the field to 200 records. The optimizer accepts a rewrite only if it improves F1, keeps recall \u2265 85%, and generalizes across a second model."
         />
       </details>
 
@@ -162,11 +166,13 @@ export function Methodology({ thresholds }: { thresholds: Thresholds | null }) {
       <details className="method-group">
         <summary>When a field is "done" &amp; where humans decide</summary>
         <p className="muted">
-          <strong>Good enough:</strong> a (field, model) clears the gate (F1/accuracy ≥ 90%) with a
-          tight 95% CI. <strong>Long enough:</strong> the rollout is capped at 300 references, the
-          optimizer stops after 4 non-improving iterations, and a field is "converged" once every
-          model passes the gate or the optimizer is exhausted. A field stuck below the gate is often
-          a signal to fix the <em>ground truth</em>, not the prompt.
+          <strong>Good enough:</strong> a (field, model) clears the gate (F1 \u2265 90% AND recall
+          \u2265 85% for list fields; accuracy \u2265 90% for categorical) with a tight 95% CI.{" "}
+          <strong>Long enough:</strong> the rollout is capped at 200 references, the optimizer stops
+          after 4 non-improving iterations, and a field advances to 200 records once the best model
+          passes the gate (not all models \u2014 weaker models keep being optimized at the next stage).
+          A field stuck below the gate is often a signal to fix the <em>ground truth</em>, not the
+          prompt.
         </p>
         <p className="muted">
           This automates the loop but keeps <strong>humans on the loop</strong>: the model's own
