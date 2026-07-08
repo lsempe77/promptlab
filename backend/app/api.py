@@ -23,7 +23,7 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import analytics, config, db, scoring
+from . import analytics, config, db, gateway, scoring
 from .projects import PROJECTS
 
 app = FastAPI(title="Agentic 3ie Prompt Lab API")
