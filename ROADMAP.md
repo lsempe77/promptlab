@@ -58,6 +58,28 @@ A second autonomous loop alongside the prompt-optimizer supervisor ("Loop A"), f
   "answer key is wrong" signal). This closes the feedback loop so ground truth **improves over time**
   instead of staying fixed.
 
+## Recently shipped (2026-07-08)
+
+- **Optimizer robustness fixes:**
+  - Bold-mode reflector null content fixed (`json_mode=False` + `max_tokens=4000` for Claude Sonnet
+    extended-thinking calls in `optimizer.propose_revision`).
+  - Per-field `IMPROVEMENT_EPSILON` — list fields (`authors`, `author_affiliation`) raised 0.01→0.03
+    to prevent false-positive acceptances on the noisy ~35-record val split (all fields are capped
+    at 100 GT records → splits of ~30/35/35 holdout/val/train, giving high F1 variance). Wired
+    through `optimize_prompt --improvement-epsilon` and the supervisor.
+  - Gateway default `max_tokens` raised 1024→2048 to fix JSON truncation on verbose models.
+- **Pending (do after current supervisor cycle):** retire `z-ai/glm-4.7-flash` from `models.yaml`
+  — consistently broken: first truncates JSON at 1024 tokens (verbose excerpts), then returns
+  `content=null` under `json_object` response format. `glm-5.2` (same family) works fine.
+
+## Model reliability — known broken models
+- **`z-ai/glm-4.7-flash`**: returns `content=null` for ~95% of calls under `json_object` mode
+  (OpenRouter routing issue or model update, 2026-07-08). Old runs show JSON truncation; new runs
+  show null. **Retire from roster** after current supervisor cycle completes. Keep existing DB runs
+  for the record.
+- **`moonshotai/kimi-latest`** and **`moonshotai/kimi-k2.5`**: occasional job failures (API errors
+  from the provider); otherwise functional but with lower gate metrics than other models.
+
 ## Recently shipped (2026-07-06)
 
 - **Deployed to production (Fly.io) + fresh start:** carbon tracking (EcoLogits per-run gCO₂e),
