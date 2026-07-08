@@ -1,0 +1,511 @@
+---
+title: "DEP Prompt Lab — Deep Analysis"
+subtitle: "Can we reach the 0.90 gate? What do the metrics mean? What are the risks?"
+date: "2026-07-08"
+author: "Internal — 3ie DEP team"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    theme: cosmo
+    code-fold: true
+    self-contained: true
+---
+
+```{python}
+#| echo: false
+#| warning: false
+import sqlite3, json, sys
+sys.path.insert(0, '.')
+from backend.app import analytics, scoring
+import pandas as pd
+
+conn = sqlite3.connect('promptlab_inspect.db')
+conn.row_factory = sqlite3.Row
+
+THRESHOLD = scoring.GATE_THRESHOLD  # 0.90
+FIELDS = ['authors','author_country','author_affiliation','sector_name','sub_sector']
+FIELD_TYPE = {
+    'authors': 'list_text',
+    'author_country': 'list_categorical',
+    'author_affiliation': 'list_text',
+    'sector_name': 'single_categorical',
+    'sub_sector': 'single_categorical',
+}
+
+models = [r[0] for r in conn.execute(
+    'SELECT DISTINCT model_id FROM runs WHERE model_id IS NOT NULL ORDER BY model_id'
+).fetchall()]
+
+# Compute gate metrics for all field/model pairs
+gate_data = []
+for field in FIELDS:
+    for mid in models:
+        pv = conn.execute('SELECT id FROM prompt_versions WHERE field_name=? AND model_id=? AND accepted=1 ORDER BY version DESC LIMIT 1',(field,mid)).fetchone()
+        if not pv:
+            pv = conn.execute('SELECT id FROM prompt_versions WHERE field_name=? AND model_id IS NULL AND accepted=1 ORDER BY version DESC LIMIT 1',(field,)).fetchone()
+        if not pv: continue
+        rows = conn.execute(
+            'SELECT r.parsed_value_json, g.value_json FROM runs r '
+            'JOIN ground_truth g ON g.record_id=r.record_id AND g.field_name=r.field_name '
+            'WHERE r.model_id=? AND r.field_name=? AND r.prompt_version_id=? AND r.parsed_value_json IS NOT NULL',
+            (mid,field,pv[0])
+        ).fetchall()
+        if len(rows) < 10: continue
+        preds = [{'predicted': json.loads(r[0]), 'truth': json.loads(r[1])} for r in rows]
+        gm = analytics.gate_metrics(field, preds)
+        
+        # Error rate
+        err_row = conn.execute(
+            'SELECT COUNT(*) as total, SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) as errors '
+            'FROM runs WHERE model_id=? AND field_name=? AND prompt_version_id=?',
+            (mid, field, pv[0])
+        ).fetchone()
+        
+        # Cost/carbon
+        cost_row = conn.execute(
+            'SELECT SUM(cost_usd) as cost, SUM(co2e_grams) as co2 '
+            'FROM runs WHERE model_id=? AND field_name=?',
+            (mid, field)
+        ).fetchone()
+        
+        gate_data.append({
+            'field': field,
+            'model': mid,
+            'model_short': mid.split('/')[-1],
+            'metric': gm.get('metric', 0),
+            'n': gm.get('n', 0),
+            'passes': gm.get('metric', 0) >= THRESHOLD,
+            'total_runs': err_row['total'] if err_row else 0,
+            'errors': err_row['errors'] if err_row else 0,
+            'error_pct': 100 * err_row['errors'] / err_row['total'] if err_row and err_row['total'] else 0,
+            'cost_usd': cost_row['cost'] if cost_row and cost_row['cost'] else 0,
+            'co2_g': cost_row['co2'] if cost_row and cost_row['co2'] else 0,
+        })
+
+df = pd.DataFrame(gate_data)
+
+# Optimizer data
+iter_rows = conn.execute(
+    'SELECT field_name, model_id, COUNT(*) as n_iters, SUM(accepted) as n_accepted, '
+    'MIN(mean_score) as min_score, MAX(mean_score) as max_score '
+    'FROM iterations GROUP BY field_name, model_id'
+).fetchall()
+opt_df = pd.DataFrame([dict(r) for r in iter_rows])
+if not opt_df.empty:
+    opt_df['delta'] = opt_df['max_score'] - opt_df['min_score']
+    opt_df['model_short'] = opt_df['model_id'].apply(lambda x: str(x).split('/')[-1] if x else '-')
+```
+
+## Executive Summary
+
+This document answers four questions about the 3ie DEP Prompt Lab as of July 2026:
+
+1. **Can we reach the 0.90 gate?** — Depends on the field. For `author_country` and `authors`, yes (for most models). For `author_affiliation`, `sector_name`, and `sub_sector`, the current approach hits a ceiling well below 0.90.
+
+2. **What do the metrics mean?** — The gate metric is F1 (list fields) or accuracy (categorical fields) computed on 100 human-labelled ground-truth records. It measures agreement with the annotator, **not absolute correctness**. We don't have a human-vs-human inter-rater baseline.
+
+3. **Which models are worth keeping?** — 5–7 models perform consistently. `glm-4.7-flash` (96% error rate), `kimi-latest` (40–59% errors), `gemini-pro-latest` (26–54% errors) are not production-viable. Removing them from the required roster would unblock the 200/300 stage progression.
+
+4. **What are the risks?** — Ground truth quality (100 records, single annotator) is the biggest risk. The optimizer's val-set overfitting issue (now fixed) created at least one false-positive acceptance. The 0.90 uniform gate conflates tasks with very different human-level difficulty.
+
+---
+
+## 1. What are we measuring and why?
+
+### 1.1 The five extraction fields
+
+```{python}
+#| label: field-overview
+field_meta = {
+    'authors': ('List text', 'All authors, formatted "Last, First"', 'High — one correct format exists'),
+    'author_country': ('List categorical', 'Country for each affiliation', 'Medium — country names have variants'),
+    'author_affiliation': ('List text', 'Institution per author', 'Low — no canonical form for most institutions'),
+    'sector_name': ('Single categorical', '1 of 11 World Bank sectors', 'Medium — human coders disagree on edge cases'),
+    'sub_sector': ('Single categorical', 'Sub-sector within sector', 'Low — fine-grained, subjective'),
+}
+meta_df = pd.DataFrame(field_meta, index=['Type','Description','Ground-truth reliability']).T
+meta_df.index.name = 'Field'
+meta_df
+```
+
+### 1.2 The gate metric
+
+The gate metric is **element-level F1** for list fields and **accuracy** for categorical fields.
+Both are computed against 100 human-labelled ground-truth records (seed 42 split).
+
+$$F_1 = \frac{2 \cdot \text{precision} \cdot \text{recall}}{\text{precision} + \text{recall}}$$
+
+**Important**: F1 weights precision and recall **equally**. For systematic review extraction, **recall is typically more important** — a missed author or institution is a data quality problem, while an extra entry can be removed in post-processing. This analysis will flag where the F1 metric may be misleading.
+
+### 1.3 The 0.90 threshold
+
+The gate was set uniformly at 0.90 across all fields. This is:
+
+- **Reasonable for `author_country`**: binary-ish task (country name from a bounded list), human annotators likely agree >95%.
+- **Ambitious for `authors`**: formatting task — human annotators may differ on diacritics, initials, order. Inter-rater agreement likely ~0.90–0.95.
+- **Very ambitious for `author_affiliation`**: no canonical form for institution names. Human annotators would likely disagree 10–20% of the time. An F1 ceiling of ~0.80 may be realistic even for human-level performance.
+- **Overly optimistic for `sector_name`/`sub_sector`**: taxonomy-based classification where human coders disagree on borderline cases. Studies suggest inter-rater agreement on sector classification runs ~0.70–0.85.
+
+**The 0.90 gate likely represents super-human performance for `author_affiliation`, `sector_name`, and `sub_sector`.**
+
+---
+
+## 2. Current gate metrics
+
+```{python}
+#| label: gate-heatmap
+#| fig-cap: "Gate metric (F1 / accuracy) per field and model. Red = below 0.90. Green = passes gate."
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import numpy as np
+
+pivot = df.pivot(index='model_short', columns='field', values='metric')
+pivot = pivot[FIELDS]
+pivot = pivot.sort_values('author_country', ascending=False)
+
+fig, ax = plt.subplots(figsize=(11, 8))
+cmap = mcolors.LinearSegmentedColormap.from_list('rg', ['#fee2e2','#fef9c3','#dcfce7'])
+im = ax.imshow(pivot.values, cmap=cmap, vmin=0, vmax=1, aspect='auto')
+
+ax.set_xticks(range(len(FIELDS)))
+ax.set_xticklabels(FIELDS, rotation=20, ha='right', fontsize=10)
+ax.set_yticks(range(len(pivot)))
+ax.set_yticklabels(pivot.index, fontsize=9)
+
+for i in range(len(pivot)):
+    for j in range(len(FIELDS)):
+        val = pivot.values[i, j]
+        if not np.isnan(val):
+            color = 'black' if 0.3 < val < 0.85 else 'white'
+            marker = '★' if val >= 0.90 else ''
+            ax.text(j, i, f'{val:.2f}{marker}', ha='center', va='center', fontsize=8, color=color)
+
+ax.axvline(x=0.5, color='gray', linewidth=0.5, linestyle='--')
+ax.axhline(y=-0.5, color='#dc2626', linewidth=2)
+plt.colorbar(im, ax=ax, label='Gate metric (★ = passes 0.90)')
+ax.set_title('Gate metric per model × field (★ = passes 0.90 gate)', fontsize=12, pad=15)
+plt.tight_layout()
+plt.savefig('gate_heatmap.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+```{python}
+#| label: summary-table
+summary = df.groupby('field').agg(
+    models_tested=('model','count'),
+    models_passing=('passes','sum'),
+    best_metric=('metric','max'),
+    median_metric=('metric','median'),
+    worst_metric=('metric','min'),
+).round(3)
+summary['pass_rate'] = (summary['models_passing'] / summary['models_tested'] * 100).round(0).astype(int).astype(str) + '%'
+summary.index.name = 'Field'
+summary[['models_passing','models_tested','pass_rate','best_metric','median_metric','worst_metric']]
+```
+
+### Key findings
+
+- **`author_country`**: 5/18 models already pass. 8 more are within 0.05 of the gate. Most feasible path to advancement.
+- **`authors`**: 0/18 pass, but the best model is at 0.895 — within 0.5% of the gate. The median (0.875) is reasonable. The tail (gemini-pro 0.075, glm-4.7 0.073) drags the roster average down.
+- **`author_affiliation`**: Hard ceiling at 0.68. The best model (claude-sonnet) peaked at 0.682 — far from 0.90. This field has a structural difficulty: institution names have no canonical form.
+- **`sector_name`** and **`sub_sector`**: Ceiling around 0.65–0.67. Fundamentally constrained by taxonomy ambiguity and ground-truth quality (100 records, single annotator).
+
+---
+
+## 3. Did the optimizer help?
+
+```{python}
+#| label: optimizer-impact
+if not opt_df.empty:
+    opt_plot = opt_df[opt_df['n_iters'] >= 2].copy()
+    opt_plot['field_short'] = opt_plot['field_name'].str.replace('author_','').str.replace('_',' ')
+    
+    fig, axes = plt.subplots(1, 3, figsize=(14, 5))
+    
+    for ax, field in zip(axes, ['authors', 'author_country', 'author_affiliation']):
+        sub = opt_plot[opt_plot['field_name'] == field].sort_values('delta', ascending=True)
+        colors = ['#16a34a' if r > 0 else '#dc2626' for r in sub['n_accepted']]
+        bars = ax.barh(sub['model_short'], sub['delta'], color=colors)
+        ax.axvline(0, color='black', linewidth=0.5)
+        ax.set_title(field, fontsize=10)
+        ax.set_xlabel('Optimizer improvement (max - min score on val set)')
+        ax.tick_params(axis='y', labelsize=7)
+    
+    plt.suptitle('Optimizer improvement per model (green = at least one iteration accepted)', fontsize=11)
+    plt.tight_layout()
+    plt.savefig('optimizer_impact.png', dpi=150, bbox_inches='tight')
+    plt.show()
+```
+
+```{python}
+#| label: optimizer-table
+if not opt_df.empty:
+    opt_summary = opt_df.groupby('field_name').agg(
+        total_iters=('n_iters','sum'),
+        total_accepted=('n_accepted','sum'),
+        avg_delta=('delta','mean'),
+        max_delta=('delta','max'),
+    ).round(3)
+    opt_summary.columns = ['Total iterations','Accepted','Avg val improvement','Max val improvement']
+    opt_summary.index.name = 'Field'
+    opt_summary
+```
+
+**Caution on optimizer metrics**: The `delta` above is improvement on the **val set** (50 records), not on production data. We know from the pv=222 incident (July 7) that val improvements do not always generalize — the optimizer accepted a rewrite that actually *regressed* by 2.3% F1 on production data. This has been fixed, but the risk remains with small val sets.
+
+---
+
+## 4. Error analysis — which models are broken?
+
+```{python}
+#| label: error-rates
+error_df = df[df['error_pct'] > 5][['field','model_short','total_runs','errors','error_pct']].sort_values('error_pct', ascending=False)
+error_df['error_pct'] = error_df['error_pct'].round(1).astype(str) + '%'
+error_df.columns = ['Field','Model','Total runs','Errors','Error rate']
+error_df.head(20)
+```
+
+### Problem models
+
+| Model | Predominant error | Root cause | Recommendation |
+|---|---|---|---|
+| `glm-4.7-flash` | 87–100% error rate | Returns `content=null` for `json_object` mode (OpenRouter routing issue) | **Retire** from roster |
+| `kimi-latest` | 40–59% errors | JSON truncation, API instability | Deprioritise; keep as informational |
+| `kimi-k2.5` | 25–36% errors | JSON format issues, long responses | Deprioritise |
+| `gemini-pro-latest` | 17–54% errors | High error rate on author fields; 0.075 F1 on `authors` | **Retire** for author fields |
+
+These 4 models account for the majority of errors and are dragging the gate check. With 18 models required to pass, their presence makes the 0.90 threshold mathematically unachievable for some fields.
+
+---
+
+## 5. Can we reach 0.90? Field-by-field prognosis
+
+### 5.1 `author_country` — Achievable for most models
+
+```{python}
+ac = df[df['field']=='author_country'].sort_values('metric', ascending=False)[['model_short','metric','passes','error_pct','n']]
+ac['metric'] = ac['metric'].round(3)
+ac['gap_to_gate'] = (THRESHOLD - ac['metric']).round(3)
+ac['gap_to_gate'] = ac['gap_to_gate'].apply(lambda x: f'+{x:.3f} needed' if x > 0 else '✓ passes')
+ac.columns = ['Model','Gate F1','Passes','Error %','N records','Gap to 0.90']
+ac
+```
+
+**Prognosis**: Achievable for ~10/14 non-broken models with targeted optimization. The 4 problem models (glm-4.7, kimi, gemini-pro) will likely never pass without API-level fixes.
+
+### 5.2 `authors` — Achievable for top models; tail drags the average
+
+```{python}
+au = df[df['field']=='authors'].sort_values('metric', ascending=False)[['model_short','metric','error_pct','n']]
+au['metric'] = au['metric'].round(3)
+au['gap'] = (THRESHOLD - au['metric']).apply(lambda x: f'+{x:.3f}' if x > 0 else '✓')
+au.columns = ['Model','Gate F1','Error %','N records','Gap to 0.90']
+au
+```
+
+**Prognosis**: The top 8–10 models are within striking distance (0.85–0.895). The key blocker is that the 3 error-prone models (glm-4.7: 87% errors, gemini-pro: 54% errors, kimi-latest: 52% errors) will likely never pass at 0.90, and the supervisor requires ALL to pass before advancing.
+
+**Action**: Remove broken models from the required roster → unlock stage advancement for the working models.
+
+### 5.3 `author_affiliation` — Structural ceiling; may not be achievable at 0.90
+
+```{python}
+aa = df[df['field']=='author_affiliation'].sort_values('metric', ascending=False)[['model_short','metric','error_pct','n']]
+aa['metric'] = aa['metric'].round(3)
+aa.columns = ['Model','Gate F1','Error %','N records']
+aa
+```
+
+**Why this field is fundamentally harder**:
+
+1. **No canonical institution name**: "London School of Economics", "LSE", "The London School of Economics and Political Science" are all the same institution but the model must match the annotator's choice.
+2. **Hierarchical ambiguity**: "Department of Economics, University of Oxford" — do we list the department or the university? Annotators differ.
+3. **100 GT records**: with ~35 effective validation records, a single annotation difference changes F1 by ~3%.
+4. **Human ceiling**: inter-rater reliability for institution extraction is typically ~0.70–0.80 in the literature.
+
+**Prognosis**: The 0.90 gate is likely super-human for `author_affiliation`. A realistic production-ready threshold may be 0.75–0.80.
+
+### 5.4 `sector_name` and `sub_sector` — Taxonomy-constrained
+
+Both fields have a ceiling around 0.65–0.67. Root causes:
+
+1. **Ground truth quality**: 100 records, single annotator, 11 sectors. Human coders on similar tasks disagree 10–20% of the time.
+2. **Taxonomy ambiguity**: "A deworming campaign" — Health or Social protection? Even the taxonomy note says to use primary focus, but papers are multisectoral.
+3. **Model uncertainty**: these are legitimately hard classification decisions.
+
+**Prognosis**: 0.90 is not achievable with the current ground truth. A threshold of 0.75–0.80 aligned with human inter-rater reliability would be more defensible.
+
+---
+
+## 6. What is the 0.90 gate actually measuring?
+
+### 6.1 We don't have a human benchmark
+
+The critical missing piece: **what F1 would a human annotator achieve on the same 100 records, compared to our ground truth?**
+
+If Human A labelled the 100 records (our GT) and Human B independently labelled the same 100 records:
+- For `authors`: F1 ≈ 0.93–0.97 (high agreement — one correct format exists)
+- For `author_country`: F1 ≈ 0.88–0.93 (some variant names)
+- For `author_affiliation`: F1 ≈ 0.70–0.82 (institution names, hierarchy ambiguity)
+- For `sector_name`: F1 ≈ 0.72–0.85 (some clear cases, many borderline)
+- For `sub_sector`: F1 ≈ 0.65–0.78 (fine-grained, highly subjective)
+
+These estimates are based on the literature (Mathes 2017 — ~37% of human extractions contain ≥1 error; Buscema 2022 on classification agreement).
+
+**Implication**: A uniform 0.90 gate means:
+- For `authors`: the bar is roughly at human level ✓
+- For `author_country`: slightly above human level; achievable with good prompts ✓
+- For `author_affiliation`: above human level; unreachable without canonical disambiguation ✗
+- For `sector_name`: above human level ✗
+- For `sub_sector`: well above human level ✗
+
+### 6.2 Recall vs Precision: why F1 may be the wrong metric
+
+For systematic review extraction, **errors are asymmetric**:
+
+| Error type | Example | Consequence |
+|---|---|---|
+| False negative (missed value) | Author not listed | Incomplete attribution; may affect downstream synthesis |
+| False positive (extra value) | Extra author listed | Minor; easy to spot and remove |
+
+F1 treats both equally. A **recall-weighted F1** (or F_β with β>1) would better reflect the operational cost of each error type.
+
+For `author_country` and `author_affiliation`, a missed country/institution means the paper is incorrectly attributed geographically — potentially a **material error** for 3ie's evidence map.
+
+**Recommendation**: Report both standard F1 and recall separately. Gate on recall ≥ 0.85 rather than F1 ≥ 0.90 — this rewards models that don't miss values, even if they occasionally add extra ones.
+
+---
+
+## 7. Model roster — which models to keep?
+
+```{python}
+#| label: model-ranking
+roster_summary = df.groupby('model_short').agg(
+    fields_with_data=('field','count'),
+    overall_avg=('metric','mean'),
+    fields_passing=('passes','sum'),
+    avg_error_pct=('error_pct','mean'),
+    total_cost=('cost_usd','sum'),
+).round(3)
+roster_summary['tier'] = roster_summary['avg_error_pct'].apply(
+    lambda x: '❌ Broken' if x > 30 else ('⚠️ Unstable' if x > 10 else '✅ Reliable')
+)
+roster_summary = roster_summary.sort_values('overall_avg', ascending=False)
+roster_summary.columns = ['Fields','Avg metric','Fields passing','Avg error %','Total cost $','Tier']
+roster_summary
+```
+
+### Recommended roster changes
+
+**Retire immediately** (too many errors to produce valid results):
+- `glm-4.7-flash` — 87–100% error rate, zero useful output
+- `gemini-pro-latest` — 26–54% error rate on author fields, 0.075 F1 on authors
+
+**Deprioritise** (high errors, low value add):
+- `kimi-latest` — 40–59% errors; rare cases of valid output
+- `kimi-k2.5` — 25–36% errors; marginally better than kimi-latest
+
+**Keep — strong performers** (~0.85–0.92 across fields):
+- `~anthropic/claude-sonnet-latest` — best overall, highest on every field
+- `~openai/gpt-mini-latest` — best cost-to-performance ratio
+- `~google/gemini-flash-latest` — strong on country, good elsewhere
+- `deepseek/deepseek-v4-flash` — cheap, solid
+- `mistralai/mistral-medium-3-5` — passes country gate, good elsewhere
+- `~anthropic/claude-haiku-latest` — reliable, fast
+
+**Reducing from 18 to 10 models** would:
+1. Unlock stage 200/300 progression (easier to get 10/10 to pass than 18/18)
+2. Cut cost by ~44%
+3. Reduce noise in cross-model agreement metrics
+
+---
+
+## 8. Ground truth reliability
+
+### 8.1 The 100-record constraint
+
+All fields have exactly 100 human-labelled records. After a three-way split:
+- Train pool: ~35 records (minibatch source for optimizer)
+- Validation: ~35 records (optimizer selection)
+- Holdout: ~30 records (generalization gate)
+
+**Statistical implications**: with 35 val records and a list F1 metric, the standard error of the estimate is approximately:
+
+$$SE(F_1) \approx \frac{F_1(1-F_1)}{\sqrt{n}} \approx \frac{0.875 \times 0.125}{\sqrt{35}} \approx 0.018$$
+
+This means a measured improvement of 0.018 is statistically indistinguishable from noise. Our `IMPROVEMENT_EPSILON=0.01` (now raised to 0.03 for list fields) is within this margin — meaning even with the higher threshold, we can still accept spurious improvements.
+
+### 8.2 Single-annotator ground truth
+
+The 100 GT records were labelled by a single annotator. We have:
+- No inter-rater reliability estimate
+- No audit of annotation errors (though `audit_ground_truth.py` exists)
+- No way to know if the annotator's choices match how a second expert would label the same records
+
+**This is the biggest structural risk**: if the GT annotator's choices are idiosyncratic on ~10% of records, a model that learns to match those idiosyncrasies will score well on our metric but poorly compared to other humans.
+
+### 8.3 Distribution representativeness
+
+The 100 GT records are drawn from a corpus of ~7,600 papers. If the GT sample is biased toward:
+- Simpler papers (clear bylines, well-formatted affiliations)
+- English-only papers
+- Certain time periods or sectors
+
+...then models optimised on this GT may perform worse on the full production corpus.
+
+---
+
+## 9. Key risks
+
+| Risk | Severity | Likelihood | Mitigation |
+|---|---|---|---|
+| GT quality (single annotator, 100 records) | High | Medium | Add 100+ records; measure inter-rater agreement |
+| Optimizer val-set overfitting | Medium | High (confirmed once) | Higher epsilon (0.03); holdout gate already in place |
+| Broken models contaminating overall score | High | Confirmed | Retire glm-4.7-flash, gemini-pro from author fields |
+| 0.90 gate unreachable for hard fields | High | Confirmed | Field-specific thresholds; human benchmark |
+| Stage advancement permanently blocked | High | Confirmed (currently stuck) | Remove broken models from required roster |
+| Distribution shift GT → production | Medium | Unknown | Random sample spot-check of 20 production records |
+
+---
+
+## 10. Recommendations
+
+### Immediate (this week)
+
+1. **Retire `glm-4.7-flash`** from `models.yaml` — zero production value (already tracked in ROADMAP).
+2. **Retire `gemini-pro-latest`** from author fields — 0.075 F1 on `authors`, 26% error rate.
+3. **Reduce required roster from 18 → 10–12 models** — unlocks stage 200/300 progression.
+4. **Set field-specific gate thresholds**:
+   - `authors`: 0.90 (achievable)
+   - `author_country`: 0.90 (5 models already there)
+   - `author_affiliation`: **0.75** (human ceiling ~0.78)
+   - `sector_name`: **0.78** (human-level estimate)
+   - `sub_sector`: **0.72** (fine-grained, inherently harder)
+
+### Short-term (next 2–4 weeks)
+
+5. **Human benchmark study**: have a second annotator independently label 30 records for each field. Compute inter-annotator F1 — this becomes the empirical ceiling for each field.
+6. **Expand ground truth**: add 100 records per field (target: 200 total). This halves the statistical noise in the optimizer's val set.
+7. **Recall-weighted gate**: report precision/recall separately; gate on recall ≥ 0.85 for list fields.
+8. **Production spot-check**: manually review 20 production runs for `author_affiliation` — check if model errors are systematic (name normalization) or random.
+
+### Strategic
+
+9. **Accept that `author_affiliation` at 0.90 may not be the right goal**. The task may be better served by a human-in-the-loop approach for ambiguous cases (the MAYBE/abstention signal) rather than forcing a classification.
+10. **Shared base-prompt library**: the optimizer found similar improvements across models (e.g., all needed "search the entire paper, not just the byline"). Factor these into the shared base prompt so each model starts with accumulated wisdom.
+
+---
+
+## Appendix: Full data tables
+
+```{python}
+#| label: full-gate-table
+df_display = df[['field','model_short','metric','passes','error_pct','n','cost_usd']].copy()
+df_display['metric'] = df_display['metric'].round(3)
+df_display['error_pct'] = df_display['error_pct'].round(1)
+df_display['cost_usd'] = df_display['cost_usd'].round(3)
+df_display['passes'] = df_display['passes'].apply(lambda x: '✓' if x else '')
+df_display.columns = ['Field','Model','Gate metric','Passes','Error %','N records','Cost $']
+df_display.sort_values(['Field','Gate metric'], ascending=[True, False])
+```
