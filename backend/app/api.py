@@ -919,6 +919,104 @@ async def parse_eppi(request: Request, file: UploadFile):
         "has_abstract": "ab" in col_map or "abstract" in col_map,
         "has_title": "t1" in col_map or "title" in col_map,
     }
+
+
+@app.post("/api/projects/{project_slug}/process-eppi")
+async def process_eppi(request: Request, project_slug: str, file: UploadFile):
+    """Process an EPPI-Reviewer Excel export for a screening project:
+    saves T1+AB as markdown corpus files, stores records in DB, and
+    parses ta_decision → ground_truth table."""
+    _require_auth(dict(request.headers))
+    _project_or_404(project_slug)
+
+    import tempfile, re
+    import pandas as pd
+
+    raw = await file.read()
+    suffix = ".xlsx" if (file.filename or "").lower().endswith((".xlsx", ".xls")) else ".csv"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(raw)
+        tmp_path = tmp.name
+    try:
+        df = pd.read_excel(tmp_path) if suffix != ".csv" else pd.read_csv(tmp_path)
+    except Exception as exc:
+        raise HTTPException(422, f"Could not read file: {exc}")
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    col = {c.lower().strip(): c for c in df.columns}
+    title_col    = col.get("t1") or col.get("title")
+    abstract_col = col.get("ab") or col.get("abstract")
+    id_col       = col.get("u1") or col.get("record_id") or col.get("id")
+    decision_col = col.get("ta_decision") or col.get("decision")
+    author_col   = col.get("a1") or col.get("author")
+    year_col     = col.get("py") or col.get("year")
+
+    if decision_col is None:
+        raise HTTPException(422, "ta_decision column not found.")
+
+    corpus_dir = config.PROJECTS_DATA_DIR / project_slug / "corpus"
+    corpus_dir.mkdir(parents=True, exist_ok=True)
+
+    with db.get_conn() as conn:
+        project_id = db.get_project_id(conn, project_slug)
+        stored_records = stored_gt = skipped = 0
+
+        for idx, row in df.iterrows():
+            raw_id = str(row[id_col]).strip() if id_col and pd.notna(row.get(id_col)) else None
+            try:
+                record_id = int(float(raw_id)) if raw_id and raw_id not in ("nan", "") else abs(hash(str(idx))) % (2**31)
+            except ValueError:
+                record_id = abs(hash(raw_id)) % (2**31)
+
+            title    = str(row[title_col]).strip()    if title_col    and pd.notna(row.get(title_col))    else ""
+            abstract = str(row[abstract_col]).strip() if abstract_col and pd.notna(row.get(abstract_col)) else ""
+            author   = str(row[author_col]).strip()   if author_col   and pd.notna(row.get(author_col))   else ""
+            year     = str(row[year_col]).strip()     if year_col     and pd.notna(row.get(year_col))     else ""
+
+            if not title and not abstract:
+                skipped += 1
+                continue
+
+            # TA screening corpus = title + abstract only (no full PDF needed)
+            md_text = f"# {title}\n\n"
+            if author: md_text += f"**Authors:** {author}  \n"
+            if year:   md_text += f"**Year:** {year}  \n\n"
+            if abstract: md_text += f"## Abstract\n\n{abstract}\n"
+
+            stem = re.sub(r"[^a-z0-9]+", "_", title[:50].lower()).strip("_") or str(record_id)
+            out_path = corpus_dir / f"{record_id}_{stem}.md"
+            out_path.write_text(md_text, encoding="utf-8")
+
+            conn.execute(
+                "INSERT OR REPLACE INTO records (project_id, id, title, md_path) VALUES (?, ?, ?, ?)",
+                (project_id, record_id, title[:255], str(out_path)),
+            )
+            stored_records += 1
+
+            decision_raw = str(row[decision_col]).strip() if pd.notna(row.get(decision_col)) else ""
+            if not decision_raw or decision_raw.lower() == "nan":
+                continue
+            if decision_raw.upper().startswith("INCLUDE"):
+                gt_value = json.dumps({"decision": "INCLUDE", "tag": ""})
+            elif decision_raw.upper().startswith("EXCLUDE"):
+                tag_label = decision_raw[7:].strip()
+                tag = re.sub(r"[^a-z0-9]+", "_", tag_label.lower()).strip("_")
+                gt_value = json.dumps({"decision": "EXCLUDE", "tag": tag, "tag_label": tag_label})
+            else:
+                gt_value = json.dumps({"decision": "MAYBE", "tag": "", "raw": decision_raw})
+
+            conn.execute(
+                "INSERT OR REPLACE INTO ground_truth "
+                "(project_id, record_id, field_name, value_json) VALUES (?, ?, 'screening_decision', ?)",
+                (project_id, record_id, gt_value),
+            )
+            stored_gt += 1
+
+    return {"records_stored": stored_records, "ground_truth_stored": stored_gt, "skipped": skipped}
+
+
+@app.post("/api/projects/{project_slug}/launch")
 async def launch_extraction(request: Request, project_slug: str):
     """Kick off the first extraction run for a newly created project."""
     _require_auth(dict(request.headers))

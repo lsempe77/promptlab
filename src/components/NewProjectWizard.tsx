@@ -71,6 +71,7 @@ export default function NewProjectWizard({ onClose, onProjectCreated }: Props) {
     setSubmitting(true);
     setError(null);
     try {
+      // 1. Create project
       const res = await fetch(`${API_BASE_URL}/api/projects`, {
         method: "POST",
         headers: {
@@ -95,6 +96,25 @@ export default function NewProjectWizard({ onClose, onProjectCreated }: Props) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail || `Server error ${res.status}`);
       }
+
+      // 2. For screening: upload the EPPI file to process corpus + ground truth
+      if (state.projectType !== "extraction" && state.screeningFile) {
+        const form = new FormData();
+        form.append("file", state.screeningFile);
+        const eppiRes = await fetch(
+          `${API_BASE_URL}/api/projects/${state.projectSlug}/process-eppi`,
+          {
+            method: "POST",
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            body: form,
+          }
+        );
+        if (!eppiRes.ok) {
+          const body = await eppiRes.json().catch(() => ({}));
+          throw new Error(`Corpus processing failed: ${body.detail || eppiRes.status}`);
+        }
+      }
+
       onProjectCreated(state.projectSlug);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));

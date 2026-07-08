@@ -238,7 +238,9 @@ export default function Step5Launch({ state, update, onBack, onLaunch, submittin
       <div className="wizard-footer">
         <button className="btn-secondary" onClick={onBack} disabled={submitting}>← Back</button>
         <button className="btn-launch" onClick={onLaunch} disabled={submitting || selected.length === 0}>
-          {submitting ? "Creating project…" : "🚀 Launch"}
+          {submitting
+            ? (isExtraction ? "Creating project…" : "Creating project & uploading corpus…")
+            : "🚀 Launch"}
         </button>
       </div>
     </div>
