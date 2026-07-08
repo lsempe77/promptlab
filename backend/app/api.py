@@ -1038,33 +1038,51 @@ async def process_eppi(request: Request, project_slug: str, file: UploadFile):
 
 @app.post("/api/projects/{project_slug}/launch")
 async def launch_extraction(request: Request, project_slug: str):
-    """Kick off the first extraction run for a newly created project."""
+    """Kick off the first extraction/screening run for a newly created project."""
     _require_auth(dict(request.headers))
-    project = _project_or_404(project_slug)
+    _project_or_404(project_slug)
 
-    import subprocess, sys
+    import subprocess, sys as _sys
     cfg = {}
+    project_type = "extraction"
     with db.get_conn() as conn:
-        row = conn.execute("SELECT config_json FROM projects WHERE slug = ?", (project_slug,)).fetchone()
+        row = conn.execute(
+            "SELECT config_json, project_type FROM projects WHERE slug = ?", (project_slug,)
+        ).fetchone()
         if row and row["config_json"]:
             cfg = json.loads(row["config_json"])
+            project_type = row["project_type"] or "extraction"
 
     selected_models = cfg.get("selected_models", [])
     if not selected_models:
         raise HTTPException(400, "No models selected. Add selected_models to project config.")
 
     jobs = []
-    for field_name in project.fields:
-        for model_id in selected_models:
-            cmd = [
-                sys.executable, "-m", "backend.scripts.run_extraction",
-                "--project", project_slug,
-                "--field", field_name,
-                "--models", model_id,
-                "--n", "100",
-            ]
-            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            jobs.append({"field": field_name, "model": model_id, "pid": proc.pid})
+    is_screening = project_type in ("screening_ta", "screening_ft")
+
+    if is_screening:
+        # One run_screening subprocess per model (it handles all criteria internally)
+        models_arg = ",".join(selected_models)
+        cmd = [
+            _sys.executable, "-m", "backend.scripts.run_screening",
+            "--project", project_slug,
+            "--models", models_arg,
+            "--n", "100",
+        ]
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        jobs.append({"type": "screening", "models": selected_models, "pid": proc.pid})
+    else:
+        project = _project_or_404(project_slug)
+        for field_name in project.fields:
+            for model_id in selected_models:
+                cmd = [
+                    _sys.executable, "-m", "backend.scripts.run_extraction",
+                    "--project", project_slug,
+                    "--field", field_name,
+                    "--models", model_id,
+                    "--n", "100",
+                ]
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                jobs.append({"field": field_name, "model": model_id, "pid": proc.pid})
 
     return {"launched": len(jobs), "jobs": jobs}
-
