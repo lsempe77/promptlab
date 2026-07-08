@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { API_BASE_URL } from "../api";
 import type { WizardState, WizardStepKey } from "./wizard/types";
-import { WIZARD_STEPS } from "./wizard/types";
 import Step1ProjectSetup from "./wizard/Step1ProjectSetup";
 import Step2FieldBuilder from "./wizard/Step2FieldBuilder";
 import Step2ScreeningUpload from "./wizard/Step2ScreeningUpload";
