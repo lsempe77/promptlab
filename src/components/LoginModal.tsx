@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { API_BASE_URL } from "../api";
 
 interface Props {
   onSuccess: (token: string) => void;
@@ -20,7 +21,7 @@ export default function LoginModal({ onSuccess, onCancel }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/auth/token", {
+      const res = await fetch(`${API_BASE_URL}/api/auth/token`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),

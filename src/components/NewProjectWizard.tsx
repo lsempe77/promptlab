@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { API_BASE_URL } from "../api";
 import type { WizardState, WizardStepKey } from "./wizard/types";
 import { WIZARD_STEPS } from "./wizard/types";
 import Step1ProjectSetup from "./wizard/Step1ProjectSetup";
@@ -68,7 +69,7 @@ export default function NewProjectWizard({ onClose, onProjectCreated }: Props) {
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch("/api/projects", {
+      const res = await fetch(`${API_BASE_URL}/api/projects`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
