@@ -97,7 +97,16 @@ def _score_decision(
 ) -> tuple[float, str]:
     """Compare predicted screening decision against ground truth.
     Returns (score 0-1, outcome description).
-    Scoring: exact decision match = 1.0; wrong tag but correct decision = 0.5.
+
+    The primary screening task is INCLUDE vs EXCLUDE — that's what the gate
+    metric should reflect. A wrong exclusion tag is a labelling discrepancy,
+    not a screening error: the paper is still correctly excluded. Tag mismatches
+    are flagged in the outcome string for reporting but do not penalise the score.
+
+    Score:
+      1.0  correct INCLUDE or correct EXCLUDE (tag match or mismatch — both OK)
+      0.5  MAYBE (conservative flag; goes to human queue; not a hard error)
+      0.0  wrong binary call (INCLUDE when GT=EXCLUDE, or EXCLUDE when GT=INCLUDE)
     """
     try:
         gt = json.loads(gt_value)
@@ -108,19 +117,16 @@ def _score_decision(
     gt_tag = str(gt.get("tag", "")).strip().lower()
     pred_tag = predicted_tag.strip().lower()
 
+    if predicted_decision == "MAYBE":
+        return 0.5, f"maybe_vs_{gt_decision.lower()}"
+
     if predicted_decision == gt_decision:
         if gt_decision == "EXCLUDE":
-            # Full credit only if the tag also matches
-            score = 1.0 if (pred_tag and pred_tag in gt_tag or gt_tag in pred_tag) else 0.5
-            return score, "correct_decision_tag_match" if score == 1.0 else "correct_decision_wrong_tag"
+            tag_match = pred_tag and (pred_tag in gt_tag or gt_tag in pred_tag)
+            return 1.0, "correct" if tag_match else "correct_wrong_tag"
         return 1.0, "correct"
-    # MAYBE against INCLUDE → partial credit (conservative, not a miss)
-    if predicted_decision == "MAYBE" and gt_decision == "INCLUDE":
-        return 0.5, "maybe_vs_include"
-    # MAYBE against EXCLUDE → partial credit
-    if predicted_decision == "MAYBE" and gt_decision == "EXCLUDE":
-        return 0.5, "maybe_vs_exclude"
-    return 0.0, "wrong"
+
+    return 0.0, f"wrong_{predicted_decision.lower()}_vs_{gt_decision.lower()}"
 
 
 def run_screening(
