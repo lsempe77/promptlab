@@ -202,6 +202,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "model_id" not in pv_cols:
         conn.execute("ALTER TABLE prompt_versions ADD COLUMN model_id TEXT")
 
+    # New-project onboarding: projects table gets type, config, and password.
+    proj_cols = {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}
+    if "project_type" not in proj_cols:
+        # 'extraction' (default, existing DEP project) or 'screening_ta' / 'screening_ft'
+        conn.execute("ALTER TABLE projects ADD COLUMN project_type TEXT NOT NULL DEFAULT 'extraction'")
+    if "config_json" not in proj_cols:
+        # JSON blob: field definitions (extraction) or exclusion criteria (screening)
+        conn.execute("ALTER TABLE projects ADD COLUMN config_json TEXT")
+    if "password_hash" not in proj_cols:
+        # bcrypt hash of the project-level write password (NULL = no password set)
+        conn.execute("ALTER TABLE projects ADD COLUMN password_hash TEXT")
+
 
 def _needs_multi_project_migration(conn: sqlite3.Connection) -> bool:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(records)").fetchall()}

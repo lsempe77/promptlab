@@ -22,6 +22,7 @@ import { Methodology } from "./components/Methodology";
 import { About } from "./components/About";
 import { VersionProgressionTable } from "./components/VersionProgressionTable";
 import { useWalkthrough } from "./components/Walkthrough";
+import NewProjectWizard from "./components/NewProjectWizard";
 import "./App.css";
 
 const JOBS_POLL_MS = 6000;
@@ -59,6 +60,7 @@ function StageBadge({ s }: { s: StageStatus }) {
 
 function App() {
   const [tab, setTab] = useState<"dashboard" | "about">("dashboard");
+  const [showWizard, setShowWizard] = useState(false);
   const [projects, setProjects] = useState<ProjectInfo[] | null>(null);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [fields, setFields] = useState<FieldInfo[] | null>(null);
@@ -219,6 +221,9 @@ function App() {
           <button className="tab-btn tour-btn" onClick={startWalkthrough} title="Start guided walkthrough">
             Tour
           </button>
+          <button className="tab-btn new-project-btn" onClick={() => setShowWizard(true)} title="Create a new prompt lab">
+            + New Project
+          </button>
         </nav>
       </header>
 
@@ -356,6 +361,16 @@ function App() {
             </div>
           )}
         </>
+      )}
+
+      {showWizard && (
+        <NewProjectWizard
+          onClose={() => setShowWizard(false)}
+          onProjectCreated={(slug) => {
+            setShowWizard(false);
+            setSelectedProject(slug);
+          }}
+        />
       )}
     </div>
   );
