@@ -895,13 +895,13 @@ async def parse_eppi(request: Request, file: UploadFile):
         tmp_path = tmp.name
 
     try:
-        df = pd.read_excel(tmp_path) if suffix == ".xlsx" else pd.read_csv(tmp_path)
+        df = pd.read_excel(tmp_path, engine="calamine") if suffix == ".xlsx" else pd.read_csv(tmp_path)
     except Exception as exc:
         raise HTTPException(422, f"Could not read file: {exc}")
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
-    # Detect required columns (case-insensitive)
+    # Normalise column names
     col_map = {c.lower().strip(): c for c in df.columns}
     decision_col = col_map.get("ta_decision") or col_map.get("decision")
     id_col = col_map.get("u1") or col_map.get("record_id") or col_map.get("id")
@@ -958,7 +958,7 @@ async def process_eppi(request: Request, project_slug: str, file: UploadFile):
         tmp.write(raw)
         tmp_path = tmp.name
     try:
-        df = pd.read_excel(tmp_path) if suffix != ".csv" else pd.read_csv(tmp_path)
+        df = pd.read_excel(tmp_path, engine="calamine") if suffix != ".csv" else pd.read_csv(tmp_path)
     except Exception as exc:
         raise HTTPException(422, f"Could not read file: {exc}")
     finally:
