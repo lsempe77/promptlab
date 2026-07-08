@@ -17,7 +17,7 @@ const FIELD_LABELS: Record<string, string> = {
   sub_sector: "Sub-sector",
 };
 const POLL_MS = 15_000;
-const TOTAL_MODELS = 13;
+const TOTAL_MODELS = 12;
 
 function fieldActionLabel(jobs: Job[]): { label: string; kind: "extraction" | "optimization" | "judge" | null } {
   const running = jobs.find((j) => j.status === "running" && !j.stale);

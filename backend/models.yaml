@@ -1,11 +1,13 @@
 ﻿# Roster of OpenRouter models to compare.
-# Revised 2026-07-08: retired 6 broken/weak models after first full run:
+# Revised 2026-07-08: retired 7 broken/weak/uneconomical models:
 #   glm-4.7-flash    -- 96-100% error rate (json_object mode broken)
 #   gemini-pro-latest -- 54% error rate on authors, 0.075 F1
 #   kimi-k2.5         -- 25-36% errors, consistently weak
 #   kimi-latest       -- 40-59% errors, unstable
 #   llama-4-scout     -- 0.05-0.10 below top models, marginal value
-# Remaining 13 models span 3 tiers; each lab has 1-2 representatives.
+#   gpt-latest        -- 6x more expensive than gpt-mini; loses on authors
+#                        and affiliation; fails dual gate (recall=0.843<0.85)
+# 12 models remain across cheap and mid tiers.
 
 cheap:
   - "~openai/gpt-mini-latest"
@@ -22,6 +24,3 @@ mid:
   - meta-llama/llama-4-maverick
   - mistralai/mistral-medium-3-5
   - z-ai/glm-5.2
-
-expensive:
-  - "~openai/gpt-latest"
