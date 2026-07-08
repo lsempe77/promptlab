@@ -924,33 +924,50 @@ async def upload_ground_truth(request: Request, project_slug: str, file: UploadF
 
 @app.post("/api/screening/suggest-question")
 async def suggest_screening_question(request: Request):
-    """Use an LLM to generate a good yes/no screening question for an exclusion criterion."""
+    """Generate a detailed, rule-based screening instruction for one exclusion criterion.
+    Uses Claude Sonnet and the review scope to produce extraction-quality instructions."""
     _require_auth(dict(request.headers))
     body = await request.json()
     label = str(body.get("label", "")).strip()
-    project_name = str(body.get("project_name", "")).strip()
+    review_scope = str(body.get("review_scope", "")).strip()
     if not label:
         raise HTTPException(400, "label is required")
 
+    scope_block = (
+        f"\nThe review's inclusion scope: {review_scope}"
+        if review_scope
+        else "\n(No review scope provided — write general rules the user should refine.)"
+    )
+
     system = (
-        "You help systematic review teams write title/abstract screening questions for LLM-assisted screening. "
-        "You are given an exclusion criterion label (the reason a paper gets excluded in EPPI-Reviewer). "
-        "Write a single, precise yes/no question that an LLM can answer from a paper's title and abstract alone. "
-        "The question asks whether the paper SHOULD BE EXCLUDED for this reason — answer YES means exclude. "
-        "Rules: (1) start with 'Is' or 'Does'; (2) one sentence only; "
-        "(3) answerable from title+abstract; (4) do NOT use the project name in the question text."
+        "You are an expert systematic review methodologist writing LLM-based title/abstract screening instructions. "
+        "You write the INSTRUCTION that tells another LLM how to apply a specific exclusion criterion to a paper. "
+        "Your instruction will be used verbatim — write it as a directive to the screening LLM.\n\n"
+        "REQUIRED structure (prose, no bullet points, 3-6 sentences):\n"
+        "1. State clearly what triggers EXCLUSION (be specific — what must be true about the paper).\n"
+        "2. State what does NOT trigger exclusion (common false positives to avoid).\n"
+        "3. Add at least one disambiguation rule for edge cases.\n"
+        "4. Instruct the model to lean INCLUDE when genuinely uncertain (conservative screening).\n\n"
+        "Match the precision of this extraction example:\n"
+        "'List EVERY author of the paper, one entry per author, in the order they appear in the "
+        "title/author block — check for co-authors named after the first author and in footnotes, "
+        "do not stop at the first name you find. Format each as Last name, First name Middle name. "
+        "If the paper gives only initials for the first/middle name, keep the initials exactly as printed.'\n\n"
+        "Do NOT start with 'I' or 'You'. Do NOT write a yes/no question — write a screening rule."
     )
     user = (
-        f"Exclusion criterion label: \"{label}\"\n\n"
-        "Write ONLY the yes/no question. YES = paper should be excluded for this reason."
+        f"Exclusion criterion: \"{label}\""
+        f"{scope_block}\n\n"
+        "Write the screening instruction for this criterion."
     )
+
     try:
         resp = gateway.call_model(
-            "~openai/gpt-mini-latest", system, user,
-            temperature=0.3, max_tokens=120, json_mode=False,
+            "~anthropic/claude-sonnet-latest", system, user,
+            temperature=0.3, max_tokens=400, json_mode=False,
         )
-        question = (resp.content or "").strip().strip('"').strip("'")
-        return {"question": question}
+        instruction = (resp.content or "").strip().strip('"').strip("'")
+        return {"question": instruction}
     except gateway.GatewayError as exc:
         raise HTTPException(503, f"LLM call failed: {exc}")
 

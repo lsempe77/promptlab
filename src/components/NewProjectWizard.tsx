@@ -20,6 +20,7 @@ const EMPTY: WizardState = {
   description: "",
   projectType: "extraction",
   password: "",
+  reviewScope: "",
   fields: [],
   screeningFile: null,
   exclusionCriteria: [],

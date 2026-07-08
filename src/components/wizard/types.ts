@@ -28,6 +28,7 @@ export interface WizardState {
   description: string;
   projectType: ProjectType;
   password: string;
+  reviewScope: string;        // what gets INCLUDED: population, intervention, outcome, design
 
   // Step 2 — extraction
   fields: FieldDefinition[];

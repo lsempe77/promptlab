@@ -85,7 +85,7 @@ export default function Step2ScreeningUpload({ state, update, onNext, onBack, to
       const res = await fetch(`${API_BASE_URL}/api/screening/suggest-question`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ label: criterion.label, project_name: state.projectName }),
+        body: JSON.stringify({ label: criterion.label, project_name: state.projectName, review_scope: state.reviewScope }),
       });
       if (!res.ok) throw new Error(`${res.status}`);
       const data = await res.json();
@@ -231,8 +231,8 @@ export default function Step2ScreeningUpload({ state, update, onNext, onBack, to
             </div>
             <textarea
               className={`wizard-input question-textarea ${c.question.trim() ? "has-value" : ""}`}
-              rows={3}
-              placeholder={`Yes/no question for "${c.label}"… (e.g. "Is this study about a population other than...")`}
+              rows={5}
+              placeholder={`Screening instruction for "${c.label}"…\n\nTip: click ✨ Suggest to generate a detailed rule, then edit to add specifics from your protocol.`}
               value={c.question}
               onChange={(e) => updateQuestion(c.tag, e.target.value)}
             />

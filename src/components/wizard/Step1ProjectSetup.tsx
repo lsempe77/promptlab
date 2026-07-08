@@ -111,6 +111,21 @@ export default function Step1ProjectSetup({ state, update, onNext }: Props) {
         />
       </label>
 
+      {/* Review scope — screening projects only */}
+      {state.projectType !== "extraction" && (
+        <label className="wizard-label">
+          What does this review include?
+          <span className="label-hint"> — helps the AI write precise screening instructions</span>
+          <textarea
+            className="wizard-input"
+            rows={3}
+            placeholder="e.g. Randomised and quasi-experimental studies evaluating cash transfer programmes targeting women in LMICs, measuring economic empowerment outcomes."
+            value={state.reviewScope}
+            onChange={(e) => update({ reviewScope: e.target.value })}
+          />
+        </label>
+      )}
+
       {/* Password */}
       <label className="wizard-label">
         Access password
