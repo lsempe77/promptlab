@@ -4,6 +4,7 @@ interface VersionData {
   version: number;
   accepted: number;
   models: StageModelGate[];
+  n_runs?: number;
 }
 
 interface Props {
@@ -32,20 +33,22 @@ export function VersionProgressionTable({ versionData, gateThreshold, valueType 
   const metricLabel = isList ? "Element-level F1" : "Accuracy";
   const versions = versionData.map((v) => v.version);
 
-  // Build lookup: version → modelId → gate_metric (F1 or accuracy)
-  const lookup = new Map<number, Map<string, number>>();
+  // Build lookup: version → modelId → {gate_metric, n}
+  const lookup = new Map<number, Map<string, { score: number; n: number }>>();
   const modelSet = new Set<string>();
   for (const vd of versionData) {
-    const m = new Map<string, number>();
+    const m = new Map<string, { score: number; n: number }>();
     for (const g of vd.models) {
-      m.set(g.model_id, g.gate_metric);
+      m.set(g.model_id, { score: g.gate_metric, n: g.n ?? 0 });
       modelSet.add(g.model_id);
     }
     lookup.set(vd.version, m);
   }
 
   const getScore = (modelId: string, version: number): number | null =>
-    lookup.get(version)?.get(modelId) ?? null;
+    lookup.get(version)?.get(modelId)?.score ?? null;
+  const getN = (modelId: string, version: number): number | null =>
+    lookup.get(version)?.get(modelId)?.n ?? null;
 
   const latestV = versions[versions.length - 1];
   const firstV = versions[0];
@@ -62,8 +65,8 @@ export function VersionProgressionTable({ versionData, gateThreshold, valueType 
       <p className="muted panel-caption">
         {metricLabel} per model for each production prompt version — the actual gate metric
         (same as the main table below). Green ≥ {Math.round(threshold * 100)}% gate · ★ = accepted version.
-        Δ = change from v{firstV} → v{latestV}.
-      </p>
+        Δ = change from v{firstV} → v{latestV}.        <strong> Note:</strong> small Δ values (&lt;2%) often reflect run-count differences between versions
+        rather than real prompt changes — a version with 300 runs is more stable than one with 100.      </p>
       <div className="table-scroll">
         <table className="comparison-table vprog-table">
           <thead>
@@ -88,9 +91,12 @@ export function VersionProgressionTable({ versionData, gateThreshold, valueType 
                   <td className="model-id">{modelId}</td>
                   {versions.map((v) => {
                     const score = getScore(modelId, v);
+                    const n = getN(modelId, v);
                     return (
-                      <td key={v} className={`numeric ${cellClass(score, threshold)}`}>
+                      <td key={v} className={`numeric ${cellClass(score, threshold)}`}
+                          title={n != null ? `n=${n} runs` : undefined}>
                         {pct(score)}
+                        {score != null && n != null && <span className="vprog-n"> {n}</span>}
                       </td>
                     );
                   })}

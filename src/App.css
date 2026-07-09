@@ -712,6 +712,7 @@ body {
 .vprog-table .vprog-delta { font-weight: 600; text-align: right; }
 .vprog-table .vprog-delta-up { color: var(--good); }
 .vprog-table .vprog-delta-down { color: var(--bad); }
+.vprog-table .vprog-n { font-size: 0.68em; opacity: 0.55; font-weight: 400; }
 
 /* Aggregate comparison charts (leaderboard + cost/quality scatter). */
 .aggregate-charts {
