@@ -326,9 +326,10 @@ def pending_task_count(conn, project_id: int | None = None) -> int:
     with conn.cursor() as cur:
         if project_id:
             cur.execute(
-                "SELECT COUNT(*) FROM worker_tasks WHERE status='pending' AND project_id=%s",
+                "SELECT COUNT(*) AS n FROM worker_tasks WHERE status='pending' AND project_id=%s",
                 (project_id,),
             )
         else:
-            cur.execute("SELECT COUNT(*) FROM worker_tasks WHERE status='pending'")
-        return cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) AS n FROM worker_tasks WHERE status='pending'")
+        row = cur.fetchone()
+        return row["n"] if row else 0
