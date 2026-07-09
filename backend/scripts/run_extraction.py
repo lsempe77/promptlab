@@ -178,10 +178,11 @@ def main() -> None:
     _pg_conn = _pg_ctx.__enter__() if _pg_ctx else None
 
     def _w_add_run(sqlite_conn, **kwargs):
+        # Always write to SQLite — it is the coordinator's ground truth.
+        db.add_run(sqlite_conn, **kwargs)
+        # Also mirror to Postgres when available (for analytics / multi-machine).
         if _pg_conn:
             db_pg.add_run_pg(_pg_conn, **kwargs)
-        else:
-            db.add_run(sqlite_conn, **kwargs)
 
     def _w_start_job(sqlite_conn, *args, **kwargs):
         if _pg_conn:

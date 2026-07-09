@@ -68,36 +68,19 @@ def main() -> None:
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, args.project)
 
-        # -- Read runs: from Postgres when _USE_PG, else SQLite -------------------------
-        if _USE_PG:
-            with db_pg.get_pg_conn() as pg:
-                with pg.cursor() as cur:
-                    cur.execute(
-                        "SELECT r.id, r.model_id, r.record_id, r.parsed_value_json "
-                        "FROM runs r WHERE r.project_id=%s AND r.field_name=%s "
-                        "AND r.parsed_value_json IS NOT NULL ORDER BY r.id",
-                        (project_id, args.field),
-                    )
-                    candidates = [dict(r) for r in cur.fetchall()]
-                    cur.execute(
-                        "SELECT j.run_id, j.judge_model FROM llm_judgments j "
-                        "JOIN runs r ON r.id=j.run_id WHERE r.project_id=%s AND r.field_name=%s",
-                        (project_id, args.field),
-                    )
-                    already = {(row["run_id"], row["judge_model"]) for row in cur.fetchall()}
-        else:
-            candidates = conn.execute(
-                "SELECT id, model_id, record_id, parsed_value_json FROM runs "
-                "WHERE project_id = ? AND field_name = ? AND parsed_value_json IS NOT NULL "
-                "ORDER BY id",
+        # -- Read runs + already-judged: always from SQLite (coordinator's ground truth) ---
+        candidates = conn.execute(
+            "SELECT id, model_id, record_id, parsed_value_json FROM runs "
+            "WHERE project_id = ? AND field_name = ? AND parsed_value_json IS NOT NULL "
+            "ORDER BY id",
+            (project_id, args.field),
+        ).fetchall()
+        already = {
+            (row["run_id"], row["judge_model"])
+            for row in conn.execute(
+                "SELECT j.run_id, j.judge_model FROM llm_judgments j "
+                "JOIN runs r ON r.id = j.run_id WHERE r.project_id = ? AND r.field_name = ?",
                 (project_id, args.field),
-            ).fetchall()
-            already = {
-                (row["run_id"], row["judge_model"])
-                for row in conn.execute(
-                    "SELECT j.run_id, j.judge_model FROM llm_judgments j "
-                    "JOIN runs r ON r.id = j.run_id WHERE r.project_id = ? AND r.field_name = ?",
-                    (project_id, args.field),
                 )
             }
 
@@ -155,47 +138,28 @@ def main() -> None:
                     continue
                 if _USE_PG and _pg_write:
                     db_pg.add_llm_judgment_pg(_pg_write, r["id"], judge_of[r["id"]], verdict, reasoning)
-                else:
-                    db.add_llm_judgment(conn, r["id"], judge_of[r["id"]], verdict, reasoning)
+                # Always write to SQLite — it is the coordinator's ground truth for unjudged counts
+                db.add_llm_judgment(conn, r["id"], judge_of[r["id"]], verdict, reasoning)
                 n_ok += 1
             if _USE_PG and _pg_write:
                 _pg_write.commit()
             print(f"Judged: {n_ok}, failed/unparsable: {n_err}")
 
         # -- Report: agreement + threshold sweep over ALL judged runs -------------------
-        if _USE_PG:
-            with db_pg.get_pg_conn() as pg:
-                with pg.cursor() as cur:
-                    if args.cross_family:
-                        cur.execute(
-                            "SELECT r.score, r.is_correct, j.verdict FROM runs r "
-                            "JOIN llm_judgments j ON j.run_id=r.id "
-                            "WHERE r.project_id=%s AND r.field_name=%s",
-                            (project_id, args.field),
-                        )
-                    else:
-                        cur.execute(
-                            "SELECT r.score, r.is_correct, j.verdict FROM runs r "
-                            "JOIN llm_judgments j ON j.run_id=r.id AND j.judge_model=%s "
-                            "WHERE r.project_id=%s AND r.field_name=%s",
-                            (args.judge_model, project_id, args.field),
-                        )
-                    judged = [dict(r) for r in cur.fetchall()]
+        if args.cross_family:
+            judged = conn.execute(
+                "SELECT r.score, r.is_correct, j.verdict FROM runs r "
+                "JOIN llm_judgments j ON j.run_id = r.id "
+                "WHERE r.project_id = ? AND r.field_name = ?",
+                (project_id, args.field),
+            ).fetchall()
         else:
-            if args.cross_family:
-                judged = conn.execute(
-                    "SELECT r.score, r.is_correct, j.verdict FROM runs r "
-                    "JOIN llm_judgments j ON j.run_id = r.id "
-                    "WHERE r.project_id = ? AND r.field_name = ?",
-                    (project_id, args.field),
-                ).fetchall()
-            else:
-                judged = conn.execute(
-                    "SELECT r.score, r.is_correct, j.verdict FROM runs r "
-                    "JOIN llm_judgments j ON j.run_id = r.id AND j.judge_model = ? "
-                    "WHERE r.project_id = ? AND r.field_name = ?",
-                    (args.judge_model, project_id, args.field),
-                ).fetchall()
+            judged = conn.execute(
+                "SELECT r.score, r.is_correct, j.verdict FROM runs r "
+                "JOIN llm_judgments j ON j.run_id = r.id AND j.judge_model = ? "
+                "WHERE r.project_id = ? AND r.field_name = ?",
+                (args.judge_model, project_id, args.field),
+            ).fetchall()
 
     if not judged:
         print("No judged runs available for a report yet.")
