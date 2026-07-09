@@ -503,9 +503,26 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
             (project_id, field_name),
         ).fetchone()
         references = (row["recs"] if row else 0) or 0
-        # Optional version filter appended to queries that touch runs.
-        v_clause = "AND r.prompt_version_id = ?" if pvid is not None else ""
-        v_params: tuple = (pvid,) if pvid is not None else ()
+
+        # When no specific version is requested, show each model at its OWN
+        # best accepted prompt version (same as models-summary does) rather
+        # than mixing runs from all versions, which would produce a misleading
+        # aggregate metric.
+        if pvid is None:
+            model_pvids = _best_pvids_per_model(conn, project_id, field_name)
+            if model_pvids:
+                or_clauses = " OR ".join(
+                    "(r.model_id = ? AND r.prompt_version_id = ?)" for _ in model_pvids
+                )
+                or_params = tuple(p for mid, mpvid in model_pvids.items() for p in (mid, mpvid))
+                v_clause = f"AND ({or_clauses})"
+                v_params: tuple = or_params
+            else:
+                v_clause = ""
+                v_params = ()
+        else:
+            v_clause = "AND r.prompt_version_id = ?"
+            v_params = (pvid,)
         jrows = conn.execute(
             "SELECT r.model_id, AVG(CASE WHEN j.verdict = 1 THEN 1.0 ELSE 0.0 END) AS acc, "
             f"COUNT(*) AS n FROM llm_judgments j JOIN runs r ON r.id = j.run_id "
