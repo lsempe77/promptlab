@@ -4,6 +4,40 @@ Forward-looking plans and design decisions for the DEP Prompt Lab (backend + fro
 This is the canonical roadmap; `backend/README.md` and the agent instructions point here.
 Keep entries short; move anything that becomes "current lasting state" into the README instead.
 
+## Multi-client deployment — per-Fly-app isolation (chosen: Option 3)
+
+Each client project (GE, HSF, StrongMinds, new DEP screening, etc.) gets its **own Fly.io app**:
+own machine, own `/data` volume, own supervisor, own URL. No shared DB, no tenant isolation
+headaches, complete blast radius isolation between clients.
+
+**Architecture:**
+```
+dep-promptlab-api.fly.dev        ← DEP extraction (production, always-on)
+dep-promptlab-ge.fly.dev         ← GE screening (when provisioned)
+dep-promptlab-hsf.fly.dev        ← HSF (when provisioned)
+```
+
+**Provisioning flow (today — semi-manual, ~10 min per client):**
+1. Colleague fills in the wizard (project name, type, fields/criteria, corpus, GT)
+2. Wizard outputs a `project_manifest.json` (or the backend stores it)
+3. Lucas runs `python -m backend.scripts.provision_project --manifest project_manifest.json`
+   — this calls flyctl to create the app, set secrets, deploy the image, create the volume,
+   upload corpus + GT, and launch the supervisor
+4. Colleague gets a URL and password
+
+**Provisioning flow (planned — fully automated):**
+- The wizard's "Launch" button calls the Fly Machines API directly from the backend
+  (`POST https://api.machines.dev/v1/apps` + `POST .../machines`) — no Lucas required
+- Requires storing a `FLY_API_TOKEN` secret; the provisioner waits for health check then
+  redirects the user to their new dashboard URL
+
+**Cost model:** ~$35/month per client app (performance-2x, 4GB RAM). Idle apps can be scaled
+down to `shared-cpu-1x` between review cycles (~$5/month) and scaled back up on demand.
+
+**Status:** provisioner script `backend/scripts/provision_project.py` — **planned, not built**.
+The wizard's Step 5 currently posts to the existing DEP machine (`/api/projects`). The manifest
+output and Fly API integration are the next engineering tasks for this branch.
+
 ## Evaluation metrics & the quality gate
 
 **Done (2026-07-06):** the production gate is now field-type-aware and matches the
