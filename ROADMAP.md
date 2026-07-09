@@ -155,19 +155,44 @@ acceptance. Rationale: missing values are invisible in QA; extras are visible an
   extraction and optimization cycles (judging is already one call; harder to split without a
   `llm_judge` per-model flag).
 
-- **[Phase 2] True multi-machine parallelism (horizontal scaling)** — SQLite volumes are
-  single-machine on Fly.io, so Phase 1 exhausts single-machine concurrency. Horizontal scale
-  requires a shared DB:
-  - Move `runs` (and `llm_judgments`) to **Fly Postgres** (or Neon). Ground truth / prompt
-    versions / projects can stay in SQLite on the coordinator machine.
-  - Add a **job-claim table** in Postgres:
-    `worker_tasks(id, field, model_id, kind, args_json, status, worker_id, claimed_at, finished_at)`
-    with an atomic `UPDATE ... WHERE status='pending' ORDER BY priority LIMIT 1 RETURNING *`
-    claim query.
-  - Coordinator machine runs the supervisor loop (decides what to do, writes pending tasks).
-  - Worker machines run `backend/scripts/worker.py` — polls, claims, executes, marks done.
-  - Deploy workers as additional Fly machines (`fly machine clone`) each mounting **no volume**
-    (they need only Postgres connectivity and `OPENROUTER_API_KEY`).
+- **[Phase 2] True multi-machine parallelism — IMPLEMENTATION PLAN (decided 2026-07-09)**
+
+  Full Postgres migration (all tables). Single-machine parallel fields first, then multi-worker.
+
+  **Why SQLite can't parallelize:** `db.get_conn()` holds an implicit write transaction for
+  the entire optimization loop (10–40 min), blocking every other writer. WAL allows concurrent
+  reads but not concurrent writes.
+
+  **Fly Postgres created:** `dep-promptlab-pg` (shared-cpu-1x, 10GB, iad).
+
+  **Step sequence:**
+
+  Step 1 — Infrastructure (done: Postgres created; next: `fly postgres attach dep-promptlab-pg`)
+  Step 2 — `db_pg.py`: Postgres-equivalent of `db.py` + `worker_tasks` table:
+  ```sql
+  CREATE TABLE worker_tasks (
+    id SERIAL PRIMARY KEY, project_id INT, field_name TEXT, model_id TEXT,
+    kind TEXT NOT NULL, args_json JSONB, status TEXT DEFAULT 'pending',
+    worker_id TEXT, claimed_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, error TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+  );
+  -- Atomic claim: UPDATE ... WHERE status='pending' ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED
+  ```
+  Step 3 — Migrate write paths: `add_run()`, `add_iteration()`, `add_llm_judgment()` → Postgres.
+             SQLite stays for: `projects`, `records`, `ground_truth`, `prompt_versions` (coordinator-owned).
+  Step 4 — `worker.py`: poll `worker_tasks`, claim atomically, execute, mark done. Stateless.
+  Step 5 — `supervisor.py`: INSERT tasks instead of blocking shell-out. Short poll cycle.
+  Step 6 — `fly machine clone` to add workers (no volume, just Postgres + OpenRouter).
+
+  **Corpus access for workers (decide before Step 6):**
+  Option A: `GET /corpus/{record_id}` from coordinator API (~10ms/record, simplest).
+  Option B: Fly Object Storage / Cloudflare R2 (proper object storage, more setup).
+  Recommendation: A for DEP, B for new client projects.
+
+  **Tables to Postgres:** `runs`, `llm_judgments`, `iterations`, `jobs`, `worker_tasks`, `self_consistency_runs`.
+  **Tables staying SQLite:** `projects`, `records`, `ground_truth`, `prompt_versions`.
+
+
 
 - **[Phase 3] Elastic workers via Fly Machines API** — coordinator spawns an ephemeral Fly machine
   per task batch using the Fly Machines REST API, runs the task, machine exits. Fully elastic:
