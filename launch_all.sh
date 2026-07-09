@@ -10,7 +10,7 @@ nohup python -m backend.scripts.supervisor \
   --project dep-extraction \
   --loop \
   --max-cycles 12 \
-  --interval 10800 \
+  --interval 300 \
   --parallelism 4 \
   >> /data/supervisor.log 2>&1 &
 echo "LAUNCHED supervisor pid $!"

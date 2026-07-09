@@ -325,6 +325,22 @@ def main() -> None:
         if args.max_runs and run_no >= args.max_runs:
             _log(f"Reached max_runs={args.max_runs}. Stopping daemon.")
             break
+
+        # Phase 2: in PG/task-queue mode, wait for all enqueued tasks to finish
+        # before sleeping, so the next cycle sees the updated SQLite state.
+        if _USE_PG:
+            with db.get_conn() as conn:
+                project_id = db.get_project_id(conn, args.project)
+            with db_pg.get_pg_conn() as pg:
+                n_pending = db_pg.pending_task_count(pg, project_id)
+            if n_pending > 0:
+                _log(f"Waiting for {n_pending} worker task(s) to complete before next run...")
+                while n_pending > 0:
+                    time.sleep(30)
+                    with db_pg.get_pg_conn() as pg:
+                        n_pending = db_pg.pending_task_count(pg, project_id)
+                _log("Queue drained — starting next run.")
+
         _log(f"Sleeping {args.interval}s before next run...")
         time.sleep(args.interval)
 
