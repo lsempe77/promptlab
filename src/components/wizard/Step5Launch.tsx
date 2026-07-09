@@ -115,6 +115,41 @@ const TIER_COLOR: Record<string, string> = {
   expensive: "#7c3aed",
 };
 
+function downloadManifest(state: WizardState) {
+  const appName = `dep-promptlab-${state.projectSlug}`;
+  const manifest = {
+    app_name: appName,
+    project_name: state.projectName,
+    project_slug: state.projectSlug,
+    description: state.description,
+    project_type: state.projectType,
+    password: state.password || "(set before provisioning)",
+    region: "iad",
+    selected_models: state.selectedModels,
+    // Extraction
+    fields: state.fields,
+    // Screening
+    exclusion_criteria: state.exclusionCriteria,
+    maybe_strategy: state.maybeStrategy,
+    review_scope: state.reviewScope,
+    screening_records: state.screeningRecordCount,
+    _notes: [
+      "Provision with: python -m backend.scripts.provision_project --manifest <this-file>",
+      state.projectType !== "extraction"
+        ? "EPPI Excel file must be re-uploaded via provision_project.py --eppi-file <path>"
+        : "Corpus PDFs and ground truth CSV must be provided separately.",
+      `Dashboard will be at: https://${appName}.fly.dev`,
+    ],
+  };
+  const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${appName}_manifest.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function Step5Launch({ state, update, onBack, onLaunch, submitting }: Props) {
   const isExtraction = state.projectType === "extraction";
   const typeLabel =
@@ -237,11 +272,20 @@ export default function Step5Launch({ state, update, onBack, onLaunch, submittin
 
       <div className="wizard-footer">
         <button className="btn-secondary" onClick={onBack} disabled={submitting}>← Back</button>
-        <button className="btn-launch" onClick={onLaunch} disabled={submitting || selected.length === 0}>
-          {submitting
-            ? (isExtraction ? "Creating project…" : "Creating project & uploading corpus…")
-            : "🚀 Launch"}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            className="btn-secondary"
+            onClick={() => downloadManifest(state)}
+            title="Download a manifest.json that Lucas can use to provision a dedicated Fly.io app for this project"
+          >
+            ↓ Download manifest
+          </button>
+          <button className="btn-launch" onClick={onLaunch} disabled={submitting || selected.length === 0}>
+            {submitting
+              ? (isExtraction ? "Creating project…" : "Creating project & uploading corpus…")
+              : "🚀 Launch on this server"}
+          </button>
+        </div>
       </div>
     </div>
   );

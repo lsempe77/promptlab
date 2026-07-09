@@ -214,15 +214,16 @@ def provision(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--manifest", help="JSON manifest file from the wizard")
+    ap.add_argument("--manifest", help="JSON manifest file downloaded from the wizard")
     ap.add_argument("--app", help="Fly app name (e.g. dep-promptlab-ge)")
     ap.add_argument("--slug", help="Project slug (e.g. ge-screening)")
     ap.add_argument("--name", default="New Project", help="Project display name")
     ap.add_argument("--type", default="extraction", choices=["extraction","screening_ta","screening_ft"])
     ap.add_argument("--password", help="Shared access password")
     ap.add_argument("--region", default="iad")
-    ap.add_argument("--corpus-dir", help="Local directory of .md corpus files")
+    ap.add_argument("--corpus-dir", help="Local directory of .md corpus files (extraction)")
     ap.add_argument("--gt-csv", help="Ground truth CSV file")
+    ap.add_argument("--eppi-file", help="EPPI Excel file for screening projects")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -233,10 +234,19 @@ def main() -> None:
         slug = m["project_slug"]
         name = m["project_name"]
         ptype = m["project_type"]
-        pw = m["password"]
+        pw = m.get("password") or args.password or ""
+        if not pw or pw == "(set before provisioning)":
+            ap.error("Password not set in manifest. Pass --password <value>.")
         region = m.get("region", "iad")
-        corpus = m.get("corpus_dir")
-        gt = m.get("ground_truth_csv")
+        corpus = args.corpus_dir or m.get("corpus_dir")
+        gt = args.gt_csv or m.get("ground_truth_csv")
+        eppi = args.eppi_file
+        print(f"Manifest loaded: {name} ({slug}) → {app_name}")
+        if m.get("exclusion_criteria"):
+            print(f"  {len(m['exclusion_criteria'])} exclusion criteria, strategy={m.get('maybe_strategy','?')}")
+        if m.get("fields"):
+            print(f"  {len(m['fields'])} extraction fields")
+        print(f"  {len(m.get('selected_models',[]))} models: {', '.join(x.split('/')[-1] for x in m.get('selected_models',[]))}")
     else:
         if not args.app or not args.slug or not args.password:
             ap.error("--app, --slug, and --password are required (or use --manifest)")
@@ -248,6 +258,11 @@ def main() -> None:
         region = args.region
         corpus = args.corpus_dir
         gt = args.gt_csv
+        eppi = args.eppi_file
+
+    if ptype != "extraction" and not eppi and not corpus:
+        print(f"WARNING: screening project but no --eppi-file provided.")
+        print(f"  Run again with: --eppi-file path/to/eppi_export.xlsx")
 
     provision(
         app_name=app_name,
