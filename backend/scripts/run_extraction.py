@@ -41,9 +41,14 @@ except Exception:
 
 from backend.app import config, db, gateway, prompts, scoring  # noqa: E402
 from backend.app import carbon  # noqa: E402
+from backend.app import db_pg  # noqa: E402 -- Postgres layer (Phase 2)
 from backend.app.corpus import read_md  # noqa: E402
 from backend.app.parsing import ParseError, parse_field_response  # noqa: E402
 from backend.app.prompt_store import get_or_create_baseline  # noqa: E402
+
+# Phase 2 feature flag: when DATABASE_URL is set, writes go to Postgres.
+# Reads (projects, GT, prompt_versions) always stay in SQLite on the coordinator.
+_USE_PG = db_pg.pg_enabled()
 
 SEED = 42
 
@@ -167,98 +172,123 @@ def main() -> None:
         print("Nothing new to run.")
         return
 
-    with db.get_conn() as conn:
-        job_ids = {m: db.start_job(conn, project_id, args.field, m, kind="extraction", total=new_counts[m]) for m in models}
+    # Phase 2: open Postgres connection alongside SQLite when DATABASE_URL is set.
+    # Writes (runs, jobs) go to Postgres; reads stay in SQLite.
+    _pg_ctx = db_pg.get_pg_conn() if _USE_PG else None
+    _pg_conn = _pg_ctx.__enter__() if _pg_ctx else None
+
+    def _w_add_run(sqlite_conn, **kwargs):
+        if _pg_conn:
+            db_pg.add_run_pg(_pg_conn, **kwargs)
+        else:
+            db.add_run(sqlite_conn, **kwargs)
+
+    def _w_start_job(sqlite_conn, *args, **kwargs):
+        if _pg_conn:
+            return db_pg.start_job_pg(_pg_conn, *args, **kwargs)
+        return db.start_job(sqlite_conn, *args, **kwargs)
+
+    def _w_update_job(sqlite_conn, job_id, n_done):
+        if _pg_conn:
+            db_pg.update_job_progress_pg(_pg_conn, job_id, n_done)
+        else:
+            db.update_job_progress(sqlite_conn, job_id, n_done)
+
+    def _w_finish_job(sqlite_conn, job_id, **kwargs):
+        if _pg_conn:
+            db_pg.finish_job_pg(_pg_conn, job_id, **kwargs)
+        else:
+            db.finish_job(sqlite_conn, job_id, **kwargs)
 
     try:
         with db.get_conn() as conn:
+            job_ids = {m: _w_start_job(conn, project_id, args.field, m, kind="extraction", total=new_counts[m]) for m in models}
 
-            def _on_complete(i: int, resp: gateway.ModelResponse | gateway.GatewayError) -> None:
-                rec, model_id = job_meta[i]
-                run_kwargs = dict(
-                    project_id=project_id,
-                    prompt_version_id=model_pv[model_id]["id"],
-                    model_id=model_id,
-                    record_id=rec["id"],
-                    field_name=args.field,
-                    batch_id=batch_id,
-                )
-                if isinstance(resp, gateway.GatewayError):
-                    print(f"  [error] {model_id} on record {rec['id']}: {resp}")
-                    db.add_run(conn, **run_kwargs, raw_response=None, parsed_value=None, score=None,
-                               is_correct=0, latency_ms=None, prompt_tokens=None, completion_tokens=None,
-                               cost_usd=None, error=str(resp))
-                    errors[model_id] += 1
-                else:
-                    try:
-                        value, meta = parse_field_response(args.field, resp.content)
-                    except ParseError as exc:
-                        print(f"  [parse-error] {model_id} on record {rec['id']}: {exc}")
-                        db.add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=None, score=0.0,
-                                   is_correct=0, latency_ms=resp.latency_ms, prompt_tokens=resp.prompt_tokens,
-                                   completion_tokens=resp.completion_tokens, cost_usd=resp.cost_usd, error=str(exc))
-                        results[model_id].append(0.0)
-                    except Exception as exc:  # noqa: BLE001 - one bad response must not kill the whole batch
-                        print(f"  [unexpected-error] {model_id} on record {rec['id']}: {exc!r}")
-                        db.add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=None, score=0.0,
-                                   is_correct=0, latency_ms=resp.latency_ms, prompt_tokens=resp.prompt_tokens,
-                                   completion_tokens=resp.completion_tokens, cost_usd=resp.cost_usd,
-                                   error=f"unexpected: {exc!r}")
+        try:
+            with db.get_conn() as conn:
+
+                def _on_complete(i: int, resp: gateway.ModelResponse | gateway.GatewayError) -> None:
+                    rec, model_id = job_meta[i]
+                    run_kwargs = dict(
+                        project_id=project_id,
+                        prompt_version_id=model_pv[model_id]["id"],
+                        model_id=model_id,
+                        record_id=rec["id"],
+                        field_name=args.field,
+                        batch_id=batch_id,
+                    )
+                    if isinstance(resp, gateway.GatewayError):
+                        print(f"  [error] {model_id} on record {rec['id']}: {resp}")
+                        _w_add_run(conn, **run_kwargs, raw_response=None, parsed_value=None, score=None,
+                                   is_correct=0, latency_ms=None, prompt_tokens=None, completion_tokens=None,
+                                   cost_usd=None, error=str(resp))
                         errors[model_id] += 1
                     else:
-                        verified = scoring.verify_excerpt(meta.get("excerpt"), source_cache.get(rec["id"]))
-                        verified_col = None if verified is None else int(verified)
                         try:
-                            result = scoring.score_field(args.field, value, rec["ground_truth"],
-                                                         excerpt_verified=verified)
-                        except Exception as exc:  # noqa: BLE001 - same rationale as above
+                            value, meta = parse_field_response(args.field, resp.content)
+                        except ParseError as exc:
+                            print(f"  [parse-error] {model_id} on record {rec['id']}: {exc}")
+                            _w_add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=None, score=0.0,
+                                       is_correct=0, latency_ms=resp.latency_ms, prompt_tokens=resp.prompt_tokens,
+                                       completion_tokens=resp.completion_tokens, cost_usd=resp.cost_usd, error=str(exc))
+                            results[model_id].append(0.0)
+                        except Exception as exc:  # noqa: BLE001
                             print(f"  [unexpected-error] {model_id} on record {rec['id']}: {exc!r}")
-                            db.add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=value, score=0.0,
-                                       excerpt=meta.get("excerpt"), notes=meta.get("notes"),
-                                       excerpt_verified=verified_col, confidence=meta.get("confidence"),
+                            _w_add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=None, score=0.0,
                                        is_correct=0, latency_ms=resp.latency_ms, prompt_tokens=resp.prompt_tokens,
                                        completion_tokens=resp.completion_tokens, cost_usd=resp.cost_usd,
                                        error=f"unexpected: {exc!r}")
                             errors[model_id] += 1
                         else:
-                            db.add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=value,
-                                       excerpt=meta.get("excerpt"), notes=meta.get("notes"),
-                                       excerpt_verified=verified_col, confidence=meta.get("confidence"),
-                                       outcome=result.outcome, honesty_score=result.honesty_score,
-                                       logprob_confidence=resp.logprob_confidence,
-                                       score=result.score, is_correct=int(result.is_correct), latency_ms=resp.latency_ms,
-                                       prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
-                                       cost_usd=resp.cost_usd,
-                                       co2e_grams=carbon.estimate_co2e_grams(model_id, resp.completion_tokens, resp.latency_ms),
-                                       error=None)
-                            results[model_id].append(result.score)
+                            verified = scoring.verify_excerpt(meta.get("excerpt"), source_cache.get(rec["id"]))
+                            verified_col = None if verified is None else int(verified)
+                            try:
+                                result = scoring.score_field(args.field, value, rec["ground_truth"],
+                                                             excerpt_verified=verified)
+                            except Exception as exc:  # noqa: BLE001
+                                print(f"  [unexpected-error] {model_id} on record {rec['id']}: {exc!r}")
+                                _w_add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=value, score=0.0,
+                                           excerpt=meta.get("excerpt"), notes=meta.get("notes"),
+                                           excerpt_verified=verified_col, confidence=meta.get("confidence"),
+                                           is_correct=0, latency_ms=resp.latency_ms, prompt_tokens=resp.prompt_tokens,
+                                           completion_tokens=resp.completion_tokens, cost_usd=resp.cost_usd,
+                                           error=f"unexpected: {exc!r}")
+                                errors[model_id] += 1
+                            else:
+                                _w_add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=value,
+                                           excerpt=meta.get("excerpt"), notes=meta.get("notes"),
+                                           excerpt_verified=verified_col, confidence=meta.get("confidence"),
+                                           outcome=result.outcome, honesty_score=result.honesty_score,
+                                           logprob_confidence=resp.logprob_confidence,
+                                           score=result.score, is_correct=int(result.is_correct), latency_ms=resp.latency_ms,
+                                           prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
+                                           cost_usd=resp.cost_usd,
+                                           co2e_grams=carbon.estimate_co2e_grams(model_id, resp.completion_tokens, resp.latency_ms),
+                                           error=None)
+                                results[model_id].append(result.score)
 
-                job_id = job_ids.get(model_id)
-                if job_id is not None:
-                    n_done = len(results[model_id]) + errors[model_id]
-                    db.update_job_progress(conn, job_id, n_done)
+                    job_id = job_ids.get(model_id)
+                    if job_id is not None:
+                        n_done = len(results[model_id]) + errors[model_id]
+                        _w_update_job(conn, job_id, n_done)
 
-                # Commit after every single result (not just once at the end
-                # of the whole batch/context-manager) so a crash/kill
-                # partway through doesn't lose already-completed, already
-                # paid-for results.
-                conn.commit()
+                    if not _pg_conn:
+                        conn.commit()  # SQLite: commit per result; PG: auto-committed per statement
 
-            # Results are persisted to SQLite one at a time as each call
-            # completes (see _on_complete), instead of only after the whole
-            # batch finishes -- so a crash/kill partway through a large batch
-            # doesn't lose every result already paid for.
-            gateway.call_model_batch(jobs, max_workers=args.concurrency, on_complete=_on_complete)
+                gateway.call_model_batch(jobs, max_workers=args.concurrency, on_complete=_on_complete)
 
-            for model_id, job_id in job_ids.items():
-                if job_id is not None:
-                    db.finish_job(conn, job_id, status="completed")
-    except Exception as exc:
-        with db.get_conn() as conn:
-            for model_id, job_id in job_ids.items():
-                if job_id is not None:
-                    db.finish_job(conn, job_id, status="failed", error=str(exc))
-        raise
+                for model_id, job_id in job_ids.items():
+                    if job_id is not None:
+                        _w_finish_job(conn, job_id, status="completed")
+        except Exception as exc:
+            with db.get_conn() as conn:
+                for model_id, job_id in job_ids.items():
+                    if job_id is not None:
+                        _w_finish_job(conn, job_id, status="failed", error=str(exc))
+            raise
+    finally:
+        if _pg_ctx and _pg_conn:
+            _pg_ctx.__exit__(None, None, None)
 
     print("\n=== Results ===")
     print(f"{'model':45s} {'n':>4s} {'mean_score':>10s} {'accuracy':>9s} {'errors':>7s}")
