@@ -262,11 +262,13 @@ def main() -> None:
                         with db_pg.get_pg_conn() as pg:
                             with db.get_conn() as conn:
                                 project_id = db.get_project_id(conn, args.project)
-                            for m in models:
-                                db_pg.enqueue_task(pg, project_id, field, m, "extraction", {
+                            enqueued = sum(
+                                1 for m in models
+                                if db_pg.enqueue_task(pg, project_id, field, m, "extraction", {
                                     "project": args.project, "n": arg,
-                                }, priority=2)
-                        _log(f"[{field}] Enqueued {len(models)} extraction tasks → stage {arg}.")
+                                }, priority=2) is not None
+                            )
+                        _log(f"[{field}] Enqueued {enqueued}/{len(models)} extraction tasks → stage {arg}.")
                     elif args.parallelism > 1:
                         cmds = [
                             ["backend.scripts.run_extraction", "--project", args.project,
@@ -282,10 +284,10 @@ def main() -> None:
                         with db_pg.get_pg_conn() as pg:
                             with db.get_conn() as conn:
                                 project_id = db.get_project_id(conn, args.project)
-                            db_pg.enqueue_task(pg, project_id, field, None, "judge", {
+                            result = db_pg.enqueue_task(pg, project_id, field, None, "judge", {
                                 "project": args.project,
                             }, priority=3)
-                        _log(f"[{field}] Enqueued judge task.")
+                        _log(f"[{field}] {'Enqueued judge task.' if result else 'Judge task already queued.'}")
                     else:
                         _run(["backend.scripts.llm_judge", "--project", args.project, "--field", field,
                               "--n", "100000", "--cross-family"])
@@ -296,13 +298,15 @@ def main() -> None:
                         with db_pg.get_pg_conn() as pg:
                             with db.get_conn() as conn:
                                 project_id = db.get_project_id(conn, args.project)
-                            for m in opt_models:
-                                db_pg.enqueue_task(pg, project_id, field, m, "optimization", {
+                            enqueued = sum(
+                                1 for m in opt_models
+                                if db_pg.enqueue_task(pg, project_id, field, m, "optimization", {
                                     "project": args.project,
                                     "reflector_model": args.reflector_model,
                                     "improvement_epsilon": eps,
-                                }, priority=1)
-                        _log(f"[{field}] Enqueued {len(opt_models)} optimization tasks in Postgres.")
+                                }, priority=1) is not None
+                            )
+                        _log(f"[{field}] Enqueued {enqueued}/{len(opt_models)} optimization tasks (rest already queued).")
                     else:
                         # Phase 1 fallback: sequential shell-out
                         for m in opt_models:

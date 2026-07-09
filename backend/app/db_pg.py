@@ -288,9 +288,19 @@ def get_judgments_pg(conn, run_ids: list[int]) -> list[dict]:
 # ── Worker task queue ─────────────────────────────────────────────────────────
 
 def enqueue_task(conn, project_id: int, field_name: str, model_id: str | None,
-                 kind: str, args: dict, priority: int = 0) -> int:
-    """Add a task to the worker queue. Returns the task id."""
+                 kind: str, args: dict, priority: int = 0) -> int | None:
+    """Add a task to the worker queue. Returns the task id, or None if a
+    matching pending/running task already exists (deduplication)."""
     with conn.cursor() as cur:
+        # Skip if an identical pending or running task exists
+        cur.execute(
+            "SELECT id FROM worker_tasks "
+            "WHERE project_id=%s AND field_name=%s AND model_id IS NOT DISTINCT FROM %s "
+            "  AND kind=%s AND status IN ('pending', 'running') LIMIT 1",
+            (project_id, field_name, model_id, kind),
+        )
+        if cur.fetchone():
+            return None  # duplicate — already queued
         cur.execute(
             "INSERT INTO worker_tasks (project_id, field_name, model_id, kind, args_json, priority) "
             "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
