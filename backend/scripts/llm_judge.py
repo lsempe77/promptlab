@@ -33,7 +33,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.app import db, gateway, judging, parsing  # noqa: E402
+from backend.app import db_pg  # noqa: E402
 from backend.app.fields import FIELDS  # noqa: E402
+
+_USE_PG = db_pg.pg_enabled()
 
 # Judge logic lives in app/judging.py (shared with the optimizer's acceptance
 # test in app/optimizer.py) so the posterior sweep and the in-loop judge can't
@@ -64,7 +67,25 @@ def main() -> None:
 
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, args.project)
-        if args.cross_family:
+
+        # -- Read runs: from Postgres when _USE_PG, else SQLite -------------------------
+        if _USE_PG:
+            with db_pg.get_pg_conn() as pg:
+                with pg.cursor() as cur:
+                    cur.execute(
+                        "SELECT r.id, r.model_id, r.record_id, r.parsed_value_json "
+                        "FROM runs r WHERE r.project_id=%s AND r.field_name=%s "
+                        "AND r.parsed_value_json IS NOT NULL ORDER BY r.id",
+                        (project_id, args.field),
+                    )
+                    candidates = [dict(r) for r in cur.fetchall()]
+                    cur.execute(
+                        "SELECT j.run_id, j.judge_model FROM llm_judgments j "
+                        "JOIN runs r ON r.id=j.run_id WHERE r.project_id=%s AND r.field_name=%s",
+                        (project_id, args.field),
+                    )
+                    already = {(row["run_id"], row["judge_model"]) for row in cur.fetchall()}
+        else:
             candidates = conn.execute(
                 "SELECT id, model_id, record_id, parsed_value_json FROM runs "
                 "WHERE project_id = ? AND field_name = ? AND parsed_value_json IS NOT NULL "
@@ -79,9 +100,12 @@ def main() -> None:
                     (project_id, args.field),
                 )
             }
+
+        if args.cross_family:
             runs = [r for r in candidates if (r["id"], _judge_for(r["model_id"])) not in already][: args.n]
         else:
-            runs = db.get_runs_without_judgment(conn, project_id, args.field, args.judge_model, limit=args.n)
+            runs = [r for r in candidates if (r["id"], args.judge_model) not in already][: args.n]
+
         judge_of = {
             r["id"]: (_judge_for(r["model_id"]) if args.cross_family else args.judge_model) for r in runs
         }
@@ -116,6 +140,7 @@ def main() -> None:
             results = gateway.call_model_batch(jobs, max_workers=args.concurrency)
 
             n_ok, n_err = 0, 0
+            _pg_write = db_pg.get_pg_conn().__enter__() if _USE_PG else None
             for r, resp in zip(runs, results):
                 if isinstance(resp, gateway.GatewayError):
                     n_err += 1
@@ -124,29 +149,53 @@ def main() -> None:
                     obj = parsing.parse_json_object(resp.content)
                     verdict = bool(obj["correct"])
                     reasoning = obj.get("reasoning")
-                except Exception as exc:  # noqa: BLE001 - just skip malformed judge output
+                except Exception as exc:  # noqa: BLE001
                     n_err += 1
                     print(f"  run {r['id']}: could not parse judge response ({exc})")
                     continue
-                db.add_llm_judgment(conn, r["id"], judge_of[r["id"]], verdict, reasoning)
+                if _USE_PG and _pg_write:
+                    db_pg.add_llm_judgment_pg(_pg_write, r["id"], judge_of[r["id"]], verdict, reasoning)
+                else:
+                    db.add_llm_judgment(conn, r["id"], judge_of[r["id"]], verdict, reasoning)
                 n_ok += 1
+            if _USE_PG and _pg_write:
+                _pg_write.commit()
             print(f"Judged: {n_ok}, failed/unparsable: {n_err}")
 
-        # --- Report: agreement + threshold sweep, over ALL judged runs for this field ---
-        if args.cross_family:
-            judged = conn.execute(
-                "SELECT r.score, r.is_correct, j.verdict FROM runs r "
-                "JOIN llm_judgments j ON j.run_id = r.id "
-                "WHERE r.project_id = ? AND r.field_name = ?",
-                (project_id, args.field),
-            ).fetchall()
+        # -- Report: agreement + threshold sweep over ALL judged runs -------------------
+        if _USE_PG:
+            with db_pg.get_pg_conn() as pg:
+                with pg.cursor() as cur:
+                    if args.cross_family:
+                        cur.execute(
+                            "SELECT r.score, r.is_correct, j.verdict FROM runs r "
+                            "JOIN llm_judgments j ON j.run_id=r.id "
+                            "WHERE r.project_id=%s AND r.field_name=%s",
+                            (project_id, args.field),
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT r.score, r.is_correct, j.verdict FROM runs r "
+                            "JOIN llm_judgments j ON j.run_id=r.id AND j.judge_model=%s "
+                            "WHERE r.project_id=%s AND r.field_name=%s",
+                            (args.judge_model, project_id, args.field),
+                        )
+                    judged = [dict(r) for r in cur.fetchall()]
         else:
-            judged = conn.execute(
-                "SELECT r.score, r.is_correct, j.verdict FROM runs r "
-                "JOIN llm_judgments j ON j.run_id = r.id AND j.judge_model = ? "
-                "WHERE r.project_id = ? AND r.field_name = ?",
-                (args.judge_model, project_id, args.field),
-            ).fetchall()
+            if args.cross_family:
+                judged = conn.execute(
+                    "SELECT r.score, r.is_correct, j.verdict FROM runs r "
+                    "JOIN llm_judgments j ON j.run_id = r.id "
+                    "WHERE r.project_id = ? AND r.field_name = ?",
+                    (project_id, args.field),
+                ).fetchall()
+            else:
+                judged = conn.execute(
+                    "SELECT r.score, r.is_correct, j.verdict FROM runs r "
+                    "JOIN llm_judgments j ON j.run_id = r.id AND j.judge_model = ? "
+                    "WHERE r.project_id = ? AND r.field_name = ?",
+                    (args.judge_model, project_id, args.field),
+                ).fetchall()
 
     if not judged:
         print("No judged runs available for a report yet.")

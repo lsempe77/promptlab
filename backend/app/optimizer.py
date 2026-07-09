@@ -21,6 +21,9 @@ from typing import Any
 from . import analytics, db, gateway, prompt_store, prompts, scoring
 from .scoring import RECALL_FLOOR
 from . import carbon
+from . import db_pg as _db_pg  # Phase 2: Postgres routing
+
+_USE_PG = _db_pg.pg_enabled()
 from .corpus import read_md
 from .parsing import ParseError, parse_field_response, parse_json_object
 
@@ -150,6 +153,7 @@ def evaluate_instruction(
     records: list[dict],
     model_id: str,
     conn: Any = None,
+    pg_conn: Any = None,        # Phase 2: Postgres connection for writing runs
     project_id: int | None = None,
     prompt_version_id: int | None = None,
     batch_id: str | None = None,
@@ -190,10 +194,12 @@ def evaluate_instruction(
             scores.append(0.0)
             failures.append({"id": rec["id"], "predicted": None, "truth": rec["ground_truth"],
                               "explanation": f"call/parse failed: {resp}", "excerpt": None})
-            if conn is not None and prompt_version_id is not None:
-                db.add_run(conn, **run_kwargs, raw_response=None, parsed_value=None, score=0.0,
-                           is_correct=0, latency_ms=None, prompt_tokens=None, completion_tokens=None,
-                           cost_usd=None, error=str(resp))
+            if prompt_version_id is not None:
+                _kwargs = dict(**run_kwargs, raw_response=None, parsed_value=None, score=0.0,
+                               is_correct=0, latency_ms=None, prompt_tokens=None, completion_tokens=None,
+                               cost_usd=None, error=str(resp))
+                if _USE_PG and pg_conn: _db_pg.add_run_pg(pg_conn, **_kwargs)
+                elif conn is not None: db.add_run(conn, **_kwargs)
             continue
 
         try:
@@ -202,20 +208,17 @@ def evaluate_instruction(
             scores.append(0.0)
             failures.append({"id": rec["id"], "predicted": None, "truth": rec["ground_truth"],
                               "explanation": f"call/parse failed: {exc}", "excerpt": None})
-            if conn is not None and prompt_version_id is not None:
-                db.add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=None, score=0.0,
-                           is_correct=0, latency_ms=resp.latency_ms, prompt_tokens=resp.prompt_tokens,
-                           completion_tokens=resp.completion_tokens, cost_usd=resp.cost_usd, error=str(exc))
+            if prompt_version_id is not None:
+                _kwargs = dict(**run_kwargs, raw_response=resp.content, parsed_value=None, score=0.0,
+                               is_correct=0, latency_ms=resp.latency_ms, prompt_tokens=resp.prompt_tokens,
+                               completion_tokens=resp.completion_tokens, cost_usd=resp.cost_usd, error=str(exc))
+                if _USE_PG and pg_conn: _db_pg.add_run_pg(pg_conn, **_kwargs)
+                elif conn is not None: db.add_run(conn, **_kwargs)
             continue
 
         verified = scoring.verify_excerpt(meta.get("excerpt"), source)
         result = scoring.score_field(field_name, value, rec["ground_truth"], excerpt_verified=verified)
         predictions.append((value, rec["ground_truth"]))
-        # The optimizer optimizes the honesty-adjusted score (partial credit for
-        # honest abstention, and a penalty for a value cited with a fabricated
-        # excerpt), not the raw score, so it prefers calibrated honesty over
-        # confident wrong guesses. Raw `score` is still stored for
-        # display/aggregates.
         scores.append(result.honesty_score)
         if not result.is_correct:
             failures.append({
@@ -227,17 +230,19 @@ def evaluate_instruction(
             })
         else:
             successes.append({"id": rec["id"], "predicted": value, "truth": rec["ground_truth"]})
-        if conn is not None and prompt_version_id is not None:
-            db.add_run(conn, **run_kwargs, raw_response=resp.content, parsed_value=value,
-                       excerpt=meta.get("excerpt"), notes=meta.get("notes"),
-                       excerpt_verified=(None if verified is None else int(verified)),
-                       confidence=meta.get("confidence"),
-                       outcome=result.outcome, honesty_score=result.honesty_score,
-                       score=result.score, is_correct=int(result.is_correct), latency_ms=resp.latency_ms,
-                       prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
-                       cost_usd=resp.cost_usd,
-                       co2e_grams=carbon.estimate_co2e_grams(model_id, resp.completion_tokens, resp.latency_ms),
-                       error=None)
+        if prompt_version_id is not None:
+            _kwargs = dict(**run_kwargs, raw_response=resp.content, parsed_value=value,
+                           excerpt=meta.get("excerpt"), notes=meta.get("notes"),
+                           excerpt_verified=(None if verified is None else int(verified)),
+                           confidence=meta.get("confidence"),
+                           outcome=result.outcome, honesty_score=result.honesty_score,
+                           score=result.score, is_correct=int(result.is_correct), latency_ms=resp.latency_ms,
+                           prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
+                           cost_usd=resp.cost_usd,
+                           co2e_grams=carbon.estimate_co2e_grams(model_id, resp.completion_tokens, resp.latency_ms),
+                           error=None)
+            if _USE_PG and pg_conn: _db_pg.add_run_pg(pg_conn, **_kwargs)
+            elif conn is not None: db.add_run(conn, **_kwargs)
 
     mean_score = sum(scores) / len(scores) if scores else 0.0
     return EvalOutcome(mean_score=mean_score, n=len(scores), failures=failures,
@@ -549,12 +554,18 @@ def _run_optimization(
 
     best_instruction = baseline_pv["template"]
     best_pv_id = baseline_pv["id"]
-    with db.get_conn() as conn:
-        baseline_outcome = evaluate_instruction(
-            field_name, best_instruction, val, model_id, conn=conn, project_id=project_id,
-            prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
-        )
-    best_score = baseline_outcome.mean_score  # honesty score, used only to rank candidates cheaply
+    # Phase 2: one PG connection for the entire optimization run.
+    _pg_ctx = _db_pg.get_pg_conn() if _USE_PG else None
+    _pg_conn = _pg_ctx.__enter__() if _pg_ctx else None
+    try:
+        with db.get_conn() as conn:
+            baseline_outcome = evaluate_instruction(
+                field_name, best_instruction, val, model_id, conn=conn, pg_conn=_pg_conn,
+                project_id=project_id, prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
+            )
+    finally:
+        pass  # keep pg_conn open for the rest of the loop below
+    best_score = baseline_outcome.mean_score
     best_gate, best_gate_n, best_gate_recall = _gate_score(field_name, baseline_outcome.predictions)
     best_holdout_avg = 0.0
     if gen_gate:
@@ -585,8 +596,8 @@ def _run_optimization(
                 db.update_job_progress(conn, job_id, it - 1)
             minibatch = rnd.sample(train, k=min(minibatch_size, len(train)))
             train_outcome = evaluate_instruction(
-                field_name, best_instruction, minibatch, model_id, conn=conn, project_id=project_id,
-                prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
+                field_name, best_instruction, minibatch, model_id, conn=conn, pg_conn=_pg_conn,
+                project_id=project_id, prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
             )
 
             if not train_outcome.failures:
@@ -621,8 +632,8 @@ def _run_optimization(
                 if pv is None:
                     raise RuntimeError(f"Failed to persist candidate prompt version for field={field_name}.")
                 candidate_outcome = evaluate_instruction(
-                    field_name, candidate_instruction, val, model_id, conn=conn, project_id=project_id,
-                    prompt_version_id=pv["id"], batch_id=batch_id, max_workers=max_workers,
+                    field_name, candidate_instruction, val, model_id, conn=conn, pg_conn=_pg_conn,
+                    project_id=project_id, prompt_version_id=pv["id"], batch_id=batch_id, max_workers=max_workers,
                 )
                 candidates.append({
                     "instruction": candidate_instruction, "diagnosis": diagnosis, "pv": pv, "outcome": candidate_outcome,
@@ -719,4 +730,6 @@ def _run_optimization(
 
     result.best_instruction = best_instruction
     result.best_score = best_score
+    if _pg_ctx and _pg_conn:
+        _pg_ctx.__exit__(None, None, None)
     return result

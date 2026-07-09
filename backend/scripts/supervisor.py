@@ -42,7 +42,10 @@ except Exception:
 from backend.app import analytics, config, db, prompt_store, scoring  # noqa: E402
 from backend.app.optimizer import FIELD_IMPROVEMENT_EPSILON, DEFAULT_IMPROVEMENT_EPSILON  # noqa: E402
 from backend.app.scoring import RECALL_FLOOR  # noqa: E402
+from backend.app import db_pg  # noqa: E402 -- Phase 2: task-queue mode
 from backend.app.prompts import BASELINE_INSTRUCTIONS  # noqa: E402
+
+_USE_PG = db_pg.pg_enabled()
 
 
 def _log(msg: str) -> None:
@@ -254,8 +257,17 @@ def main() -> None:
                     continue
 
                 if action == "extract":
-                    if args.parallelism > 1:
-                        # Split into one subprocess per model so they run concurrently.
+                    if _USE_PG:
+                        # Phase 2: enqueue one extraction task per model
+                        with db_pg.get_pg_conn() as pg:
+                            with db.get_conn() as conn:
+                                project_id = db.get_project_id(conn, args.project)
+                            for m in models:
+                                db_pg.enqueue_task(pg, project_id, field, m, "extraction", {
+                                    "project": args.project, "n": arg,
+                                }, priority=2)
+                        _log(f"[{field}] Enqueued {len(models)} extraction tasks → stage {arg}.")
+                    elif args.parallelism > 1:
                         cmds = [
                             ["backend.scripts.run_extraction", "--project", args.project,
                              "--field", field, "--n", str(arg), "--models", m, "--logprobs"]
@@ -266,18 +278,37 @@ def main() -> None:
                         _run(["backend.scripts.run_extraction", "--project", args.project, "--field", field,
                               "--n", str(arg), "--tiers", args.tiers, "--logprobs"])
                 elif action == "judge":
-                    _run(["backend.scripts.llm_judge", "--project", args.project, "--field", field,
-                          "--n", "100000", "--cross-family"])
+                    if _USE_PG:
+                        with db_pg.get_pg_conn() as pg:
+                            with db.get_conn() as conn:
+                                project_id = db.get_project_id(conn, args.project)
+                            db_pg.enqueue_task(pg, project_id, field, None, "judge", {
+                                "project": args.project,
+                            }, priority=3)
+                        _log(f"[{field}] Enqueued judge task.")
+                    else:
+                        _run(["backend.scripts.llm_judge", "--project", args.project, "--field", field,
+                              "--n", "100000", "--cross-family"])
                 elif action == "optimize":
-                    # Optimization ALWAYS runs sequentially: the optimizer holds a DB write
-                    # transaction open for the entire loop (many minutes), so parallelising
-                    # it causes SQLITE_LOCKED on all but the first process. Extraction is
-                    # the bottleneck that benefits from --parallelism; optimization is not.
                     eps = FIELD_IMPROVEMENT_EPSILON.get(field, DEFAULT_IMPROVEMENT_EPSILON)
-                    for m in opt_models:
-                        _run(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
-                              "--model", m, "--reflector-model", args.reflector_model,
-                              "--improvement-epsilon", str(eps)])
+                    if _USE_PG:
+                        # Phase 2: enqueue tasks — workers execute in parallel
+                        with db_pg.get_pg_conn() as pg:
+                            with db.get_conn() as conn:
+                                project_id = db.get_project_id(conn, args.project)
+                            for m in opt_models:
+                                db_pg.enqueue_task(pg, project_id, field, m, "optimization", {
+                                    "project": args.project,
+                                    "reflector_model": args.reflector_model,
+                                    "improvement_epsilon": eps,
+                                }, priority=1)
+                        _log(f"[{field}] Enqueued {len(opt_models)} optimization tasks in Postgres.")
+                    else:
+                        # Phase 1 fallback: sequential shell-out
+                        for m in opt_models:
+                            _run(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
+                                  "--model", m, "--reflector-model", args.reflector_model,
+                                  "--improvement-epsilon", str(eps)])
 
             if not any_action:
                 _log("Converged: no field has an actionable step this run.")

@@ -23,10 +23,16 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import analytics, config, db, gateway, scoring
+from . import analytics, config, db, db_pg, gateway, scoring
 from .projects import PROJECTS
 
 app = FastAPI(title="Agentic 3ie Prompt Lab API")
+
+# Phase 2: init Postgres schema on startup (idempotent)
+@app.on_event("startup")
+async def _startup():
+    if db_pg.pg_enabled():
+        db_pg.init_pg()
 
 app.add_middleware(
     CORSMiddleware,
@@ -646,25 +652,29 @@ def confusion(project_slug: str, field_name: str, model_id: str | None = None, p
 
 @app.get("/api/projects/{project_slug}/fields/{field_name}/jobs")
 def jobs(project_slug: str, field_name: str) -> list[dict]:
-    """Recent extraction/optimization jobs for a field, so the dashboard can
-    show a "currently running" indicator. A job's `status` column is set by
-    the script that owns it, but a script can die (crash, Ctrl+C, killed
-    terminal) without ever calling `finish_job` — so a "running" job whose
-    `updated_at` is older than `db.JOB_STALE_AFTER_SECONDS` is reported here
-    with `stale: true` instead of being trusted at face value.
-    """
     _field_or_404(project_slug, field_name)
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
-        rows = db.get_jobs_for_field(conn, project_id, field_name)
+        # Phase 2: read jobs from Postgres when available; fall back to SQLite
+        if db_pg.pg_enabled():
+            with db_pg.get_pg_conn() as pg:
+                rows = db_pg.get_jobs_pg(pg, project_id, field_name)
+        else:
+            rows = db.get_jobs_for_field(conn, project_id, field_name)
     now = datetime.now(timezone.utc)
     result = []
     for r in rows:
         d = dict(r)
         stale = False
-        if d["status"] == "running":
-            age_s = (now - datetime.fromisoformat(d["updated_at"])).total_seconds()
-            stale = age_s > db.JOB_STALE_AFTER_SECONDS
+        if d.get("status") == "running":
+            try:
+                updated = d.get("updated_at")
+                if updated:
+                    ts = updated if hasattr(updated, "total_seconds") else datetime.fromisoformat(str(updated))
+                    age_s = (now - ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else now - ts).total_seconds()
+                    stale = age_s > db.JOB_STALE_AFTER_SECONDS
+            except Exception:
+                pass
         d["stale"] = stale
         result.append(d)
     return result
