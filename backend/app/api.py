@@ -520,9 +520,22 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
             else:
                 v_clause = ""
                 v_params = ()
+            # Build {pvid → version number} for the response
+            pvid_to_version: dict[int, int] = {}
+            if model_pvids:
+                pvids = list(set(model_pvids.values()))
+                rows_pv = conn.execute(
+                    "SELECT id, version FROM prompt_versions WHERE id IN ({})".format(
+                        ",".join("?" * len(pvids))
+                    ),
+                    pvids,
+                ).fetchall()
+                pvid_to_version = {r["id"]: r["version"] for r in rows_pv}
+            model_version_map = {mid: pvid_to_version.get(mpvid) for mid, mpvid in (model_pvids or {}).items()}
         else:
             v_clause = "AND r.prompt_version_id = ?"
             v_params = (pvid,)
+            model_version_map = {}
         jrows = conn.execute(
             "SELECT r.model_id, AVG(CASE WHEN j.verdict = 1 THEN 1.0 ELSE 0.0 END) AS acc, "
             f"COUNT(*) AS n FROM llm_judgments j JOIN runs r ON r.id = j.run_id "
@@ -573,6 +586,7 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
                 "llm_judged_accuracy": judged[0] if judged else None,
                 "n_judged": judged[1] if judged else 0,
                 "gate_passed": gm["metric"] >= scoring.GATE_THRESHOLD,
+                "prompt_version": model_version_map.get(model_id),
             }
         )
     models.sort(key=lambda m: m["gate_metric"], reverse=True)

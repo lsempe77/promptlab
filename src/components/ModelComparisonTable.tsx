@@ -35,6 +35,7 @@ type Row = ModelSummary & {
   recall: number | null;
   kappa: number | null;
   judged: number | null;
+  prompt_version: number | null;
 };
 
 interface Col {
@@ -75,6 +76,7 @@ export function ModelComparisonTable({
       recall: g?.recall ?? null,
       kappa: g?.kappa ?? null,
       judged: g?.llm_judged_accuracy ?? null,
+      prompt_version: g?.prompt_version ?? null,
     };
   });
 
@@ -85,6 +87,16 @@ export function ModelComparisonTable({
   // multi-value list fields; kappa only to the single-categorical ones.
   const cols: Col[] = [
     { key: "model_id", label: "Model", numeric: false, get: (r) => r.model_id, render: (r) => <span className="model-id">{r.model_id}</span> },
+    {
+      key: "prompt_version",
+      label: "Version",
+      title: "The prompt version this model is currently evaluated at (its own best accepted version).",
+      numeric: false,
+      get: (r) => r.prompt_version,
+      render: (r) => r.prompt_version != null
+        ? <span className="pv-badge" title={`Prompt version ${r.prompt_version}`}>v{r.prompt_version}</span>
+        : "—",
+    },
     { key: "n", label: "# Refs", numeric: true, get: (r) => r.n, render: (r) => r.n },
     {
       key: "gate_metric",

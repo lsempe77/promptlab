@@ -713,6 +713,7 @@ body {
 .vprog-table .vprog-delta-up { color: var(--good); }
 .vprog-table .vprog-delta-down { color: var(--bad); }
 .vprog-table .vprog-n { font-size: 0.68em; opacity: 0.55; font-weight: 400; }
+.pv-badge { font-size: 0.78em; font-weight: 600; color: var(--muted); background: var(--surface2, #f0f0f0); border-radius: 3px; padding: 1px 5px; }
 
 /* Aggregate comparison charts (leaderboard + cost/quality scatter). */
 .aggregate-charts {

@@ -100,6 +100,7 @@ export interface StageModelGate {
   llm_judged_accuracy: number | null;
   n_judged: number;
   gate_passed: boolean;
+  prompt_version?: number | null;
 }
 
 export interface StageStatus {
