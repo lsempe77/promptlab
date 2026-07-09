@@ -66,6 +66,16 @@ BASELINE_INSTRUCTIONS: dict[str, str] = {name: spec.description for name, spec i
 def _categorical_options_block(spec: FieldSpec) -> str:
     if not spec.taxonomy_key:
         return ""
+    # For sub_sector: show grouped by parent sector so the model can
+    # narrow the choice in two steps (sector → sub-sector) instead of
+    # picking from a flat list of 66 options with no structure.
+    if spec.taxonomy_key == "sub_sectors_flat":
+        from .taxonomy import load_taxonomy
+        sbs = load_taxonomy().get("sub_sectors_by_sector", {})
+        lines = ["Allowed values — choose exactly one, verbatim (grouped by sector):"]
+        for sector, subs in sbs.items():
+            lines.append(f"  {sector}: {', '.join(subs)}")
+        return "\n" + "\n".join(lines) + "\n"
     options = get_options(spec.taxonomy_key)
     return "\nAllowed values (choose exactly one, verbatim):\n" + ", ".join(options) + "\n"
 

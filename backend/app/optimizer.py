@@ -364,11 +364,23 @@ def propose_revision(
     confusion_text = ""
     if field_value_type == "single_categorical" and failures:
         confusion_text = _format_categorical_confusion(failures)
+    # For sub_sector: give the reflector the full sector→sub-sector hierarchy so it
+    # can propose instructions that reference the grouping structure rather than
+    # treating all 66 options as equally likely alternatives.
+    taxonomy_text = ""
+    if field_name == "sub_sector":
+        from .taxonomy import load_taxonomy
+        sbs = load_taxonomy().get("sub_sectors_by_sector", {})
+        lines = ["\nTAXONOMY HIERARCHY (sector → sub-sectors the model must choose from):"]
+        for sector, subs in sbs.items():
+            lines.append(f"  {sector}: {', '.join(subs)}")
+        taxonomy_text = "\n".join(lines) + "\n"
     base_prompt = (
         f"FIELD BEING EXTRACTED: {field_name}\n\n"
         f"CURRENT INSTRUCTION:\n{current_instruction}\n\n"
         f"FAILURE CASES (predicted vs. expected ground truth):\n{cases_text}"
         f"{confusion_text}"
+        f"{taxonomy_text}"
         f"{keep_text}"
         f"{avoid_text}\n\n"
         "RESPOND IN VALID JSON:\n"
