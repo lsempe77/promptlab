@@ -187,9 +187,51 @@ export function ModelCard({
     confusion == null ? null : confusion.type === "list" ? confusion.f1 : confusion.accuracy;
   const gateMetricName = confusion?.type === "list" ? "F1" : "accuracy";
 
+  const [expanded, setExpanded] = useState(false);
+  const shortName = summary.model_id.split("/").pop()?.replace(/^~/, "").replace(/-latest$/, "") ?? summary.model_id;
+
   return (
     <section className="panel model-card">
-      <div className="model-card-header">
+      {/* ── Collapsed header — always visible ─────────────────────── */}
+      <div
+        className="model-card-header model-card-header--clickable"
+        onClick={() => setExpanded((e) => !e)}
+        role="button"
+        aria-expanded={expanded}
+        tabIndex={0}
+        onKeyDown={(e) => e.key === "Enter" && setExpanded((prev) => !prev)}
+      >
+        <div className="model-card-summary-row">
+          <span className="model-card-name">{shortName}</span>
+          {runningJobs.length > 0 && (
+            <span className="badge badge-running">
+              <span className="job-spinner" aria-hidden="true" />
+              running
+            </span>
+          )}
+          {gateMetric != null && gateThreshold != null && (
+            <span className={`gate-chip ${gateMetric >= gateThreshold ? "pass" : "gated"}`}>
+              {gateMetric >= gateThreshold
+                ? `✅ ${pct(gateMetric)}`
+                : `${pct(gateMetric)}`}
+            </span>
+          )}
+          {gateMetric == null && (
+            <span className="gate-chip">—</span>
+          )}
+          <span className="model-card-cost muted">
+            {summary.total_cost_usd != null && summary.n > 0
+              ? `$${((summary.total_cost_usd / summary.n) * 100).toFixed(3)}/100 papers`
+              : null}
+          </span>
+          <span className="model-card-toggle">{expanded ? "▲ hide" : "▼ details"}</span>
+        </div>
+      </div>
+
+      {/* ── Expanded detail — shown on demand ─────────────────────── */}
+      {expanded && (
+        <>
+        <div className="model-card-header">
         <h4>{summary.model_id}</h4>
         {summary.prompt_version != null && (
           <span className="model-version-badge" title="Prompt version shown in this card">
@@ -210,7 +252,7 @@ export function ModelCard({
           </div>
           <div className="stat-card">
             <span className="stat-value">{pct(summary.accuracy)}</span>
-            <span className="stat-label">fuzzy-match rate</span>
+            <span className="stat-label">approximate match rate</span>
             {accCi && (
               <>
                 <ConfidenceWhisker accuracy={summary.accuracy} ci={accCi} />
@@ -229,17 +271,17 @@ export function ModelCard({
               {llmJudge && llmJudge.n_judged > 0 ? pct(llmJudge.llm_judged_accuracy) : "—"}
             </span>
             <span className="stat-label">
-              concordance (LLM judge){llmJudge && llmJudge.n_judged > 0 ? ` (${llmJudge.n_judged})` : ""}
+              second-opinion check{llmJudge && llmJudge.n_judged > 0 ? ` (${llmJudge.n_judged})` : ""}
             </span>
           </div>
           <div className="stat-card highlight">
             <span className="stat-value">{gateMetric != null ? pct(gateMetric) : "—"}</span>
-            <span className="stat-label">Quality — gate ({gateMetricName})</span>
+            <span className="stat-label">Quality — {gateMetricName}</span>
             {gateMetric != null && gateThreshold != null && (
               <span className={`gate-chip ${gateMetric >= gateThreshold ? "pass" : "gated"}`}>
                 {gateMetric >= gateThreshold
-                  ? `✓ gate ≥${Math.round(gateThreshold * 100)}%`
-                  : `✗ gated (<${Math.round(gateThreshold * 100)}%)`}
+                  ? `✅ Accurate enough to use (≥${Math.round(gateThreshold * 100)}%)`
+                  : `Not yet (${Math.round(gateThreshold * 100)}% needed)`}
               </span>
             )}
           </div>
@@ -292,7 +334,7 @@ export function ModelCard({
             <span className="stat-label">excerpt verified</span>
           </div>
         </div>
-      </div>
+        </div>
 
       {calibration && calibration.n_scored > 0 && (
         <div className="model-card-section">
@@ -370,6 +412,8 @@ export function ModelCard({
         <h5>Confusion matrix / F-scores</h5>
         <ConfusionMatrix confusion={confusion} />
       </div>
+        </> /* end expanded */
+      )}
     </section>
   );
 }

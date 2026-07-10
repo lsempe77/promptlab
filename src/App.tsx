@@ -26,6 +26,7 @@ import { useWalkthrough } from "./components/Walkthrough";
 import NewProjectWizard from "./components/NewProjectWizard";
 import SupervisorStatusBar from "./components/SupervisorStatusBar";
 import { LiveActivity } from "./components/LiveActivity";
+import { FieldOverview } from "./components/FieldOverview";
 import "./App.css";
 
 const JOBS_POLL_MS = 6000;
@@ -34,6 +35,8 @@ function StageBadge({ s }: { s: StageStatus }) {
   const evaluated = s.n_models_evaluated;
   const passing = s.n_models_passing;
   const gatePct = Math.round(s.gate_threshold * 100);
+  const best = evaluated > 0 ? Math.max(...s.models.map((m) => m.gate_metric)) : null;
+  const bestPct = best != null ? Math.round(best * 100) : null;
   const cls =
     evaluated === 0
       ? "stage-badge neutral"
@@ -44,19 +47,14 @@ function StageBadge({ s }: { s: StageStatus }) {
           : "stage-badge partial";
   return (
     <div className={cls}>
-      <span className="stage-pill">Stage {s.references}/{s.final_stage}</span>
-      {evaluated > 0 ? (
-        <span>
-          {passing}/{evaluated} models pass gate{" "}
-          <span className="muted">(≥{gatePct}% quality metric — F1 for lists, accuracy for categorical, per model)</span>
-        </span>
+      {evaluated > 0 && passing > 0 ? (
+        <span>✅ <strong>{passing} of {evaluated} AIs</strong> get it right {gatePct}%+ of the time — accurate enough to use</span>
+      ) : evaluated > 0 && bestPct != null ? (
+        <span>Best AI so far: <strong>{bestPct}%</strong> — working toward the {gatePct}% target</span>
       ) : (
-        <span className="muted">gate (≥{gatePct}%): not yet judged</span>
+        <span className="muted">Not yet evaluated (need {gatePct}% accuracy)</span>
       )}
-      <span className="muted">
-        · {s.prompt_versions} prompt version{s.prompt_versions === 1 ? "" : "s"}{" "}
-        ({s.prompt_versions_accepted} accepted)
-      </span>
+      <span className="muted stage-badge-sub">· {s.references} papers checked · {s.prompt_versions} prompt versions tried ({s.prompt_versions_accepted} improved accuracy)</span>
     </div>
   );
 }
@@ -249,6 +247,15 @@ function App() {
 
           {!apiError && <LiveActivity />}
 
+          {!apiError && selectedProject && fields && fields.length > 0 && (
+            <FieldOverview
+              project={selectedProject}
+              fields={fields}
+              selectedField={selected}
+              onSelectField={setSelected}
+            />
+          )}
+
           <div id="tour-methodology"><Methodology thresholds={thresholds} /></div>
 
           {fields && fields.length > 0 && (
@@ -299,22 +306,13 @@ function App() {
                       <p className="muted">Loading…</p>
                     ) : (
                       <>
-                        <VersionProgressionTable
-                          versionData={versionData}
-                          gateThreshold={stageStatus?.gate_threshold ?? null}
-                          valueType={activeField.value_type}
-                        />
+                        {/* Charts first — answer "which AI is best?" before the history */}
                         <section className="panel panel-aggregate">
-                          <h3>All models — summary</h3>
+                          <h3>Which AI performs best on this task?</h3>
                           <p className="muted panel-caption">
-                            Sorted by <strong>Quality</strong> — the production gate metric for this{" "}
-                            {activeField.value_type === "single_categorical" ? "categorical" : "list"} field
-                            {activeField.value_type === "single_categorical"
-                              ? " (accuracy, with Cohen's κ)"
-                              : " (element-level F1, with precision & recall)"}.
-                            {" "}Green passes the {stageStatus ? Math.round(stageStatus.gate_threshold * 100) : 90}% gate, red is below it.
-                            {" "}<em>Concordance</em> is an independent cross-family LLM-judge check; <em>Fuzzy-match</em> is a
-                            demoted string-match heuristic. Click any column header to sort.
+                            Sorted by accuracy — the higher the bar, the more often the AI gets the right answer.
+                            Green = accurate enough to use (≥{stageStatus ? Math.round(stageStatus.gate_threshold * 100) : 90}%).
+                            Click any column header to sort the table below.
                           </p>
                           <div id="tour-model-table">
                           <ModelComparisonTable
@@ -336,6 +334,13 @@ function App() {
                             />
                           )}
                         </section>
+
+                        {/* Version history — backstory, shown after the key result */}
+                        <VersionProgressionTable
+                          versionData={versionData}
+                          gateThreshold={stageStatus?.gate_threshold ?? null}
+                          valueType={activeField.value_type}
+                        />
 
                         {summaries.length === 0 ? (
                           <p className="muted">No references processed yet for this field.</p>

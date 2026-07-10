@@ -778,7 +778,62 @@ body {
 .vprog-table .vprog-n { font-size: 0.68em; opacity: 0.55; font-weight: 400; }
 .pv-badge { font-size: 0.78em; font-weight: 600; color: var(--muted); background: var(--surface2, #f0f0f0); border-radius: 3px; padding: 1px 5px; }
 
-/* ── Work Saved Chart ────────────────────────────────────────── */
+/* ── Field Overview panel ────────────────────────────────────── */
+.field-overview { margin-bottom: 12px; }
+.fo-header { margin-bottom: 12px; }
+.fo-title { font-size: 1rem; font-weight: 600; margin: 0 0 4px; }
+.fo-subtitle { font-size: 0.82rem; margin: 0; }
+.fo-rows { display: flex; flex-direction: column; gap: 6px; }
+.fo-row {
+  display: grid;
+  grid-template-columns: 160px 1fr 52px 160px;
+  align-items: center; gap: 10px;
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  padding: 7px 10px; cursor: pointer; text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+}
+.fo-row:hover { background: var(--surface2, #f5f5f5); border-color: var(--border); }
+.fo-row--active { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: var(--accent); }
+.fo-field-label { font-weight: 600; font-size: 0.88rem; white-space: nowrap; }
+.fo-bar-wrap {
+  position: relative; height: 10px; border-radius: 5px;
+  background: var(--surface2, #e8e8e8); overflow: visible;
+}
+.fo-bar {
+  height: 100%; border-radius: 5px; min-width: 4px;
+  transition: width 0.4s ease;
+}
+.fo-bar--pass  { background: var(--good, #2e7d4f); }
+.fo-bar--close { background: #c79016; }
+.fo-bar--fail  { background: var(--bad, #c62828); opacity: 0.65; }
+.fo-gate-line {
+  position: absolute; top: -3px; bottom: -3px; width: 2px;
+  background: var(--text, #222); opacity: 0.35; border-radius: 1px;
+}
+.fo-pct { font-size: 0.88rem; font-weight: 600; text-align: right; white-space: nowrap; }
+.fo-status { font-size: 0.82rem; white-space: nowrap; }
+.fo-status-pass     { color: var(--good, #2e7d4f); }
+.fo-status-close    { color: #c79016; }
+.fo-status-progress { color: var(--accent); }
+.fo-status-far      { color: var(--muted); }
+.fo-status-na       { color: var(--muted); }
+.fo-footnote { font-size: 0.78rem; margin: 10px 0 0; }
+
+/* stage badge update */
+.stage-badge-sub { font-size: 0.78em; margin-left: 8px; }
+
+/* ── ModelCard collapse ──────────────────────────────────────── */
+.model-card-header--clickable {
+  cursor: pointer; padding: 10px 14px; border-radius: 6px;
+  transition: background 0.12s;
+}
+.model-card-header--clickable:hover { background: var(--surface2, #f5f5f5); }
+.model-card-summary-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.model-card-name { font-weight: 600; font-size: 0.92rem; }
+.model-card-cost { font-size: 0.78rem; margin-left: auto; }
+.model-card-toggle { font-size: 0.78rem; color: var(--accent); white-space: nowrap; }
 .work-saved-wrap { padding: 16px 0 8px; }
 .work-saved-title { font-size: 0.95rem; font-weight: 600; margin: 0 0 4px; }
 .work-saved-caption { font-size: 0.82rem; margin: 0 0 10px; }
