@@ -258,23 +258,9 @@ function App() {
 
           {!apiError && !fields && <p className="muted">Loading fields…</p>}
 
-          {!apiError && selectedProject && (
-            <SupervisorStatusBar project={selectedProject} />
-          )}
-
-          {!apiError && <LiveActivity />}
-
-          {!apiError && selectedProject && fields && fields.length > 0 && (
-            <FieldOverview
-              project={selectedProject}
-              fields={fields}
-              selectedField={selected}
-              onSelectField={setSelected}
-            />
-          )}
-
-          <div id="tour-methodology"><Methodology thresholds={thresholds} /></div>
-
+          {/* Charts first: the headline "which AI performs best" for the selected
+              field goes directly under the header. Cross-field overview, live
+              pipeline status, and methodology follow below. */}
           {fields && fields.length > 0 && (
             <div className="dashboard-body">
               <nav id="tour-field-nav" className="field-nav">
@@ -407,6 +393,24 @@ function App() {
               </main>
             </div>
           )}
+
+          {/* Secondary context, below the headline charts */}
+          {!apiError && selectedProject && fields && fields.length > 0 && (
+            <FieldOverview
+              project={selectedProject}
+              fields={fields}
+              selectedField={selected}
+              onSelectField={setSelected}
+            />
+          )}
+
+          {!apiError && selectedProject && (
+            <SupervisorStatusBar project={selectedProject} />
+          )}
+
+          {!apiError && <LiveActivity />}
+
+          <div id="tour-methodology"><Methodology thresholds={thresholds} /></div>
         </>
       )}
 
