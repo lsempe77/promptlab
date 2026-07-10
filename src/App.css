@@ -819,6 +819,15 @@ body {
 .fo-status-na       { color: var(--muted); }
 .fo-footnote { font-size: 0.78rem; margin: 10px 0 0; }
 
+/* details/summary collapsible table */
+.details-table { margin-top: 16px; }
+.details-table summary {
+  cursor: pointer; font-size: 0.85rem; color: var(--accent);
+  padding: 6px 0; user-select: none;
+}
+.details-table summary:hover { text-decoration: underline; }
+.details-table[open] summary { margin-bottom: 8px; }
+
 /* stage badge update */
 .stage-badge-sub { font-size: 0.78em; margin-left: 8px; }
 

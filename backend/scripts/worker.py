@@ -60,6 +60,7 @@ def _execute_task(task: dict) -> None:
             "--project", project,
             "--field", field,
             "--n", str(args.get("n", 100)),
+            "--logprobs",   # record token-level confidence for calibration curves
         ]
         if model:
             cmd += ["--models", model]

@@ -37,6 +37,8 @@ function StageBadge({ s }: { s: StageStatus }) {
   const gatePct = Math.round(s.gate_threshold * 100);
   const best = evaluated > 0 ? Math.max(...s.models.map((m) => m.gate_metric)) : null;
   const bestPct = best != null ? Math.round(best * 100) : null;
+  const isList = s.models.length > 0 && s.models[0].gate_metric_name !== "accuracy";
+  const metricName = isList ? "F1" : "accuracy";
   const cls =
     evaluated === 0
       ? "stage-badge neutral"
@@ -48,11 +50,13 @@ function StageBadge({ s }: { s: StageStatus }) {
   return (
     <div className={cls}>
       {evaluated > 0 && passing > 0 ? (
-        <span>✅ <strong>{passing} of {evaluated} AIs</strong> get it right {gatePct}%+ of the time — accurate enough to use</span>
+        <span>✅ <strong>{passing} of {evaluated} AIs</strong> get it right {gatePct}%+ of the time
+        <span className="muted"> ({metricName} ≥ {gatePct}% — accurate enough to use)</span></span>
       ) : evaluated > 0 && bestPct != null ? (
-        <span>Best AI so far: <strong>{bestPct}%</strong> — working toward the {gatePct}% target</span>
+        <span>Best AI so far: <strong>{bestPct}% {metricName}</strong>
+        <span className="muted"> — working toward the {gatePct}% target</span></span>
       ) : (
-        <span className="muted">Not yet evaluated (need {gatePct}% accuracy)</span>
+        <span className="muted">Not yet evaluated (need {gatePct}% {metricName})</span>
       )}
       <span className="muted stage-badge-sub">· {s.references} papers checked · {s.prompt_versions} prompt versions tried ({s.prompt_versions_accepted} improved accuracy)</span>
     </div>
@@ -310,17 +314,10 @@ function App() {
                         <section className="panel panel-aggregate">
                           <h3>Which AI performs best on this task?</h3>
                           <p className="muted panel-caption">
-                            Sorted by accuracy — the higher the bar, the more often the AI gets the right answer.
-                            Green = accurate enough to use (≥{stageStatus ? Math.round(stageStatus.gate_threshold * 100) : 90}%).
-                            Click any column header to sort the table below.
+                            Bar chart shows each AI’s accuracy ({activeField.value_type === "single_categorical" ? "accuracy" : "F1 score"}).
+                            Green ≥ {stageStatus ? Math.round(stageStatus.gate_threshold * 100) : 90}% = accurate enough to use.
+                            Scatter shows accuracy vs. cost per 1,000 papers.
                           </p>
-                          <div id="tour-model-table">
-                          <ModelComparisonTable
-                            summaries={summaries}
-                            stageModels={stageStatus?.models ?? []}
-                            valueType={activeField.value_type}
-                          />
-                          </div>
                           <AggregateCharts
                             summaries={summaries}
                             stageModels={stageStatus?.models ?? []}
@@ -333,6 +330,23 @@ function App() {
                               gateThreshold={stageStatus?.gate_threshold ?? null}
                             />
                           )}
+                          <details className="details-table">
+                            <summary>Full metrics table (all {summaries.length} AIs, all columns)</summary>
+                            <p className="muted panel-caption">
+                              {activeField.value_type === "single_categorical"
+                                ? "Accuracy = fraction of papers where the AI picked the right category. Cohen’s κ = accuracy corrected for chance. "
+                                : "F1 = balance of precision (no wrong extras) and recall (no missed values). "}
+                              <em>Second-opinion check</em> = a different AI family independently validates the answer.
+                              Click any header to sort.
+                            </p>
+                            <div id="tour-model-table">
+                            <ModelComparisonTable
+                              summaries={summaries}
+                              stageModels={stageStatus?.models ?? []}
+                              valueType={activeField.value_type}
+                            />
+                            </div>
+                          </details>
                         </section>
 
                         {/* Version history — backstory, shown after the key result */}
