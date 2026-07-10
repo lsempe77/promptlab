@@ -20,7 +20,7 @@ DEP, scores every model against human-curated ground truth, and improves prompts
 - The DB + corpus are **not** in the repo (gitignored). A local production subset is built by
   `python -m backend.scripts.export_production_subset` → `backend/deploy/{promptlab.db,corpus/}`.
 
-## Current production state (as of 2026-07-09 — Phase 2 Postgres deployed)
+## Current production state (as of 2026-07-10)
 - **Deployed on Fly.io**: app `dep-promptlab-api`, region `iad`, machine `82547dc7995668`, volume
   `dep_data` at `/data`, `min_machines_running=1`, `memory=4096mb` (performance-2x, 2 CPUs). Env:
   `DEP_DB_PATH=/data/promptlab.db`, `DEP_MD_DIR=/data/corpus`. Secrets: `OPENROUTER_API_KEY`,
@@ -32,10 +32,10 @@ DEP, scores every model against human-curated ground truth, and improves prompts
 - **Stages: (100,)** only. `MAX_PRODUCTION_RECORDS=200`, `PRODUCTION_ROLLOUT_STAGES=(100,)`.
 - **Gate: F1 ≥ 0.90 AND recall ≥ 0.85** for list fields; accuracy ≥ 0.90 for categorical.
 - **Advancement**: best model passes gate → advance (not "all must pass").
-- **Phase 2 Postgres (Neon):** `backend/app/db_pg.py` — all runs/iterations/judgments/jobs/tasks
+- **Phase 2 Postgres (Neon):** `backend/app/db_pg.py` — runs/iterations/judgments/jobs/tasks
   mirror to Postgres when `DATABASE_URL` is set. SQLite stays authoritative for coordinator-owned
   tables (records, ground_truth, prompt_versions, projects).
-- **Running daemons** (restart after every `fly deploy`): supervisor PID 679, workers PIDs 680–683.
+- **Running daemons** (restart after every `fly deploy`): supervisor PID 690, workers PIDs 691–694.
   Pre-wipe backup at `../DEP/backups/promptlab_prod_20260708_214047.db`.
 - Dashboard + docs are merged to `main` → live on GitHub Pages.
 - **`auto_stop_machines = 'off'`** in fly.toml — the machine never auto-stops (background daemons run 24/7).
@@ -62,8 +62,8 @@ DEP, scores every model against human-curated ground truth, and improves prompts
   volume, so redeploys don't re-upload data).
 - **A deploy restarts the machine → kills all daemon processes** (`nohup` processes do NOT survive
   a machine restart; only `/data` persists; uvicorn auto-restarts but daemons do not). After
-  deploying, **relaunch**: `fly ssh console -C "sh /data/launch_all.sh"` (starts supervisor + 4 workers);
-  verify with `sh /data/list_procs2.sh`; stop with `sh /data/kill_all.sh`.
+  deploying, **relaunch**: `. fly_helpers.ps1; Launch-Daemons` (or `fly ssh console -C "sh /data/launch_all_new.sh"`);
+  verify with `Show-Procs`; stop with `Kill-Daemons`.
 
 ## Stop rules / guardrails (don't remove without asking the user)
 - `config.MAX_PRODUCTION_RECORDS = 200`, `config.PRODUCTION_ROLLOUT_STAGES = (100,)` —
@@ -86,13 +86,18 @@ DEP, scores every model against human-curated ground truth, and improves prompts
   (structural rewrites).
 - The dashboard tiers metrics: Quality (gate) → precision/recall or κ → concordance → honesty →
   cost/CO₂e (EcoLogits per-run estimate).
+- **Work Saved at X% accuracy** (extraction analog of WSS@95%): fraction of extractions
+  auto-acceptable at a given accuracy target, computed from `logprob_confidence` calibration bins.
+  Displayed in the dashboard as the `WorkSavedChart` component.
 
 ## Gotchas
 - **`fly ssh console -C "..."` on Windows always exits with code 1** (PowerShell `NativeCommandError` alert). This is a `flyctl` Windows SSH cleanup bug — the remote command DID succeed. To silence the alert, always append `; $LASTEXITCODE = 0` or wrap in `try { ... } catch {}`:
   ```powershell
   fly ssh console --app dep-promptlab-api -C "sh /data/launch_all_new.sh"; $LASTEXITCODE = 0
   ```
-  The actual result is visible in the output (e.g. "LAUNCHED supervisor pid 682"). Ignore "Error: The handle is invalid." and exit code 1 — they are always noise.
+  The actual result is visible in the output (e.g. "LAUNCHED supervisor pid 690"). Ignore "Error: The handle is invalid." and exit code 1 — they are always noise.
+- **Use `fly_helpers.ps1`** (in the repo root) for clean SSH commands: `. .\fly_helpers.ps1` then
+  `Launch-Daemons`, `Show-Procs`, `Show-SupervisorLog`, `Kill-Daemons` — all suppress the noise automatically.
 - **`fly deploy` / `git push` also show red `NativeCommandError`** for the same reason — read the actual output to determine success/failure, not the exit code.
 - **`fly ssh console -C "..."`** breaks on pipes / nested quotes / `$!` — put complex remote commands
   in a `.sh`, upload with `fly ssh sftp put <local> /data/x.sh`, run `fly ssh console -C "sh
@@ -104,20 +109,23 @@ DEP, scores every model against human-curated ground truth, and improves prompts
   run diagnostics against the copy. Never point write-scripts at the live volume DB casually.
 - OpenRouter **`~author/family-latest`** aliases require the literal leading `~`.
 - `run_extraction.py` commits each `(record, model)` result to SQLite as it completes (crash-safe)
-  and **skips already-done pairs** (non-errored only), so an interrupted run resumes cleanly.
+  and **skips already-done non-errored pairs** (error IS NULL), so an interrupted run resumes cleanly
+  and previously-errored records are retried.
 - `corpus.read_md()` falls back to `config.MD_DIR`/`DEP_MD_DIR` + filename if `records.md_path`
   doesn't resolve on the current machine.
 - Schema migrations: always test against a **copy** of the real DB. `db.init_db()` runs
   SCHEMA → `_migrate_to_multi_project` → additive `_migrate` (adds columns like `model_id`,
   `co2e_grams`) → SCHEMA_INDEXES → `sync_projects`.
 
-## In-progress WIP (uncommitted; not to be discarded)
-- A **guided "Tour"/walkthrough** feature is half-built and uncommitted in the working tree:
-  `src/components/Walkthrough.tsx` (untracked), a `useWalkthrough` hook + `id="tour-*"` anchors in
-  `src/App.tsx`, `.tab-btn.tour-btn` CSS in `src/App.css`, and a new dependency in
-  `package.json`/`package-lock.json`. Finish it, `npm run build`, then commit + push.
+## Current work / WIP
+- **Paper draft in progress**: `paper/paper.qmd` (Quarto) — intro/background/methods/discussion/conclusion
+  written; §4 results pending final optimization runs. Target: JDE special issue, deadline 30 Sep 2026.
+  References in `paper/references.bib` (all CrossRef-verified).
+- **Frontend rehaul (2026-07-10)**: `FieldOverview.tsx` (cross-field progress bars), `WorkSavedChart.tsx`
+  (Work Saved curve), `LiveActivity.tsx` (queue + log tail), collapsed ModelCards, charts before table.
 - **Phase 2 Postgres** is fully deployed. `_holdout_generalization` in `optimizer.py` still calls
   `evaluate_instruction` without `pg_conn` — holdout runs go to SQLite only (minor, non-blocking).
+- **Tour/walkthrough** (`src/components/Walkthrough.tsx`): committed and working.
 
 ## Open items
 - **Strategy (leadership):** publish the method vs. keep it for BD/cost advantage — parked in
