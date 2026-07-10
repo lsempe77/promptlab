@@ -653,6 +653,69 @@ body {
   font-weight: 700;
 }
 
+/* ── Live Activity panel ─────────────────────────────────────── */
+.live-activity {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 0.82rem;
+}
+.live-activity--active { border-color: var(--accent); }
+.live-activity__header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; cursor: pointer; user-select: none;
+}
+.live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted); flex-shrink: 0;
+}
+.live-dot--pulse {
+  background: var(--accent);
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; } 50% { opacity: 0.35; }
+}
+.live-activity__title { font-weight: 600; white-space: nowrap; }
+.live-activity__last-line {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-family: monospace; font-size: 0.76rem;
+}
+.live-activity__toggle { color: var(--muted); margin-left: auto; }
+.live-activity__body { padding: 0 12px 10px; border-top: 1px solid var(--border); }
+
+.live-task-list { display: flex; flex-direction: column; gap: 3px; padding: 8px 0 4px; }
+.live-task-list--done { opacity: 0.65; }
+.live-task-list__header { font-size: 0.72rem; padding-bottom: 3px; }
+.live-task {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 6px; border-radius: 4px;
+  background: var(--surface2, #f5f5f5);
+}
+.live-task--running { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.live-task--failed  { background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.live-task__kind { font-weight: 600; width: 58px; flex-shrink: 0; text-transform: uppercase; font-size: 0.72rem; color: var(--accent); }
+.live-task--failed .live-task__kind { color: var(--bad); }
+.live-task__field { width: 100px; flex-shrink: 0; }
+.live-task__model { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; font-size: 0.76rem; }
+.live-task__error { color: var(--bad); cursor: help; }
+.live-task__time { white-space: nowrap; font-size: 0.72rem; }
+
+.live-log-toggle {
+  font-size: 0.75rem; color: var(--accent); cursor: pointer;
+  padding: 4px 0; user-select: none;
+}
+.live-log {
+  max-height: 260px; overflow-y: auto;
+  background: #1a1a2e; color: #c9d1d9;
+  border-radius: 6px; padding: 8px 10px;
+  font-family: monospace; font-size: 0.73rem; line-height: 1.45;
+}
+.live-log__line { padding: 1px 0; }
+.live-log__line--decision { color: #7ee787; }
+.live-log__line--drain { color: #79c0ff; }
+
 /* ── Version Progression Table ──────────────────────────────── */
 .panel-vprog { overflow-x: auto; }
 

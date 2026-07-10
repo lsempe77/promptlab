@@ -181,6 +181,60 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/api/activity")
+def activity(log_lines: int = 30) -> dict:
+    """Live activity feed: worker task queue state + recent supervisor log lines.
+    Designed for polling every 5s from the dashboard's Live panel."""
+    tasks: list[dict] = []
+    queue_summary: dict = {"pending": 0, "running": 0, "total_active": 0}
+
+    if db_pg.pg_enabled():
+        try:
+            with db_pg.get_pg_conn() as pg:
+                with pg.cursor() as cur:
+                    cur.execute(
+                        "SELECT field_name, model_id, kind, status, claimed_at, created_at, error "
+                        "FROM worker_tasks WHERE status IN ('pending','running') "
+                        "ORDER BY priority DESC, id ASC LIMIT 50"
+                    )
+                    rows = cur.fetchall()
+                    tasks = [dict(r) for r in rows]
+                    queue_summary["pending"] = sum(1 for t in tasks if t["status"] == "pending")
+                    queue_summary["running"] = sum(1 for t in tasks if t["status"] == "running")
+                    queue_summary["total_active"] = len(tasks)
+                    # Also fetch last 5 recently-finished tasks for context
+                    cur.execute(
+                        "SELECT field_name, model_id, kind, status, finished_at, error "
+                        "FROM worker_tasks WHERE status IN ('done','failed') "
+                        "ORDER BY finished_at DESC NULLS LAST LIMIT 5"
+                    )
+                    recent_done = [dict(r) for r in cur.fetchall()]
+        except Exception as exc:
+            tasks = []
+            recent_done = []
+            queue_summary["error"] = str(exc)
+    else:
+        recent_done = []
+
+    # Supervisor log tail
+    log_tail: list[str] = []
+    log_path = os.environ.get("SUPERVISOR_LOG", "/data/supervisor.log")
+    try:
+        if os.path.exists(log_path):
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                all_lines = f.readlines()
+            log_tail = [l.rstrip() for l in all_lines[-log_lines:] if l.strip()]
+    except Exception:
+        pass
+
+    return {
+        "queue": queue_summary,
+        "active_tasks": tasks,
+        "recently_done": recent_done,
+        "log_tail": log_tail,
+    }
+
+
 @app.get("/api/projects")
 def list_projects() -> list[dict]:
     static = [

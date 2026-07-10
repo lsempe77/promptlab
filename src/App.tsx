@@ -24,6 +24,7 @@ import { VersionProgressionTable } from "./components/VersionProgressionTable";
 import { useWalkthrough } from "./components/Walkthrough";
 import NewProjectWizard from "./components/NewProjectWizard";
 import SupervisorStatusBar from "./components/SupervisorStatusBar";
+import { LiveActivity } from "./components/LiveActivity";
 import "./App.css";
 
 const JOBS_POLL_MS = 6000;
@@ -244,6 +245,8 @@ function App() {
           {!apiError && selectedProject && (
             <SupervisorStatusBar project={selectedProject} />
           )}
+
+          {!apiError && <LiveActivity />}
 
           <div id="tour-methodology"><Methodology thresholds={thresholds} /></div>
 

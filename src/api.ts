@@ -177,6 +177,32 @@ export interface ListConfusion {
 
 export type Confusion = CategoricalConfusion | ListConfusion;
 
+export interface WorkerTask {
+  field_name: string;
+  model_id: string | null;
+  kind: string;
+  status: "pending" | "running";
+  claimed_at: string | null;
+  created_at: string;
+  error: string | null;
+}
+
+export interface RecentTask {
+  field_name: string;
+  model_id: string | null;
+  kind: string;
+  status: "done" | "failed";
+  finished_at: string | null;
+  error: string | null;
+}
+
+export interface ActivityData {
+  queue: { pending: number; running: number; total_active: number; error?: string };
+  active_tasks: WorkerTask[];
+  recently_done: RecentTask[];
+  log_tail: string[];
+}
+
 export interface Job {
   id: number;
   field_name: string;
@@ -245,4 +271,6 @@ export const api = {
     getJson<RunVersion[]>(`/api/projects/${project}/fields/${field}/run-versions`),
   stageStatus: (project: string, field: string, promptVersion?: number) =>
     getJson<StageStatus>(`/api/projects/${project}/fields/${field}/stage-status${qs({ prompt_version: promptVersion })}`),
+  activity: (logLines = 30) =>
+    getJson<ActivityData>(`/api/activity${qs({ log_lines: logLines })}`),
 };
