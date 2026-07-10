@@ -52,7 +52,7 @@ must process. Among the most time-consuming of these stages is structured data e
 the laborious task of reading each included study and recording, field by field, the
 bibliographic, institutional, and thematic metadata that will later underpin the review's
 analysis and dissemination. For a major evidence map covering hundreds or thousands of
-studies, this stage alone can consume months of skilled analyst time [@haddaway2020].
+studies, this stage alone can consume months of skilled analyst time [@haddaway2018].
 
 The rapid advancement of large language models (LLMs) has created genuine optimism about the
 potential to automate or accelerate this process. Models capable of reading an unstructured
@@ -119,7 +119,7 @@ text and return structured output in a specified format without task-specific fi
 raising the prospect of flexible, scalable extraction pipelines that require only a
 well-designed prompt rather than labelled training corpora. Several recent papers have
 demonstrated the feasibility of LLM-assisted extraction in clinical and biomedical contexts
-[@guo2024; @kim2024], but published benchmarks for social science and development economics
+[@marshall2019; @alshami2023], but published benchmarks for social science and development economics
 literature remain scarce. The heterogeneity of development impact evaluations — spanning
 agriculture, education, health, social protection, and financial inclusion across dozens of
 countries, with varying citation conventions and institutional affiliations — represents a
@@ -207,7 +207,7 @@ and single-categorical fields. For list fields (authors, affiliations, countries
 element-level micro-F1, which balances precision (the fraction of extracted values that are
 correct) and recall (the fraction of true values that were extracted). This metric is standard
 in information extraction evaluation and penalises both spurious extractions and omissions
-[@derczynski2016].
+[<!-- TODO: add F-measure citation -->@jonnalagadda2015].
 
 For categorical fields (sector, sub-sector), we compute record-level accuracy — the fraction
 of documents for which the model's selected category matches the ground truth — and report
