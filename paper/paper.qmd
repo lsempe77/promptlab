@@ -103,6 +103,18 @@ ASReview use active learning to prioritise potentially relevant citations for hu
 been shown to reduce the volume of human screening required without unacceptably increasing
 the rate of missed relevant studies, provided recall targets are set appropriately.
 
+The standard evaluation metric for screening tools is **Work Saved over Sampling** (WSS),
+introduced by @cohen2006 and widely adopted in active-learning-based screening evaluations.
+WSS@R% measures the proportion of records that need not be screened manually while still
+achieving recall R of all relevant studies:
+$$\text{WSS@R} = \frac{TN + FN}{N} - (1 - R)$$
+where $TN$ is the number of records correctly excluded before the recall threshold is reached,
+$FN$ is the number of relevant records missed, and $N$ is the total corpus size. WSS@95%, the
+most common variant, answers the practically important question: "How much screening effort can
+be eliminated while still finding 95% of all relevant studies?" For ASReview, reported WSS@95%
+values on benchmark datasets typically exceed 60% [@van2021asreview], representing large
+absolute savings in reviewer time.
+
 Data extraction — the stage that follows screening — has received considerably less attention
 in the literature. This asymmetry likely reflects the greater difficulty of the task: while
 screening can be reduced to a binary relevance judgement, data extraction requires reading
@@ -256,6 +268,26 @@ automated gate metric, not as the gate itself. This design choice reflects our v
 gate must be deterministic and reproducible for it to function as a reliable quality standard;
 LLM-judged metrics, while semantically richer, introduce non-determinism and are more
 expensive to compute at scale.
+
+### Work Saved over Sampling for Extraction
+
+WSS@R%, the standard efficiency metric for screening tools [@cohen2006], does not directly
+apply to data extraction, because extraction does not produce a ranked list of documents — it
+produces a structured value per document, not a relevance score. However, the same underlying
+intuition applies: a deployed extraction system should not require human review of every
+single prediction. We therefore define an extraction analog: **Work Saved at accuracy $A$**,
+the fraction of extractions that can be auto-accepted without human verification while
+maintaining accuracy $A$ on the auto-accepted set.
+
+This metric is estimable from the per-run confidence scores that each model attaches to its
+own predictions. Using the model's stated confidence as a triage signal, we sort predictions
+by confidence (highest first) and compute, for each possible confidence threshold $t$, the
+fraction of predictions above $t$ and the empirical accuracy on that subset:
+$$\text{Work Saved}(t) = \frac{|\{i : c_i \geq t\}|}{N}, \quad
+  \text{Accuracy}(t) = \frac{\sum_{i: c_i \geq t} \mathbf{1}[\hat{y}_i = y_i]}{|\{i : c_i \geq t\}|}$$
+Sweeping $t$ from 0 to 1 traces the work-saved curve: how much effort can be eliminated at
+each accuracy target. We report Work Saved at 95% accuracy (WS@95) as the primary operational
+figure — the extraction analog of WSS@95% for screening — alongside the full curve.
 
 ## The Twelve-Model Roster
 
@@ -422,6 +454,15 @@ cheap-vs-mid tier gap.]*
 *[Key findings: author_country achieves production gate for N/12 models; authors converges
 near-gate; sector/sub-sector optimisation partially effective; sub-sector improves with
 hierarchical allowed-values block.]*
+
+## Work Saved at 95% Accuracy
+
+*[Figure: work-saved curves for top 3 models per field — x axis: accuracy target, y axis:
+fraction of extractions auto-accepted.]*
+
+*[Key findings: WS@95 by field and model; which fields allow substantial triage vs. which
+require near-universal human review; comparison with WSS@95% benchmarks from screening
+literature.]*
 
 ## Prompt Lineage Analysis
 

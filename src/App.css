@@ -778,6 +778,18 @@ body {
 .vprog-table .vprog-n { font-size: 0.68em; opacity: 0.55; font-weight: 400; }
 .pv-badge { font-size: 0.78em; font-weight: 600; color: var(--muted); background: var(--surface2, #f0f0f0); border-radius: 3px; padding: 1px 5px; }
 
+/* ── Work Saved Chart ────────────────────────────────────────── */
+.work-saved-wrap { padding: 16px 0 8px; }
+.work-saved-title { font-size: 0.95rem; font-weight: 600; margin: 0 0 4px; }
+.work-saved-caption { font-size: 0.82rem; margin: 0 0 10px; }
+.work-saved-callout {
+  display: inline-block;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-left: 3px solid var(--accent);
+  padding: 6px 12px; border-radius: 0 4px 4px 0;
+  font-size: 0.85rem; margin-bottom: 12px;
+}
+
 /* Aggregate comparison charts (leaderboard + cost/quality scatter). */
 .aggregate-charts {
   display: grid;

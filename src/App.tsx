@@ -16,6 +16,7 @@ import {
 } from "./api";
 import { ModelComparisonTable } from "./components/ModelComparisonTable";
 import { AggregateCharts } from "./components/AggregateCharts";
+import { WorkSavedChart } from "./components/WorkSavedChart";
 import { ModelCard } from "./components/ModelCard";
 import { ModelFilter } from "./components/ModelFilter";
 import { Methodology } from "./components/Methodology";
@@ -328,6 +329,12 @@ function App() {
                             valueType={activeField.value_type}
                             gateThreshold={stageStatus?.gate_threshold ?? null}
                           />
+                          {calibration.length > 0 && (
+                            <WorkSavedChart
+                              calibrations={calibration}
+                              gateThreshold={stageStatus?.gate_threshold ?? null}
+                            />
+                          )}
                         </section>
 
                         {summaries.length === 0 ? (
