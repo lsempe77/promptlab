@@ -88,19 +88,23 @@ DEP, scores every model against human-curated ground truth, and improves prompts
   cost/CO₂e (EcoLogits per-run estimate).
 
 ## Gotchas
-- **PowerShell shows red `NativeCommandError` for git/fly stderr even on success (exit code 1)** —
-  read the actual output, don't trust the exit code for git/fly.
+- **`fly ssh console -C "..."` on Windows always exits with code 1** (PowerShell `NativeCommandError` alert). This is a `flyctl` Windows SSH cleanup bug — the remote command DID succeed. To silence the alert, always append `; $LASTEXITCODE = 0` or wrap in `try { ... } catch {}`:
+  ```powershell
+  fly ssh console --app dep-promptlab-api -C "sh /data/launch_all_new.sh"; $LASTEXITCODE = 0
+  ```
+  The actual result is visible in the output (e.g. "LAUNCHED supervisor pid 682"). Ignore "Error: The handle is invalid." and exit code 1 — they are always noise.
+- **`fly deploy` / `git push` also show red `NativeCommandError`** for the same reason — read the actual output to determine success/failure, not the exit code.
 - **`fly ssh console -C "..."`** breaks on pipes / nested quotes / `$!` — put complex remote commands
   in a `.sh`, upload with `fly ssh sftp put <local> /data/x.sh`, run `fly ssh console -C "sh
   /data/x.sh"`. **sftp REFUSES to overwrite** an existing remote file — `rm -f` it first. The
   container has **no `ps`/`pkill`** — use the `/proc`-scan helpers on `/data`:
-  `list_sup.sh` (supervisor only), `list_procs2.sh` (all Python), `kill_all.sh`, `launch_all.sh`
-  (supervisor + 4 workers), `launch_supervisor.sh` (supervisor only).
+  `list_sup.sh` (supervisor only), `list_procs2.sh` (all Python), `kill_all.sh`, `launch_all_new.sh`
+  (supervisor + 4 workers, interval=300s).
 - **Back up / inspect the prod DB read-only:** `fly ssh sftp get /data/promptlab.db <local>`, then
   run diagnostics against the copy. Never point write-scripts at the live volume DB casually.
 - OpenRouter **`~author/family-latest`** aliases require the literal leading `~`.
 - `run_extraction.py` commits each `(record, model)` result to SQLite as it completes (crash-safe)
-  and **skips already-done pairs**, so an interrupted run resumes cleanly.
+  and **skips already-done pairs** (non-errored only), so an interrupted run resumes cleanly.
 - `corpus.read_md()` falls back to `config.MD_DIR`/`DEP_MD_DIR` + filename if `records.md_path`
   doesn't resolve on the current machine.
 - Schema migrations: always test against a **copy** of the real DB. `db.init_db()` runs
