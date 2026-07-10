@@ -1,5 +1,7 @@
 # PowerShell helpers for working with the Fly.io dep-promptlab-api app.
 # Usage: . .\fly_helpers.ps1   (dot-source to load functions)
+# All functions suppress the "Error: The handle is invalid" + exit-code-1 noise
+# that flyctl produces on Windows when the SSH session closes.
 
 $APP = "dep-promptlab-api"
 
@@ -10,7 +12,11 @@ function Invoke-FlySSH {
     Windows SSH cleanup exit-code-1 noise.
     #>
     param([string]$Command)
-    fly ssh console --app $APP -C $Command 2>&1 | Where-Object { $_ -notmatch "The handle is invalid" }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    $result = fly ssh console --app $APP -C $Command 2>&1
+    $ErrorActionPreference = $prev
+    $result | Where-Object { $_ -notmatch "The handle is invalid" -and $_ -notmatch "^fly\s*:" -and $_ -notmatch "^Connecting to" }
     $global:LASTEXITCODE = 0
 }
 
@@ -25,7 +31,8 @@ function Show-Procs {
 
 function Show-SupervisorLog {
     param([int]$Lines = 30)
-    Invoke-FlySSH "grep '$(Get-Date -Format 'yyyy-MM-dd')' /data/supervisor.log | tail -$Lines"
+    $date = Get-Date -Format 'yyyy-MM-dd'
+    Invoke-FlySSH "grep '$date' /data/supervisor.log"
 }
 
 function Kill-Daemons {
