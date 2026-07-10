@@ -160,6 +160,16 @@ autonomous AI process but does not approve every step, is better suited to high-
 operational contexts but requires careful design to ensure that autonomous AI action cannot
 corrupt the integrity of the system's outputs [@amershi2019; @wu2022].
 
+@chen2026rsi provide a systematic taxonomy that formally separates bounded self-refinement
+(improvement against a fixed, external evaluator) from open-ended recursive self-improvement
+(modification of the system and the criteria of improvement itself), and locate the
+human-on-the-loop position on an explicit loop-closure axis. Their review of 1,250 papers
+finds that virtually all deployed self-improvement systems sit in the human-on-the-loop cell
+rather than fully closed loops, with the evaluator quality identified as the binding constraint
+in every category. This framing directly motivates our governance design: GEPA-lite is a
+bounded self-refinement system, anchored by a fixed human-curated quality gate, whose
+limitations are by design rather than by accident.
+
 In the context of evidence synthesis, a critical distinction is between actions that improve
 *how the AI extracts data* (prompt engineering) and actions that change *what counts as
 correct* (ground truth revision, taxonomy modification). The former can be safely delegated to
@@ -207,7 +217,7 @@ and single-categorical fields. For list fields (authors, affiliations, countries
 element-level micro-F1, which balances precision (the fraction of extracted values that are
 correct) and recall (the fraction of true values that were extracted). This metric is standard
 in information extraction evaluation and penalises both spurious extractions and omissions
-[<!-- TODO: add F-measure citation -->@jonnalagadda2015].
+[@sasaki2007].
 
 For categorical fields (sector, sub-sector), we compute record-level accuracy — the fraction
 of documents for which the model's selected category matches the ground truth — and report
@@ -440,7 +450,12 @@ optimisation spend.]*
 The results reveal a consistent pattern: GEPA-lite is effective at correcting formatting and
 edge-case handling errors — the domain in which clear, specific rules can be articulated in
 natural language — but is systematically limited when the root cause of failure is semantic
-ambiguity that cannot be resolved by prompt alone.
+ambiguity that cannot be resolved by prompt alone. This maps cleanly onto the verification
+hierarchy identified by @chen2026rsi: our human-curated F1 gate sits near the top
+(a verifiable, external signal), making it a reliable anchor for bounded self-refinement;
+the self-confirming loops and collapse dynamics they document as characteristic failure modes
+correspond here to the *exhausted* state reached when the optimizer cycles through its
+budget without improvement.
 
 For the authors field, the dominant failure mode throughout the optimisation process is the
 handling of name formatting edge cases: generational suffixes (Jr., III), name particles
