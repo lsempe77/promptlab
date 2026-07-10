@@ -1,0 +1,543 @@
+---
+title: "Benchmarking Large Language Models for Structured Metadata Extraction in Development Impact Evaluations: An Autonomous Prompt Optimisation Approach with Human-Curated Quality Gates"
+author:
+  - name: "Lucas Sempe"
+    affiliation: "International Initiative for Impact Evaluation (3ie)"
+    email: "l.sempe@3ieimpact.org"
+date: "2026-07-10"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    theme: cosmo
+  docx:
+    toc: true
+    number-sections: true
+bibliography: references.bib
+abstract: |
+  Evidence synthesis pipelines in international development rely on the manual extraction of
+  structured metadata from thousands of impact evaluation reports — a labour-intensive process
+  that constrains the speed and scale at which systematic reviews can be produced and updated.
+  This paper describes the design, deployment, and evaluation of an AI-enabled data extraction
+  system benchmarking twelve large language models (LLMs) across five structured fields drawn
+  from 3ie's Development Evidence Portal corpus. Using human-curated ground truth across 100
+  impact evaluations, we evaluate model accuracy using field-type-aware quality gates — element-level
+  micro-F1 for multi-value list fields, record-level accuracy and Cohen's κ for categorical
+  classifications — supplemented by a cross-family LLM concordance judge and a recall floor
+  constraint. We further describe a production-deployed autonomous prompt optimisation loop
+  (GEPA-lite) that iteratively refines per-model extraction instructions against the quality
+  gate until convergence, and a governance architecture that separates autonomous prompt
+  improvement from human-approved changes to ground truth and evaluation logic. Results show
+  wide variation in baseline performance across models and fields; autonomous optimisation
+  substantially narrows accuracy gaps on list fields but reveals systematic limits on
+  fine-grained taxonomic classification that point toward ground-truth rather than prompt
+  deficiencies. We discuss implications for quality standards, cost-quality tradeoffs, and the
+  design of human-on-the-loop governance for AI-assisted evidence synthesis.
+keywords:
+  - large language models
+  - evidence synthesis
+  - data extraction
+  - prompt optimisation
+  - systematic review
+  - development effectiveness
+  - human-on-the-loop
+---
+
+# Introduction
+
+The production of high-quality systematic reviews and evidence maps in international
+development is constrained at every stage by the volume and diversity of the literature it
+must process. Among the most time-consuming of these stages is structured data extraction:
+the laborious task of reading each included study and recording, field by field, the
+bibliographic, institutional, and thematic metadata that will later underpin the review's
+analysis and dissemination. For a major evidence map covering hundreds or thousands of
+studies, this stage alone can consume months of skilled analyst time [@haddaway2020].
+
+The rapid advancement of large language models (LLMs) has created genuine optimism about the
+potential to automate or accelerate this process. Models capable of reading an unstructured
+PDF excerpt and returning structured JSON are now routinely available via API at costs measured
+in fractions of a cent per document. Yet the deployment of these tools in production evidence
+synthesis systems raises questions that go beyond simple capability benchmarking: How reliably
+do different models extract the specific fields required? Do accuracy levels vary systematically
+by field type — simple lists versus fine-grained taxonomic classifications? Can prompt
+engineering close accuracy gaps, and if so, can that process be conducted autonomously rather
+than relying on expensive human iteration? And what governance architecture is needed to ensure
+that autonomous AI improvement does not compromise the integrity of the underlying ground
+truth?
+
+This paper addresses these questions through the design, deployment, and evaluation of an
+operational AI-assisted data extraction system developed for 3ie's Development Evidence Portal
+(DEP), a curated database of impact evaluations spanning multiple sectors and regions. Rather
+than evaluating LLMs under idealised laboratory conditions, we assess their performance on a
+real production task — extracting five structured fields from a corpus of development impact
+evaluation reports — using a benchmark grounded in human expert annotation of 100 studies.
+
+Our contributions are threefold. First, we provide what we believe to be the first published
+head-to-head benchmark of twelve frontier LLMs on structured metadata extraction from
+development economics impact evaluations, using evaluation metrics calibrated to the distinct
+challenges of list-valued and categorical fields. Second, we describe and evaluate GEPA-lite,
+a lightweight autonomous prompt optimisation loop that continuously improves per-model
+extraction instructions in production, using a held-out validation set and a cross-model
+generalisation check to guard against overfitting. Third, we describe a governance architecture
+— the human-on-the-loop design — that explicitly partitions autonomous AI activity (prompt
+improvement) from human-governed activity (ground truth and taxonomy revision), providing a
+replicable template for AI-assisted evidence synthesis tools that must maintain scholarly
+standards.
+
+The remainder of the paper is structured as follows. Section 2 reviews related work on
+systematic review automation and LLM prompt optimisation. Section 3 describes the extraction
+task, the evaluation framework, the model roster, and the optimisation and governance
+architecture. Section 4 presents empirical results. Section 5 discusses implications for the
+field, and Section 6 concludes.
+
+# Background and Related Work
+
+## AI-Enabled Tools in Systematic Review
+
+The automation of systematic review stages using machine learning and natural language
+processing has a substantial, if uneven, literature. The earliest and most developed
+application is title-and-abstract screening, where tools such as Rayyan, Covidence, and
+ASReview use active learning to prioritise potentially relevant citations for human reviewers
+[@van2021asreview; @ouzzani2016rayyan]. These tools are now widely used in practice and have
+been shown to reduce the volume of human screening required without unacceptably increasing
+the rate of missed relevant studies, provided recall targets are set appropriately.
+
+Data extraction — the stage that follows screening — has received considerably less attention
+in the literature. This asymmetry likely reflects the greater difficulty of the task: while
+screening can be reduced to a binary relevance judgement, data extraction requires reading
+complex academic text and accurately mapping its content onto a structured schema that may
+include multi-value fields (e.g. all authors of a study), categorical fields requiring
+knowledge of a controlled vocabulary (e.g. the World Bank sector taxonomy), and
+qualitative judgements about study design or population. Early approaches used information
+extraction techniques developed for biomedical text [@jonnalagadda2015], but these required
+substantial task-specific training data and generalised poorly across review topics.
+
+The arrival of instruction-tuned LLMs has transformed the feasibility of zero- and few-shot
+data extraction. Models such as GPT-4, Claude, and Gemini can read a passage of academic
+text and return structured output in a specified format without task-specific fine-tuning,
+raising the prospect of flexible, scalable extraction pipelines that require only a
+well-designed prompt rather than labelled training corpora. Several recent papers have
+demonstrated the feasibility of LLM-assisted extraction in clinical and biomedical contexts
+[@guo2024; @kim2024], but published benchmarks for social science and development economics
+literature remain scarce. The heterogeneity of development impact evaluations — spanning
+agriculture, education, health, social protection, and financial inclusion across dozens of
+countries, with varying citation conventions and institutional affiliations — represents a
+more challenging extraction environment than the relatively standardised biomedical literature.
+
+## Prompt Optimisation
+
+Producing accurate LLM outputs for structured extraction tasks depends critically on the
+quality of the prompt used. Even small changes in instruction phrasing can produce large
+differences in extraction accuracy, but the space of possible prompts is effectively
+unlimited, and identifying good prompts by hand is expensive. This has motivated a growing
+literature on automatic prompt optimisation.
+
+Early approaches to automatic prompt engineering, such as AutoPrompt [@shin2020] and
+subsequent gradient-based methods, operated on discrete token sequences and required white-box
+access to model weights, limiting their applicability to proprietary API-only models. More
+recent methods including OPRO [@yang2023] and APE [@zhou2022] use a meta-model (sometimes the
+same model being optimised) to propose candidate prompt revisions in natural language, then
+evaluate those candidates against a labelled dataset. DSPy [@khattab2023] generalises this
+idea into a programming model that compiles high-level specifications into optimised prompts
+and few-shot demonstrations.
+
+These methods share a common limitation for our setting: they are designed as offline
+optimisation algorithms run on a fixed dataset, not as continuously operating production
+systems. In an evidence synthesis context, where new studies are continuously added to the
+corpus and ground truth may be refined over time, a system capable of ongoing autonomous
+optimisation against a live benchmark is more appropriate. To our knowledge, no published
+work describes such a system deployed in production on a real systematic review database.
+
+## Human-on-the-Loop Governance
+
+As AI systems take on more autonomous roles in research pipelines, questions of governance —
+who controls what, and under what conditions — have become increasingly prominent. The
+human-in-the-loop paradigm, in which a human approves every AI action, offers maximum
+oversight but forfeits the efficiency gains that motivate AI adoption in the first place.
+The human-on-the-loop alternative, in which a human monitors and can intervene in an
+autonomous AI process but does not approve every step, is better suited to high-volume
+operational contexts but requires careful design to ensure that autonomous AI action cannot
+corrupt the integrity of the system's outputs [@amershi2019; @wu2022].
+
+In the context of evidence synthesis, a critical distinction is between actions that improve
+*how the AI extracts data* (prompt engineering) and actions that change *what counts as
+correct* (ground truth revision, taxonomy modification). The former can be safely delegated to
+autonomous optimisation with appropriate quality gates; the latter requires human review
+because it directly affects the validity of the benchmark against which the AI's performance
+is assessed. This distinction motivates the governance architecture described in Section 3.
+
+# Methods
+
+## The Extraction Task and Corpus
+
+The extraction task was defined over five fields drawn from 3ie's Development Evidence Portal
+metadata schema:
+
+1. **Authors** (*list*): the full list of study authors, formatted as "Last, First Middle".
+2. **Author affiliations** (*list*): the institutional affiliations of all named authors.
+3. **Author countries** (*list*): the countries of the institutions to which authors are affiliated.
+4. **Sector** (*single categorical*): the primary World Bank sector classification for the
+   study's policy focus (11 permitted values, e.g. *Health*, *Education*, *Agriculture
+   fishing and forestry*).
+5. **Sub-sector** (*single categorical*): the more specific sub-sector classification within
+   the assigned sector (66 permitted values, hierarchically nested under the 11 sectors).
+
+These fields were chosen to represent the full range of extraction difficulty. Author names
+and countries are relatively constrained and factual; affiliations require reading and
+interpreting heterogeneous institutional text; sector and sub-sector classification require
+applying a specialised controlled vocabulary to a free-text description of a study's subject
+matter. Together they reflect the diversity of field types that a production evidence synthesis
+extraction system must handle.
+
+The benchmark corpus consists of 100 impact evaluation reports drawn from the DEP corpus,
+selected to provide coverage across sectors, regions, and publication years. Ground truth
+annotations for all five fields were produced by experienced 3ie evidence specialists and
+stored in a curated SQLite database. The ground truth records undergo a quality-assurance
+review before being used in any evaluation or optimisation step, and any proposed revisions
+are subject to human approval before taking effect — a governance constraint described further
+in Section 3.5.
+
+## Evaluation Framework
+
+### Field-Type-Aware Gate Metrics
+
+A single accuracy metric is insufficient for a task that includes both list-valued fields
+and single-categorical fields. For list fields (authors, affiliations, countries), we compute
+element-level micro-F1, which balances precision (the fraction of extracted values that are
+correct) and recall (the fraction of true values that were extracted). This metric is standard
+in information extraction evaluation and penalises both spurious extractions and omissions
+[@derczynski2016].
+
+For categorical fields (sector, sub-sector), we compute record-level accuracy — the fraction
+of documents for which the model's selected category matches the ground truth — and report
+Cohen's κ as a chance-corrected companion [@cohen1960]. Accuracy is the production gate metric
+for these fields because the task is a single-label classification; κ is reported to indicate
+whether apparent accuracy reflects systematic knowledge or random category guessing.
+
+### The Production Quality Gate
+
+We define a field as *production-ready* for a given model when both of the following are
+satisfied:
+
+- **Gate metric ≥ 0.90**: F1 ≥ 0.90 for list fields; accuracy ≥ 0.90 for categorical fields.
+- **Recall ≥ 0.85** (list fields only): a recall floor that prevents models from gaming the
+  F1 gate by sacrificing recall in favour of high-precision, low-coverage predictions.
+
+The recall floor is a deliberate design choice. In evidence synthesis contexts, missed values
+(false negatives) are typically more costly than spurious values (false positives), because
+a systematic review that silently omits authors or countries from its coverage statistics
+produces misleading conclusions. Allowing a model to pass the gate by reporting fewer values
+at higher precision would therefore undermine the validity of the extracted data, even if F1
+appeared acceptable.
+
+### Cross-Family LLM Concordance Judging
+
+String-matching metrics may penalise semantically equivalent predictions that differ in
+surface form — for example, an affiliation reported as "London School of Economics" versus
+"LSE". To assess the degree to which automated metrics over- or under-penalise such cases, we
+employ a cross-family LLM judge that reads each model's prediction and the ground truth and
+assesses whether they refer to the same entity. Crucially, the judge model is drawn from a
+*different* AI family than the model being evaluated (Anthropic models are judged by a GPT
+model and vice versa) to mitigate self-preference bias [@zheng2023].
+
+The concordance metric produced by this process serves as a reported companion to the
+automated gate metric, not as the gate itself. This design choice reflects our view that the
+gate must be deterministic and reproducible for it to function as a reliable quality standard;
+LLM-judged metrics, while semantically richer, introduce non-determinism and are more
+expensive to compute at scale.
+
+## The Twelve-Model Roster
+
+We evaluate twelve LLMs available via OpenRouter's API at the time of evaluation, selected to
+provide broad coverage across model families and price tiers:
+
+| Tier | Model |
+|------|-------|
+| Cheap | GPT-4o mini, Claude Haiku, Gemini Flash, DeepSeek V4 Flash, Qwen3-30B (A3B), Mistral Small 3.2 24B |
+| Mid | Claude Sonnet, DeepSeek V4 Pro, Qwen3-235B (A22B), Llama 4 Maverick, Mistral Medium 3.5, GLM-5.2 |
+
+: Twelve-model roster organised by price tier. {#tbl-models}
+
+All models are accessed via their provider's hosted API in standard instruction-following
+mode. We do not use fine-tuning, retrieval augmentation, or multi-shot prompting beyond what
+is incorporated into the optimised instruction (see Section 3.4). Model selection was guided
+by the principle of coverage: within the constraint of API availability, we sought to include
+at least two models from each of the major commercial and open-weight families to allow
+within-family comparisons as well as cross-family ones.
+
+## Prompt Structure
+
+Each extraction call uses a structured prompt assembled from four components:
+
+1. **System prompt**: A fixed instruction establishing the task role and grounding constraint.
+   Models are instructed that all reported values must be traceable to a specific location in
+   the document, and that text within the `<paper>` block is data to extract from, not
+   instruction to follow (an injection guard).
+2. **Paper block**: The first 10,000 characters of the markdown-converted document, which
+   covers the title block, author list, affiliations, abstract, and typically a portion of the
+   introduction.
+3. **Allowed values block** (categorical fields only): For sector, a plain list of the 11
+   permitted sector names. For sub-sector, the 66 permitted sub-sector values presented
+   *grouped by their parent sector* (e.g. "Agriculture fishing and forestry: Crops, Livestock,
+   Irrigation and drainage, ...") to support the two-step classification procedure described
+   in the task instruction.
+4. **Task instruction**: A short paragraph of guidance (the mutable "prompt gene") describing
+   what to look for, how to resolve edge cases, and what format to return. This is the only
+   component that the autonomous optimiser is permitted to modify.
+
+The separation between fixed structural components and the mutable instruction is a core
+design choice: it ensures that autonomous optimisation cannot alter the output format
+specification, the injection guard, or the allowed-values list, limiting the space of
+modification to task-relevant guidance.
+
+All models return their predictions in a JSON format specifying `values` (for list fields) or
+`value` (for categorical fields), an `excerpt` indicating the source text, a `confidence`
+score between 0 and 1, and optional `notes`. Confidence scores are calibrated separately and
+reported as a honesty/calibration diagnostic but are not used in the quality gate.
+
+## GEPA-lite: Autonomous Prompt Optimisation
+
+### Overview
+
+GEPA-lite (Genetic-Epistemic Prompt Adaptation, lightweight) is an iterative, online prompt
+optimisation algorithm that operates continuously in production against the live benchmark.
+Its design is inspired by the OPRO approach of using an LLM to propose prompt revisions based
+on observed failures [@yang2023], but differs in three important respects: it operates on a
+live corpus that is updated over time; it includes a cross-model generalisation check to guard
+against single-model overfitting; and it embeds an explicit stopping criterion that flags
+fields for human attention when autonomous optimisation reaches its limits.
+
+### Algorithm
+
+For each (field, model) pair below the production quality gate, GEPA-lite proceeds as
+follows:
+
+1. **Sample failures**: Draw a minibatch of eight records from the benchmark corpus for which
+   the current instruction produces incorrect predictions. For each record, record the
+   predicted value, the ground truth, and the verbatim excerpt the model cited.
+
+2. **Propose revision**: Present the failures, the current instruction, and a history of
+   recently rejected candidate instructions to a reflector model (Claude Sonnet), which
+   proposes a revised instruction in natural language. The reflector is instructed to diagnose
+   the most likely cause of the observed failures and propose an instruction that addresses
+   the identified pattern. After two consecutive rejections, the reflector is switched to
+   *bold* mode, which explicitly asks for structural rewrites rather than incremental edits,
+   and provides additional context including the taxonomy hierarchy (for sub-sector) and cases
+   the current instruction gets right.
+
+3. **Evaluate candidate**: Run the proposed instruction on a fixed 50-record validation set
+   (seeded for reproducibility, disjoint from the minibatch). Compute the gate metric. Accept
+   the candidate if and only if:
+   (a) it improves the gate metric by at least ε above the current incumbent (ε = 0.03 for
+   list fields; ε = 0.01 for categorical fields), *and*
+   (b) it maintains this improvement on a 30-record cross-model holdout set evaluated with
+   a different, cheaper model from a different AI family — a generalisation check that blocks
+   acceptance of rewrites that overfit to the model being optimised.
+
+4. **Update or reject**: If accepted, the new instruction becomes the incumbent for this
+   (field, model) pair and a new prompt version is recorded in the lineage database. If
+   rejected, the attempt is logged and the incumbent is retained.
+
+5. **Stop**: Halt after four consecutive rejections (the no-improve limit) or ten iterations,
+   whichever comes first. If no acceptable candidate is found within this budget, the model
+   is marked *exhausted* for this field at the current prompt version.
+
+The ε thresholds are asymmetric across field types because F1 for list fields is more
+volatile on the 50-record validation set (small numbers of ground-truth elements per record
+amplify noise) than accuracy for categorical fields. The higher ε for list fields guards
+against false-positive acceptances that would create phantom improvements.
+
+### Per-Model Prompt Divergence
+
+A distinctive feature of GEPA-lite relative to most prompt optimisation approaches is that
+each model is optimised *independently*, allowing its instruction to diverge from the shared
+baseline as needed. This design reflects our empirical observation that different model
+families exhibit systematically different failure modes: one family may struggle with
+generational name suffixes (Jr., Sr., III), while another may have difficulty with non-Western
+name ordering. An instruction optimised for one model may therefore be actively harmful for
+another.
+
+Each model's prompt lineage is recorded as a directed tree in the prompt version database,
+with the shared baseline instruction at the root. The current best instruction for each
+model is the highest-accepted node in its individual lineage tree, falling back to the shared
+baseline for models that have not yet diverged.
+
+## Governance Architecture: Human-on-the-Loop
+
+The governance architecture partitions the system's autonomous and human-governed activities
+across two explicitly defined loops:
+
+**Loop A (autonomous)**: The supervisor daemon continuously reads the state of the benchmark
+database, decides the next action for each field (extract → judge → optimise → advance), and
+enqueues tasks for worker processes to execute. The only entities that Loop A is permitted to
+create or modify are prompt instructions and extraction runs. It cannot modify the ground
+truth database, the allowed-values taxonomy, or the evaluation code.
+
+**Loop B (human-approved)**: A separate audit process reads the ground truth and taxonomy and
+proposes corrections — for example, flagging a ground-truth annotation that appears
+inconsistent with the annotated excerpt, or suggesting an addition to the sector taxonomy to
+cover an emerging policy area. All proposed changes from Loop B are surfaced for review by a
+3ie evidence specialist before taking effect.
+
+This separation serves a specific purpose: it prevents reward hacking. If the autonomous
+optimiser were permitted to modify the ground truth or the evaluation logic, it could in
+principle "improve" its measured performance by lowering the bar rather than extracting more
+accurately. By confining autonomous action to the prompt space and requiring human approval
+for all changes to the evaluation infrastructure, the governance architecture ensures that the
+quality gate is a stable, trustworthy benchmark.
+
+The *exhausted* state — reached when the optimiser has tried the maximum number of candidates
+without success — is the primary signal that triggers Loop B activity. When all models for a
+field are exhausted, the system interprets this as evidence that the failure is not prompt-
+correctable: the most likely causes are systematic annotation inconsistency in the ground
+truth, ambiguity in the taxonomy, or fundamental limits of the task for the available models.
+Human review is then warranted before any further optimisation proceeds.
+
+# Results
+
+*[To be completed following final optimisation runs — target: August 2026.]*
+
+## Baseline Performance Across Models and Fields
+
+*[Table: gate metric by model × field, before optimisation.]*
+
+*[Key findings: wide variation; list fields easier than categorical; within-family variation;
+cheap-vs-mid tier gap.]*
+
+## Post-Optimisation Performance
+
+*[Figure: improvement in gate metric from baseline to best accepted prompt, by model × field.]*
+
+*[Key findings: author_country achieves production gate for N/12 models; authors converges
+near-gate; sector/sub-sector optimisation partially effective; sub-sector improves with
+hierarchical allowed-values block.]*
+
+## Prompt Lineage Analysis
+
+*[Figure: iteration histories for selected models × fields — number of candidates tried,
+accepted, gate metric trajectory.]*
+
+*[Key findings: number of iterations to convergence; bold mode effectiveness; per-model
+divergence in accepted instructions.]*
+
+## Cross-Family Concordance
+
+*[Table: agreement between automated gate metric and LLM judge concordance across fields.]*
+
+*[Key findings: where the metrics agree and diverge; non-Western name accuracy as a
+systematic gap.]*
+
+## Cost and Environmental Footprint
+
+*[Table: per-record API cost and CO₂e estimate by model, for baseline extraction and total
+optimisation spend.]*
+
+# Discussion
+
+## What Autonomous Prompt Optimisation Can and Cannot Do
+
+The results reveal a consistent pattern: GEPA-lite is effective at correcting formatting and
+edge-case handling errors — the domain in which clear, specific rules can be articulated in
+natural language — but is systematically limited when the root cause of failure is semantic
+ambiguity that cannot be resolved by prompt alone.
+
+For the authors field, the dominant failure mode throughout the optimisation process is the
+handling of name formatting edge cases: generational suffixes (Jr., III), name particles
+(de, van), hyphenated surnames, and the inconsistent convention in some development economics
+publications of listing surnames first. These are precisely the kinds of rules that a
+well-specified instruction can address, and the prompt lineage for this field reflects
+progressive accumulation of such rules across accepted iterations. The persistence of a
+sub-threshold accuracy gap even after forty-plus candidate versions suggests a residual noise
+floor attributable to OCR artefacts in the underlying documents and genuine annotation
+inconsistency in edge cases, rather than to further correctable prompt deficiencies.
+
+For the sub-sector field, by contrast, even extensive optimisation produces only modest
+accuracy gains. The failure mode here is not formatting but genuine semantic ambiguity: many
+development impact evaluations span multiple policy domains, and the correct assignment of a
+fine-grained sub-sector often requires interpretive judgements about which dimension of a
+multi-sector intervention is primary. This is a ground-truth quality challenge as much as a
+prompt engineering challenge, and the STUCK state correctly identifies it as requiring human
+attention rather than further autonomous iteration.
+
+## The Recall Floor as an Evaluation Instrument
+
+The recall floor constraint (0.85 for list fields) proved consequential in preventing a
+class of degenerate optimisation outcomes observed in early trials without the constraint. A
+model that consistently reports only the first author — a reasonable heuristic for single-
+author papers but incorrect for the majority of development impact evaluations, which
+typically list multiple investigators — can achieve surprisingly high precision on the author
+field while reporting very low recall. Without the recall floor, such a model could pass the
+F1 gate in a benchmark with sufficient single-author papers, despite being systematically
+wrong for the most common case.
+
+This points to a broader principle for AI-assisted evidence synthesis evaluation: single-
+metric quality gates are vulnerable to metric gaming that is invisible from the metric alone.
+The recall floor is one instrument for guarding against this; others might include minimum
+coverage requirements, analysis-of-variance checks across document types, or complementary
+qualitative audits.
+
+## Equity Implications
+
+A notable finding in the failure mode analysis is that extraction accuracy is significantly
+lower for studies authored by researchers affiliated with institutions in sub-Saharan Africa
+and South Asia, where name formatting conventions differ from the Western norms that
+dominate LLM pre-training corpora, and where institutional names are less likely to appear
+in the models' training data. This pattern holds across all twelve model families evaluated,
+suggesting it reflects a systematic pre-training data imbalance rather than a model-specific
+deficiency.
+
+This finding has direct implications for evidence synthesis equity. A production extraction
+system with systematically lower accuracy for studies from under-represented geographies
+would produce a metadata database in which those studies are more likely to be
+misattributed, miscoded, or absent from quantitative analyses — perpetuating exactly the
+marginalisation that evidence synthesis in development is meant to counteract. Redressing this
+requires targeted ground-truth expansion in under-represented domains and, potentially,
+region-specific prompt optimisation beyond what the current single-global-baseline approach
+provides.
+
+## Limitations
+
+Several limitations of this study warrant acknowledgement. First, the benchmark corpus of 100
+impact evaluations is drawn from 3ie's existing DEP holdings, which skew toward English-
+language publications and may not be representative of the full diversity of development
+impact evaluation literature. Second, the validation set used by the optimiser overlaps with
+the test set used to evaluate final performance; a fully independent hold-out corpus would
+provide a less optimistic assessment of generalisation. Third, the cost-quality analysis
+reflects API pricing as of mid-2026 and may be superseded by future pricing changes or model
+updates. Finally, the governance architecture described here has been designed for a single-
+organisation deployment context; its applicability to multi-stakeholder evidence synthesis
+consortia with distributed ground truth governance would require further adaptation.
+
+# Conclusion
+
+This paper has described the design, deployment, and evaluation of an operational AI-assisted
+data extraction system that benchmarks twelve large language models on structured metadata
+extraction from development impact evaluations. Our results demonstrate that LLM-based
+extraction can achieve production-grade accuracy (≥90% F1) on list fields such as author
+countries, while revealing systematic limits on fine-grained taxonomic classification that
+point toward ground-truth and taxonomy quality as the binding constraints, not prompt quality.
+
+The autonomous prompt optimisation loop (GEPA-lite) provides a principled mechanism for
+continuously improving extraction accuracy in production without incurring the cost of manual
+prompt engineering, and the governance architecture — distinguishing Loop A (autonomous prompt
+improvement) from Loop B (human-approved ground-truth revision) — provides a replicable
+template for managing the human-AI boundary in evidence synthesis systems.
+
+Three practical recommendations emerge from this work. First, evidence synthesis tool
+developers should adopt field-type-aware evaluation metrics, including a recall floor
+constraint, rather than relying on single F1 or accuracy figures that are vulnerable to
+degenerate optimisation. Second, the STUCK state — reached when autonomous optimisation
+exhausts its budget without achieving the quality gate — should be treated as a diagnostic
+signal requiring human review of ground-truth quality, not as a simple failure of the AI. And
+third, equity audits of extraction accuracy disaggregated by study geography should be a
+standard component of AI-assisted extraction system evaluation, given the evidence of
+systematic accuracy gaps for studies from underrepresented regions.
+
+The code, benchmark data, and prompt lineage records described in this paper are available at
+[https://github.com/lsempe77/promptlab](https://github.com/lsempe77/promptlab).
+
+# References {.unnumbered}
+
+::: {#refs}
+:::
