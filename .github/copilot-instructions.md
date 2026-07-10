@@ -35,9 +35,10 @@ DEP, scores every model against human-curated ground truth, and improves prompts
 - **Phase 2 Postgres (Neon):** `backend/app/db_pg.py` — all runs/iterations/judgments/jobs/tasks
   mirror to Postgres when `DATABASE_URL` is set. SQLite stays authoritative for coordinator-owned
   tables (records, ground_truth, prompt_versions, projects).
-- **Running daemons** (restart after every `fly deploy`): supervisor PID 679, workers PIDs 691–694.
+- **Running daemons** (restart after every `fly deploy`): supervisor PID 679, workers PIDs 680–683.
   Pre-wipe backup at `../DEP/backups/promptlab_prod_20260708_214047.db`.
 - Dashboard + docs are merged to `main` → live on GitHub Pages.
+- **`auto_stop_machines = 'off'`** in fly.toml — the machine never auto-stops (background daemons run 24/7).
 
 ## Architecture — two loops + governance (do not weaken)
 - **Loop A (supervisor + workers, autonomous):** optimizes **prompts** within the gate.
