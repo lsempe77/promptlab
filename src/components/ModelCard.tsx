@@ -248,36 +248,8 @@ export function ModelCard({
             {j.kind} running{j.total ? ` (${j.completed}/${j.total})` : ""}
           </span>
         ))}
-        <div className="stat-section-label">Accuracy</div>
+        {/* Decision metrics first: Quality (the gate) leads, then the essentials. */}
         <div className="stat-grid">
-          <div className="stat-card">
-            <span className="stat-value">{summary.n}</span>
-            <span className="stat-label">references</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-value">{pct(summary.accuracy)}</span>
-            <span className="stat-label">approximate match rate</span>
-            {accCi && (
-              <>
-                <ConfidenceWhisker accuracy={summary.accuracy} ci={accCi} />
-                <span className="stat-ci">
-                  95% CI {pct(accCi.low)}–{pct(accCi.high)}
-                </span>
-              </>
-            )}
-          </div>
-          <div className="stat-card">
-            <span className="stat-value">{summary.n_errors}</span>
-            <span className="stat-label">errors</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-value">
-              {llmJudge && llmJudge.n_judged > 0 ? pct(llmJudge.llm_judged_accuracy) : "—"}
-            </span>
-            <span className="stat-label">
-              second-opinion check{llmJudge && llmJudge.n_judged > 0 ? ` (${llmJudge.n_judged})` : ""}
-            </span>
-          </div>
           <div className="stat-card highlight">
             <span className="stat-value">{gateMetric != null ? pct(gateMetric) : "—"}</span>
             <span className="stat-label">Quality — {gateMetricName}</span>
@@ -289,55 +261,91 @@ export function ModelCard({
               </span>
             )}
           </div>
-        </div>
-        <div className="stat-section-label">Honesty</div>
-        <div className="stat-grid">
+          <div className="stat-card">
+            <span className="stat-value">{summary.n}</span>
+            <span className="stat-label">references</span>
+          </div>
           <div className="stat-card">
             <span className="stat-value">
-              {summary.mean_honesty_score != null ? summary.mean_honesty_score.toFixed(2) : "—"}
+              {llmJudge && llmJudge.n_judged > 0 ? pct(llmJudge.llm_judged_accuracy) : "—"}
             </span>
-            <span className="stat-label">honesty-adjusted score</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-value">{pct(summary.abstention_rate)}</span>
-            <span className="stat-label">abstention rate</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-value">{pct(summary.hallucination_rate)}</span>
-            <span className="stat-label">hallucination rate</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-value">{pct(summary.wrong_rate)}</span>
-            <span className="stat-label">wrong rate</span>
-          </div>
-        </div>
-        <div className="stat-section-label">Confidence signals</div>
-        <div className="stat-grid">
-          <div className="stat-card">
-            <span className="stat-value">
-              {summary.mean_logprob_confidence != null ? pct(summary.mean_logprob_confidence) : "—"}
-            </span>
-            <span className="stat-label">avg token confidence</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-value">{crossAgreement ? pct(crossAgreement.agreement_rate) : "—"}</span>
             <span className="stat-label">
-              cross-model agreement{crossAgreement ? ` (${crossAgreement.n_records})` : ""}
+              second-opinion check{llmJudge && llmJudge.n_judged > 0 ? ` (${llmJudge.n_judged})` : ""}
             </span>
           </div>
           <div className="stat-card">
-            <span className="stat-value">{selfConsistency ? pct(selfConsistency.mean_agreement) : "—"}</span>
-            <span className="stat-label">
-              self-consistency{selfConsistency ? ` (${selfConsistency.n_records})` : ""}
-            </span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-value">
-              {summary.excerpt_verified_rate != null ? pct(summary.excerpt_verified_rate) : "—"}
-            </span>
-            <span className="stat-label">excerpt verified</span>
+            <span className="stat-value">{summary.n_errors}</span>
+            <span className="stat-label">errors</span>
           </div>
         </div>
+
+        {/* Secondary signals tucked behind a toggle so the card stays scannable. */}
+        <details className="method-group model-card-more">
+          <summary>Honesty, confidence &amp; other signals</summary>
+          <div className="stat-section-label">Honesty (steers the optimizer)</div>
+          <div className="stat-grid">
+            <div className="stat-card">
+              <span className="stat-value">
+                {summary.mean_honesty_score != null ? summary.mean_honesty_score.toFixed(2) : "—"}
+              </span>
+              <span className="stat-label">honesty-adjusted score</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-value">{pct(summary.abstention_rate)}</span>
+              <span className="stat-label">abstention rate</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-value">{pct(summary.hallucination_rate)}</span>
+              <span className="stat-label">hallucination rate</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-value">{pct(summary.wrong_rate)}</span>
+              <span className="stat-label">wrong rate</span>
+            </div>
+          </div>
+          <div className="stat-section-label">Confidence signals</div>
+          <div className="stat-grid">
+            <div className="stat-card">
+              <span className="stat-value">
+                {summary.mean_logprob_confidence != null ? pct(summary.mean_logprob_confidence) : "—"}
+              </span>
+              <span className="stat-label">avg token confidence</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-value">{crossAgreement ? pct(crossAgreement.agreement_rate) : "—"}</span>
+              <span className="stat-label">
+                cross-model agreement{crossAgreement ? ` (${crossAgreement.n_records})` : ""}
+              </span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-value">{selfConsistency ? pct(selfConsistency.mean_agreement) : "—"}</span>
+              <span className="stat-label">
+                self-consistency{selfConsistency ? ` (${selfConsistency.n_records})` : ""}
+              </span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-value">
+                {summary.excerpt_verified_rate != null ? pct(summary.excerpt_verified_rate) : "—"}
+              </span>
+              <span className="stat-label">excerpt verified</span>
+            </div>
+          </div>
+          <div className="stat-section-label">Other</div>
+          <div className="stat-grid">
+            <div className="stat-card">
+              <span className="stat-value">{pct(summary.accuracy)}</span>
+              <span className="stat-label">approximate match rate (superseded by Quality)</span>
+              {accCi && (
+                <>
+                  <ConfidenceWhisker accuracy={summary.accuracy} ci={accCi} />
+                  <span className="stat-ci">
+                    95% CI {pct(accCi.low)}–{pct(accCi.high)}
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        </details>
         </div>
 
       {calibration && calibration.n_scored > 0 && (

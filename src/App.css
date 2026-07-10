@@ -1572,3 +1572,64 @@ table.glossary .glossary-dir {
   font-style: italic;
 }
 
+/* ── ProcessSteps — plain 3-step "how it works" ─────────────────────── */
+.process-steps {
+  margin-bottom: 16px;
+}
+.process-steps-title {
+  margin: 0 0 12px;
+  font-size: 1rem;
+}
+.process-steps-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.process-step {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.process-step-num {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent, #3a6ea5);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.process-step-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.process-step-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.process-step-body {
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+.process-steps-note {
+  margin: 12px 0 0;
+  font-size: 0.78rem;
+}
+.model-card-more {
+  margin-top: 8px;
+}
+.model-card-more > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+

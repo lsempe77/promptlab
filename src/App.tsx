@@ -27,18 +27,27 @@ import NewProjectWizard from "./components/NewProjectWizard";
 import SupervisorStatusBar from "./components/SupervisorStatusBar";
 import { LiveActivity } from "./components/LiveActivity";
 import { FieldOverview } from "./components/FieldOverview";
+import { ProcessSteps } from "./components/ProcessSteps";
 import "./App.css";
 
 const JOBS_POLL_MS = 6000;
 
+function shortModel(id: string): string {
+  return (id.split("/").pop() ?? id).replace(/^~/, "").replace(/-latest$/, "");
+}
+
+// Headline verdict for a field: names the leading model, its score, and how it
+// stands relative to the gate — the one-line answer to "how good are we here?".
 function StageBadge({ s }: { s: StageStatus }) {
   const evaluated = s.n_models_evaluated;
   const passing = s.n_models_passing;
   const gatePct = Math.round(s.gate_threshold * 100);
-  const best = evaluated > 0 ? Math.max(...s.models.map((m) => m.gate_metric)) : null;
-  const bestPct = best != null ? Math.round(best * 100) : null;
+  const leader =
+    evaluated > 0 ? s.models.reduce((a, b) => (b.gate_metric > a.gate_metric ? b : a)) : null;
+  const bestPct = leader != null ? Math.round(leader.gate_metric * 100) : null;
   const isList = s.models.length > 0 && s.models[0].gate_metric_name !== "accuracy";
   const metricName = isList ? "F1" : "accuracy";
+  const gap = bestPct != null ? gatePct - bestPct : null;
   const cls =
     evaluated === 0
       ? "stage-badge neutral"
@@ -49,12 +58,12 @@ function StageBadge({ s }: { s: StageStatus }) {
           : "stage-badge partial";
   return (
     <div className={cls}>
-      {evaluated > 0 && passing > 0 ? (
-        <span>✅ <strong>{passing} of {evaluated} AIs</strong> get it right {gatePct}%+ of the time
-        <span className="muted"> ({metricName} ≥ {gatePct}% — accurate enough to use)</span></span>
-      ) : evaluated > 0 && bestPct != null ? (
-        <span>Best AI so far: <strong>{bestPct}% {metricName}</strong>
-        <span className="muted"> — working toward the {gatePct}% target</span></span>
+      {evaluated > 0 && passing > 0 && leader && bestPct != null ? (
+        <span>✅ <strong>{shortModel(leader.model_id)}</strong> leads at <strong>{bestPct}% {metricName}</strong> — production-ready.
+        <span className="muted"> {passing} of {evaluated} AIs clear the {gatePct}% bar.</span></span>
+      ) : evaluated > 0 && leader && bestPct != null ? (
+        <span>Best so far: <strong>{shortModel(leader.model_id)}</strong> at <strong>{bestPct}% {metricName}</strong>
+        <span className="muted"> — {gap} {gap === 1 ? "pt" : "pts"} below the {gatePct}% bar; not production-ready yet (0 of {evaluated} pass).</span></span>
       ) : (
         <span className="muted">Not yet evaluated (need {gatePct}% {metricName})</span>
       )}
@@ -258,9 +267,20 @@ function App() {
 
           {!apiError && !fields && <p className="muted">Loading fields…</p>}
 
-          {/* Charts first: the headline "which AI performs best" for the selected
-              field goes directly under the header. Cross-field overview, live
-              pipeline status, and methodology follow below. */}
+          {/* How it works — 3 plain steps up top; full pipeline is opt-in below. */}
+          {!apiError && <ProcessSteps />}
+
+          {/* Cross-field overview is the entry point: pick a field, then dive in. */}
+          {!apiError && selectedProject && fields && fields.length > 0 && (
+            <FieldOverview
+              project={selectedProject}
+              fields={fields}
+              selectedField={selected}
+              onSelectField={setSelected}
+            />
+          )}
+
+          {/* Selected-field deep dive: verdict → charts → model cards. */}
           {fields && fields.length > 0 && (
             <div className="dashboard-body">
               <nav id="tour-field-nav" className="field-nav">
@@ -394,16 +414,7 @@ function App() {
             </div>
           )}
 
-          {/* Secondary context, below the headline charts */}
-          {!apiError && selectedProject && fields && fields.length > 0 && (
-            <FieldOverview
-              project={selectedProject}
-              fields={fields}
-              selectedField={selected}
-              onSelectField={setSelected}
-            />
-          )}
-
+          {/* Operational status + deep methodology, below the results */}
           {!apiError && selectedProject && (
             <SupervisorStatusBar project={selectedProject} />
           )}
