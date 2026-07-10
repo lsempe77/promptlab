@@ -73,16 +73,6 @@ def _gate_score(field_name: str, predictions: list[tuple[Any, Any]]) -> tuple[fl
     return gm["metric"], gm["n"], gm.get("recall")
 
 
-def _passes_gate(metric: float, recall: float | None, epsilon: float = 0.0) -> bool:
-    """True if the metric clears GATE_THRESHOLD+epsilon AND recall is above RECALL_FLOOR
-    (for list fields only; categorical fields have recall=None so the floor is skipped)."""
-    if metric < scoring.GATE_THRESHOLD + epsilon:
-        return False
-    if recall is not None and recall < RECALL_FLOOR:
-        return False
-    return True
-
-
 @dataclass
 class EvalOutcome:
     mean_score: float
@@ -113,18 +103,6 @@ class OptimizeResult:
     best_instruction: str
     best_score: float
     iterations: list[IterationLog] = dataclass_field(default_factory=list)
-
-
-def train_val_split(records: list[dict], val_size: int = DEFAULT_VAL_SIZE, seed: int = 42) -> tuple[list[dict], list[dict]]:
-    """Splits off a small, fixed-size validation set (NOT a fraction of the
-    whole pool, which can be thousands of records) used to consistently
-    compare every candidate instruction; the remainder is the train pool that
-    minibatches are sampled from.
-    """
-    shuffled = records[:]
-    random.Random(seed).shuffle(shuffled)
-    val_size = min(val_size, max(1, len(shuffled) // 2))
-    return shuffled[val_size:], shuffled[:val_size]
 
 
 def train_val_holdout_split(
@@ -567,6 +545,9 @@ def _run_optimization(
     best_instruction = baseline_pv["template"]
     best_pv_id = baseline_pv["id"]
     # Phase 2: one PG connection for the entire optimization run.
+    # The whole run is wrapped in try/finally (below) so this connection is
+    # always released back to the pool — otherwise any exception in the
+    # iteration loop leaks it and, after maxconn failures, blocks all PG work.
     _pg_ctx = _db_pg.get_pg_conn() if _USE_PG else None
     _pg_conn = _pg_ctx.__enter__() if _pg_ctx else None
     try:
@@ -575,173 +556,172 @@ def _run_optimization(
                 field_name, best_instruction, val, model_id, conn=conn, pg_conn=_pg_conn,
                 project_id=project_id, prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
             )
-    finally:
-        pass  # keep pg_conn open for the rest of the loop below
-    best_score = baseline_outcome.mean_score
-    best_gate, best_gate_n, best_gate_recall = _gate_score(field_name, baseline_outcome.predictions)
-    best_holdout_avg = 0.0
-    if gen_gate:
-        with db.get_conn() as conn:
-            best_holdout_avg, base_per = _holdout_generalization(
-                field_name, best_instruction, holdout, holdout_models, conn=conn,
-                project_id=project_id, prompt_version_id=best_pv_id, batch_id=batch_id,
-                max_workers=max_workers,
-            )
-    if verbose:
-        print(
-            f"[iter 0] baseline gate-metric={best_gate:.3f} "
-            f"(n={best_gate_n}, honesty={best_score:.3f})"
-        )
+        best_score = baseline_outcome.mean_score
+        best_gate, best_gate_n, best_gate_recall = _gate_score(field_name, baseline_outcome.predictions)
+        best_holdout_avg = 0.0
         if gen_gate:
-            per = ", ".join(f"{m.split('/')[-1]}={v:.2f}" for m, v in base_per.items())
-            print(f"          holdout generalization avg={best_holdout_avg:.3f} over [{per}] (n={len(holdout)})")
-        else:
-            print(f"          (cross-model holdout gate disabled: only {len(holdout)} holdout records)")
-
-    result = OptimizeResult(field_name=field_name, baseline_score=best_gate, best_instruction=best_instruction, best_score=best_gate)
-    no_improve_count = 0
-    rejected_history: list[dict[str, Any]] = []  # {"instruction", "diagnosis"}, most recent last
-
-    with db.get_conn() as conn:
-        for it in range(1, max_iterations + 1):
-            if job_id is not None:
-                db.update_job_progress(conn, job_id, it - 1)
-            minibatch = rnd.sample(train, k=min(minibatch_size, len(train)))
-            train_outcome = evaluate_instruction(
-                field_name, best_instruction, minibatch, model_id, conn=conn, pg_conn=_pg_conn,
-                project_id=project_id, prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
-            )
-
-            if not train_outcome.failures:
-                if verbose:
-                    print(f"[iter {it}] no failures in minibatch (train_score={train_outcome.mean_score:.3f}); stopping early.")
-                break
-
-            avoid = rejected_history[-history_window:] if history_window > 0 else None
-            bold = no_improve_count >= bold_after
-            if bold and verbose:
-                print(f"[iter {it}] bold mode ON ({no_improve_count} consecutive rejections >= bold_after={bold_after})")
-
-            field_value_type = prompts.FIELDS[field_name].value_type if field_name in prompts.FIELDS else None
-            candidates: list[dict[str, Any]] = []
-            for k in range(candidates_per_iteration):
-                try:
-                    candidate_instruction, diagnosis = propose_revision(
-                        field_name, best_instruction, train_outcome.failures, reflector_model,
-                        avoid=avoid, bold=bold, successes=train_outcome.successes,
-                        field_value_type=field_value_type,
-                    )
-                except (ParseError, gateway.GatewayError) as exc:
-                    if verbose:
-                        print(f"[iter {it}] reflector call {k + 1}/{candidates_per_iteration} failed: {exc}")
-                    continue
-
-                pv = prompt_store.add_version(
-                    conn, project_id, field_name, candidate_instruction, parent_id=best_pv_id,
-                    notes=f"iter {it} (candidate {k + 1}/{candidates_per_iteration}): {diagnosis or ''}"[:500],
-                    model_id=model_id,
-                )
-                if pv is None:
-                    raise RuntimeError(f"Failed to persist candidate prompt version for field={field_name}.")
-                candidate_outcome = evaluate_instruction(
-                    field_name, candidate_instruction, val, model_id, conn=conn, pg_conn=_pg_conn,
-                    project_id=project_id, prompt_version_id=pv["id"], batch_id=batch_id, max_workers=max_workers,
-                )
-                candidates.append({
-                    "instruction": candidate_instruction, "diagnosis": diagnosis, "pv": pv, "outcome": candidate_outcome,
-                })
-
-            if not candidates:
-                no_improve_count += 1
-                if no_improve_count >= no_improve_limit:
-                    if verbose:
-                        print(f"[stop] {no_improve_count} iterations with no improvement (limit={no_improve_limit}).")
-                    break
-                continue
-
-            best_candidate = max(candidates, key=lambda c: c["outcome"].mean_score)
-            candidate_instruction = best_candidate["instruction"]
-            diagnosis = best_candidate["diagnosis"]
-            pv = best_candidate["pv"]
-            candidate_outcome = best_candidate["outcome"]
-            # Accept on the production gate metric (F1 for lists / accuracy for
-            # categorical) -- the SAME metric the dashboard/supervisor gate on --
-            # computed on the winning candidate's val predictions.
-            cand_gate, cand_gate_n, cand_gate_recall = _gate_score(field_name, candidate_outcome.predictions)
-            # Candidate must beat incumbent on the gate metric AND not regress recall
-            # below the RECALL_FLOOR (list fields only; categorical recall=None).
-            passes_val = (
-                cand_gate > best_gate + improvement_epsilon
-                and (cand_gate_recall is None or cand_gate_recall >= RECALL_FLOOR)
-            )
-            # Cross-model generalization gate: a candidate that beats val must also
-            # not regress the mean gate metric on the untouched holdout set across
-            # the optimized model + a different-family reference. This is what
-            # blocks single-model overfits (e.g. the diacritics flip).
-            cand_holdout_avg: float | None = None
-            cand_holdout_per: dict[str, float] = {}
-            if passes_val and gen_gate:
-                cand_holdout_avg, cand_holdout_per = _holdout_generalization(
-                    field_name, candidate_instruction, holdout, holdout_models, conn=conn,
-                    project_id=project_id, prompt_version_id=pv["id"], batch_id=batch_id,
+            with db.get_conn() as conn:
+                best_holdout_avg, base_per = _holdout_generalization(
+                    field_name, best_instruction, holdout, holdout_models, conn=conn,
+                    project_id=project_id, prompt_version_id=best_pv_id, batch_id=batch_id,
                     max_workers=max_workers,
                 )
-                accepted = cand_holdout_avg >= best_holdout_avg - improvement_epsilon
-            else:
-                accepted = passes_val
-
-            for c in candidates:
-                is_winner_and_accepted = accepted and c is best_candidate
-                db.set_prompt_version_accepted(conn, c["pv"]["id"], is_winner_and_accepted)
-                if not is_winner_and_accepted:
-                    rejected_history.append({"instruction": c["instruction"], "diagnosis": c["diagnosis"]})
-
-            db.add_iteration(
-                conn, project_id=project_id, field_name=field_name, iteration_num=it, prompt_version_id=pv["id"],
-                model_id=model_id, mean_score=cand_gate, n_records=cand_gate_n,
-                feedback=diagnosis, accepted=int(accepted),
+        if verbose:
+            print(
+                f"[iter 0] baseline gate-metric={best_gate:.3f} "
+                f"(n={best_gate_n}, honesty={best_score:.3f})"
             )
-
-            if verbose:
-                tag = "ACCEPTED" if accepted else "rejected"
-                n_tried = len(candidates)
-                suffix = f" (best of {n_tried})" if n_tried > 1 else ""
-                print(
-                    f"[iter {it}] gate-metric={cand_gate:.3f} (best={best_gate:.3f}, "
-                    f"honesty={candidate_outcome.mean_score:.3f}) -> {tag}{suffix}"
-                )
-                if cand_holdout_avg is not None:
-                    per = ", ".join(f"{m.split('/')[-1]}={v:.2f}" for m, v in cand_holdout_per.items())
-                    print(f"           holdout avg={cand_holdout_avg:.3f} (best={best_holdout_avg:.3f}) over [{per}]")
-                elif passes_val and not gen_gate:
-                    print("           (val gate passed; holdout gate disabled)")
-                if diagnosis:
-                    print(f"           diagnosis: {diagnosis}")
-
-            result.iterations.append(IterationLog(
-                iteration_num=it, candidate_instruction=candidate_instruction, diagnosis=diagnosis,
-                val_score=cand_gate, accepted=accepted, prompt_version_id=pv["id"],
-            ))
-
-            if accepted:
-                best_instruction = candidate_instruction
-                best_pv_id = pv["id"]
-                best_score = candidate_outcome.mean_score  # honesty, for ranking the next minibatch
-                best_gate = cand_gate
-                if cand_holdout_avg is not None:
-                    best_holdout_avg = cand_holdout_avg
-                result.best_instruction = candidate_instruction
-                result.best_score = cand_gate
-                no_improve_count = 0
+            if gen_gate:
+                per = ", ".join(f"{m.split('/')[-1]}={v:.2f}" for m, v in base_per.items())
+                print(f"          holdout generalization avg={best_holdout_avg:.3f} over [{per}] (n={len(holdout)})")
             else:
-                no_improve_count += 1
-                if no_improve_count >= no_improve_limit:
+                print(f"          (cross-model holdout gate disabled: only {len(holdout)} holdout records)")
+
+        result = OptimizeResult(field_name=field_name, baseline_score=best_gate, best_instruction=best_instruction, best_score=best_gate)
+        no_improve_count = 0
+        rejected_history: list[dict[str, Any]] = []  # {"instruction", "diagnosis"}, most recent last
+
+        with db.get_conn() as conn:
+            for it in range(1, max_iterations + 1):
+                if job_id is not None:
+                    db.update_job_progress(conn, job_id, it - 1)
+                minibatch = rnd.sample(train, k=min(minibatch_size, len(train)))
+                train_outcome = evaluate_instruction(
+                    field_name, best_instruction, minibatch, model_id, conn=conn, pg_conn=_pg_conn,
+                    project_id=project_id, prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
+                )
+
+                if not train_outcome.failures:
                     if verbose:
-                        print(f"[stop] {no_improve_count} iterations with no improvement (limit={no_improve_limit}).")
+                        print(f"[iter {it}] no failures in minibatch (train_score={train_outcome.mean_score:.3f}); stopping early.")
                     break
 
-    result.best_instruction = best_instruction
-    result.best_score = best_score
-    if _pg_ctx and _pg_conn:
-        _pg_ctx.__exit__(None, None, None)
-    return result
+                avoid = rejected_history[-history_window:] if history_window > 0 else None
+                bold = no_improve_count >= bold_after
+                if bold and verbose:
+                    print(f"[iter {it}] bold mode ON ({no_improve_count} consecutive rejections >= bold_after={bold_after})")
+
+                field_value_type = prompts.FIELDS[field_name].value_type if field_name in prompts.FIELDS else None
+                candidates: list[dict[str, Any]] = []
+                for k in range(candidates_per_iteration):
+                    try:
+                        candidate_instruction, diagnosis = propose_revision(
+                            field_name, best_instruction, train_outcome.failures, reflector_model,
+                            avoid=avoid, bold=bold, successes=train_outcome.successes,
+                            field_value_type=field_value_type,
+                        )
+                    except (ParseError, gateway.GatewayError) as exc:
+                        if verbose:
+                            print(f"[iter {it}] reflector call {k + 1}/{candidates_per_iteration} failed: {exc}")
+                        continue
+
+                    pv = prompt_store.add_version(
+                        conn, project_id, field_name, candidate_instruction, parent_id=best_pv_id,
+                        notes=f"iter {it} (candidate {k + 1}/{candidates_per_iteration}): {diagnosis or ''}"[:500],
+                        model_id=model_id,
+                    )
+                    if pv is None:
+                        raise RuntimeError(f"Failed to persist candidate prompt version for field={field_name}.")
+                    candidate_outcome = evaluate_instruction(
+                        field_name, candidate_instruction, val, model_id, conn=conn, pg_conn=_pg_conn,
+                        project_id=project_id, prompt_version_id=pv["id"], batch_id=batch_id, max_workers=max_workers,
+                    )
+                    candidates.append({
+                        "instruction": candidate_instruction, "diagnosis": diagnosis, "pv": pv, "outcome": candidate_outcome,
+                    })
+
+                if not candidates:
+                    no_improve_count += 1
+                    if no_improve_count >= no_improve_limit:
+                        if verbose:
+                            print(f"[stop] {no_improve_count} iterations with no improvement (limit={no_improve_limit}).")
+                        break
+                    continue
+
+                best_candidate = max(candidates, key=lambda c: c["outcome"].mean_score)
+                candidate_instruction = best_candidate["instruction"]
+                diagnosis = best_candidate["diagnosis"]
+                pv = best_candidate["pv"]
+                candidate_outcome = best_candidate["outcome"]
+                # Accept on the production gate metric (F1 for lists / accuracy for
+                # categorical) -- the SAME metric the dashboard/supervisor gate on --
+                # computed on the winning candidate's val predictions.
+                cand_gate, cand_gate_n, cand_gate_recall = _gate_score(field_name, candidate_outcome.predictions)
+                # Candidate must beat incumbent on the gate metric AND not regress recall
+                # below the RECALL_FLOOR (list fields only; categorical recall=None).
+                passes_val = (
+                    cand_gate > best_gate + improvement_epsilon
+                    and (cand_gate_recall is None or cand_gate_recall >= RECALL_FLOOR)
+                )
+                # Cross-model generalization gate: a candidate that beats val must also
+                # not regress the mean gate metric on the untouched holdout set across
+                # the optimized model + a different-family reference. This is what
+                # blocks single-model overfits (e.g. the diacritics flip).
+                cand_holdout_avg: float | None = None
+                cand_holdout_per: dict[str, float] = {}
+                if passes_val and gen_gate:
+                    cand_holdout_avg, cand_holdout_per = _holdout_generalization(
+                        field_name, candidate_instruction, holdout, holdout_models, conn=conn,
+                        project_id=project_id, prompt_version_id=pv["id"], batch_id=batch_id,
+                        max_workers=max_workers,
+                    )
+                    accepted = cand_holdout_avg >= best_holdout_avg - improvement_epsilon
+                else:
+                    accepted = passes_val
+
+                for c in candidates:
+                    is_winner_and_accepted = accepted and c is best_candidate
+                    db.set_prompt_version_accepted(conn, c["pv"]["id"], is_winner_and_accepted)
+                    if not is_winner_and_accepted:
+                        rejected_history.append({"instruction": c["instruction"], "diagnosis": c["diagnosis"]})
+
+                db.add_iteration(
+                    conn, project_id=project_id, field_name=field_name, iteration_num=it, prompt_version_id=pv["id"],
+                    model_id=model_id, mean_score=cand_gate, n_records=cand_gate_n,
+                    feedback=diagnosis, accepted=int(accepted),
+                )
+
+                if verbose:
+                    tag = "ACCEPTED" if accepted else "rejected"
+                    n_tried = len(candidates)
+                    suffix = f" (best of {n_tried})" if n_tried > 1 else ""
+                    print(
+                        f"[iter {it}] gate-metric={cand_gate:.3f} (best={best_gate:.3f}, "
+                        f"honesty={candidate_outcome.mean_score:.3f}) -> {tag}{suffix}"
+                    )
+                    if cand_holdout_avg is not None:
+                        per = ", ".join(f"{m.split('/')[-1]}={v:.2f}" for m, v in cand_holdout_per.items())
+                        print(f"           holdout avg={cand_holdout_avg:.3f} (best={best_holdout_avg:.3f}) over [{per}]")
+                    elif passes_val and not gen_gate:
+                        print("           (val gate passed; holdout gate disabled)")
+                    if diagnosis:
+                        print(f"           diagnosis: {diagnosis}")
+
+                result.iterations.append(IterationLog(
+                    iteration_num=it, candidate_instruction=candidate_instruction, diagnosis=diagnosis,
+                    val_score=cand_gate, accepted=accepted, prompt_version_id=pv["id"],
+                ))
+
+                if accepted:
+                    best_instruction = candidate_instruction
+                    best_pv_id = pv["id"]
+                    best_score = candidate_outcome.mean_score  # honesty, for ranking the next minibatch
+                    best_gate = cand_gate
+                    if cand_holdout_avg is not None:
+                        best_holdout_avg = cand_holdout_avg
+                    result.best_instruction = candidate_instruction
+                    result.best_score = cand_gate
+                    no_improve_count = 0
+                else:
+                    no_improve_count += 1
+                    if no_improve_count >= no_improve_limit:
+                        if verbose:
+                            print(f"[stop] {no_improve_count} iterations with no improvement (limit={no_improve_limit}).")
+                        break
+
+        result.best_instruction = best_instruction
+        result.best_score = best_score
+        return result
+    finally:
+        if _pg_ctx and _pg_conn:
+            _pg_ctx.__exit__(None, None, None)

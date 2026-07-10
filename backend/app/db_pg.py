@@ -171,6 +171,12 @@ CREATE TABLE IF NOT EXISTS worker_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_pending ON worker_tasks (status, priority DESC, id)
     WHERE status = 'pending';
+-- Enforce dedup at the DB level: at most one active (pending/running) task per
+-- (project, field, model, kind). COALESCE(model_id,'') so NULL model_ids
+-- (judge tasks) still collide instead of being treated as distinct.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_active
+    ON worker_tasks (project_id, field_name, (COALESCE(model_id, '')), kind)
+    WHERE status IN ('pending', 'running');
 """
 
 
@@ -290,23 +296,20 @@ def get_judgments_pg(conn, run_ids: list[int]) -> list[dict]:
 def enqueue_task(conn, project_id: int, field_name: str, model_id: str | None,
                  kind: str, args: dict, priority: int = 0) -> int | None:
     """Add a task to the worker queue. Returns the task id, or None if a
-    matching pending/running task already exists (deduplication)."""
+    matching active (pending/running) task already exists. Dedup is enforced by
+    the uq_tasks_active partial unique index, so concurrent enqueuers can't race
+    in duplicates (ON CONFLICT DO NOTHING makes the loser a no-op)."""
     with conn.cursor() as cur:
-        # Skip if an identical pending or running task exists
-        cur.execute(
-            "SELECT id FROM worker_tasks "
-            "WHERE project_id=%s AND field_name=%s AND model_id IS NOT DISTINCT FROM %s "
-            "  AND kind=%s AND status IN ('pending', 'running') LIMIT 1",
-            (project_id, field_name, model_id, kind),
-        )
-        if cur.fetchone():
-            return None  # duplicate — already queued
         cur.execute(
             "INSERT INTO worker_tasks (project_id, field_name, model_id, kind, args_json, priority) "
-            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (project_id, field_name, (COALESCE(model_id, '')), kind) "
+            "  WHERE status IN ('pending', 'running') DO NOTHING "
+            "RETURNING id",
             (project_id, field_name, model_id, kind, json.dumps(args), priority),
         )
-        return cur.fetchone()["id"]
+        row = cur.fetchone()
+        return row["id"] if row else None  # None == duplicate skipped
 
 
 def claim_task(conn, worker_id: str) -> dict | None:
@@ -343,3 +346,51 @@ def pending_task_count(conn, project_id: int | None = None) -> int:
             cur.execute("SELECT COUNT(*) AS n FROM worker_tasks WHERE status='pending'")
         row = cur.fetchone()
         return row["n"] if row else 0
+
+
+# A running task whose worker hasn't heartbeat within this window is presumed
+# dead and requeued. Must exceed the worker HEARTBEAT_S with generous margin.
+STALE_TASK_TIMEOUT_S = 300
+
+
+def active_task_count(conn, project_id: int | None = None) -> int:
+    """Pending + running tasks. Used by the supervisor drain loop so it waits for
+    genuinely in-flight work (not just pending) before starting the next cycle."""
+    with conn.cursor() as cur:
+        if project_id:
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM worker_tasks "
+                "WHERE status IN ('pending', 'running') AND project_id=%s",
+                (project_id,),
+            )
+        else:
+            cur.execute("SELECT COUNT(*) AS n FROM worker_tasks WHERE status IN ('pending', 'running')")
+        row = cur.fetchone()
+        return row["n"] if row else 0
+
+
+def heartbeat_task(conn, task_id: int) -> None:
+    """Refresh a running task's claimed_at so it isn't reclaimed as stale while a
+    live worker is still executing it."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE worker_tasks SET claimed_at=now() WHERE id=%s AND status='running'",
+            (task_id,),
+        )
+
+
+def requeue_stale_tasks(conn, timeout_s: int = STALE_TASK_TIMEOUT_S,
+                        project_id: int | None = None) -> int:
+    """Return tasks stuck in 'running' past the lease timeout (dead worker) to
+    'pending' so a live worker can pick them up. Returns the number requeued."""
+    with conn.cursor() as cur:
+        params: list = [timeout_s]
+        q = (
+            "UPDATE worker_tasks SET status='pending', worker_id=NULL, claimed_at=NULL "
+            "WHERE status='running' AND claimed_at < now() - (%s * interval '1 second')"
+        )
+        if project_id:
+            q += " AND project_id=%s"
+            params.append(project_id)
+        cur.execute(q, params)
+        return cur.rowcount

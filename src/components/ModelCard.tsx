@@ -161,6 +161,7 @@ export function ModelCard({
     const versionChanged = prevVersion.current !== promptVersion;
     prevVersion.current = promptVersion;
     if (iters !== null && !justFinished && !versionChanged) return;
+    let cancelled = false;
     setIters(null);
     setConfusion(null);
     Promise.all([
@@ -168,13 +169,16 @@ export function ModelCard({
       api.confusion(projectSlug, fieldName, summary.model_id, promptVersion),
     ])
       .then(([it, c]) => {
+        if (cancelled) return;  // don't write a prior field/model's data after a switch
         setIters(it);
         setConfusion(c);
       })
       .catch(() => {
+        if (cancelled) return;
         setIters([]);
         setConfusion(null);
       });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectSlug, fieldName, summary.model_id, runningJobs.length, promptVersion]);
 

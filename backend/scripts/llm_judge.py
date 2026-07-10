@@ -123,28 +123,32 @@ def main() -> None:
             results = gateway.call_model_batch(jobs, max_workers=args.concurrency)
 
             n_ok, n_err = 0, 0
-            _pg_write = db_pg.get_pg_conn().__enter__() if _USE_PG else None
-            for r, resp in zip(runs, results):
-                if isinstance(resp, gateway.GatewayError):
-                    n_err += 1
-                    continue
-                try:
-                    obj = parsing.parse_json_object(resp.content)
-                    verdict = bool(obj["correct"])
-                    reasoning = obj.get("reasoning")
-                except Exception as exc:  # noqa: BLE001
-                    n_err += 1
-                    print(f"  run {r['id']}: could not parse judge response ({exc})")
-                    continue
+            _pg_ctx = db_pg.get_pg_conn() if _USE_PG else None
+            _pg_write = _pg_ctx.__enter__() if _pg_ctx else None
+            try:
+                for r, resp in zip(runs, results):
+                    if isinstance(resp, gateway.GatewayError):
+                        n_err += 1
+                        continue
+                    try:
+                        obj = parsing.parse_json_object(resp.content)
+                        verdict = bool(obj["correct"])
+                        reasoning = obj.get("reasoning")
+                    except Exception as exc:  # noqa: BLE001
+                        n_err += 1
+                        print(f"  run {r['id']}: could not parse judge response ({exc})")
+                        continue
+                    if _USE_PG and _pg_write:
+                        db_pg.add_llm_judgment_pg(_pg_write, r["id"], judge_of[r["id"]], verdict, reasoning)
+                    # Always write to SQLite — it is the coordinator's ground truth for unjudged counts
+                    db.add_llm_judgment(conn, r["id"], judge_of[r["id"]], verdict, reasoning)
+                    n_ok += 1
                 if _USE_PG and _pg_write:
-                    db_pg.add_llm_judgment_pg(_pg_write, r["id"], judge_of[r["id"]], verdict, reasoning)
-                # Always write to SQLite — it is the coordinator's ground truth for unjudged counts
-                db.add_llm_judgment(conn, r["id"], judge_of[r["id"]], verdict, reasoning)
-                n_ok += 1
-            if _USE_PG and _pg_write:
-                _pg_write.commit()
-            print(f"Judged: {n_ok}, failed/unparsable: {n_err}")
-
+                    _pg_write.commit()
+                print(f"Judged: {n_ok}, failed/unparsable: {n_err}")
+            finally:
+                if _pg_ctx:
+                    _pg_ctx.__exit__(None, None, None)
         # -- Report: agreement + threshold sweep over ALL judged runs -------------------
         if args.cross_family:
             judged = conn.execute(

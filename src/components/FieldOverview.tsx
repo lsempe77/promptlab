@@ -50,10 +50,12 @@ export function FieldOverview({
 
   useEffect(() => {
     if (!project || fields.length === 0) return;
+    let cancelled = false;
     // Initialise with nulls, fill as promises resolve
     setRows(fields.map((f) => ({ field: f, status: null })));
     fields.forEach((f, i) => {
       api.stageStatus(project, f.name).then((s) => {
+        if (cancelled) return;  // a slow response from a prior project must not write here
         setRows((prev) => {
           const next = [...prev];
           next[i] = { field: f, status: s };
@@ -61,6 +63,7 @@ export function FieldOverview({
         });
       }).catch(() => {});
     });
+    return () => { cancelled = true; };
   }, [project, fields]);
 
   if (rows.length === 0) return null;

@@ -182,6 +182,11 @@ def call_model_batch(
             return call_model(**job)
         except GatewayError as exc:
             return exc
+        except Exception as exc:  # noqa: BLE001
+            # A malformed-but-200 response (KeyError/JSONDecodeError/etc.) must not
+            # escape the worker thread and abort the whole batch -- surface it as a
+            # per-job error like any other failure so the rest still persist.
+            return GatewayError(f"Unexpected error for model={job.get('model_id')!r}: {exc!r}")
 
     if not jobs:
         return []

@@ -99,16 +99,19 @@ function App() {
 
   useEffect(() => {
     if (!selectedProject) return;
+    let cancelled = false;
     setFields(null);
     setSelected(null);
     api
       .fields(selectedProject)
       .then((f) => {
+        if (cancelled) return;
         setFields(f);
         setApiError(null);
         if (f.length > 0) setSelected(f[0].name);
       })
-      .catch((e) => setApiError(String(e)));
+      .catch((e) => { if (!cancelled) setApiError(String(e)); });
+    return () => { cancelled = true; };
   }, [selectedProject]);
 
   // On project/field change: fetch version-independent data (self-consistency + gate status)
@@ -116,8 +119,13 @@ function App() {
   // Also fetch all production prompt versions in parallel for the progression table.
   useEffect(() => {
     if (!selectedProject || !selected) return;
-    api.selfConsistency(selectedProject, selected).then(setSelfConsistency).catch(() => setSelfConsistency([]));
-    api.stageStatus(selectedProject, selected).then(setStageStatus).catch(() => setStageStatus(null));
+    // Guard every setState: switching field/project fast means a slow response
+    // for the previous selection must not clobber the current one's data.
+    let cancelled = false;
+    api.selfConsistency(selectedProject, selected)
+      .then((d) => { if (!cancelled) setSelfConsistency(d); }).catch(() => { if (!cancelled) setSelfConsistency([]); });
+    api.stageStatus(selectedProject, selected)
+      .then((d) => { if (!cancelled) setStageStatus(d); }).catch(() => { if (!cancelled) setStageStatus(null); });
     // Multi-version progression: fetch run-version list then gate metrics (real F1/accuracy) for each.
     api.runVersions(selectedProject, selected)
       .then((vs: RunVersion[]) => {
@@ -130,22 +138,27 @@ function App() {
           )
         );
       })
-      .then(setVersionData)
-      .catch(() => setVersionData([]));
+      .then((d) => { if (!cancelled) setVersionData(d); })
+      .catch(() => { if (!cancelled) setVersionData([]); });
     setLoadingField(true);
     prevRunningCount.current = 0;
     api
       .modelsSummary(selectedProject, selected)
       .then((s) => {
+        if (cancelled) return;
         setSummaries(s);
         setSelectedModels(new Set(s.map((m) => m.model_id)));
         setApiError(null);
       })
-      .catch((e) => setApiError(String(e)))
-      .finally(() => setLoadingField(false));
-    api.llmJudgeSummary(selectedProject, selected).then(setLlmJudge).catch(() => setLlmJudge([]));
-    api.crossModelAgreement(selectedProject, selected).then(setCrossAgreement).catch(() => setCrossAgreement([]));
-    api.calibration(selectedProject, selected).then(setCalibration).catch(() => setCalibration([]));
+      .catch((e) => { if (!cancelled) setApiError(String(e)); })
+      .finally(() => { if (!cancelled) setLoadingField(false); });
+    api.llmJudgeSummary(selectedProject, selected)
+      .then((d) => { if (!cancelled) setLlmJudge(d); }).catch(() => { if (!cancelled) setLlmJudge([]); });
+    api.crossModelAgreement(selectedProject, selected)
+      .then((d) => { if (!cancelled) setCrossAgreement(d); }).catch(() => { if (!cancelled) setCrossAgreement([]); });
+    api.calibration(selectedProject, selected)
+      .then((d) => { if (!cancelled) setCalibration(d); }).catch(() => { if (!cancelled) setCalibration([]); });
+    return () => { cancelled = true; };
   }, [selectedProject, selected]);
 
   // Poll for running extraction/optimization jobs so the dashboard can show a

@@ -22,3 +22,29 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+
+# Env / secrets (defense in depth; *.local already covers .env.local)
+.env
+.env.*
+!.env.example
+
+# Databases & large local data
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated analysis / inspection artifacts
+analysis.html
+analysis_raw.txt
+analysis_data.txt
+*.png
+wrong_labels_report.txt
+gt_fixes_*.csv
+test_fields.csv

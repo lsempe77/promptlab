@@ -206,7 +206,12 @@ def gate_metrics(field_name: str, rows: list[dict[str, Any]]) -> dict:
             "accuracy": conf["accuracy"],
             "kappa": conf.get("kappa"),
             "precision": None,
-            "recall": conf.get("sensitivity"),
+            # recall is None for categorical: the RECALL_FLOOR is a list-field
+            # guard only. Macro-sensitivity (averaged over rare classes) is
+            # exposed separately so the dashboard can still surface it, but it
+            # must NOT feed the gate/optimizer floor.
+            "recall": None,
+            "sensitivity": conf.get("sensitivity"),
             "f1": None,
             "n": conf["n"],
         }

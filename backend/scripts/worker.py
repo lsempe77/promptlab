@@ -20,6 +20,7 @@ import json
 import socket
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -105,6 +106,21 @@ def run_once(project_id: int | None = None) -> bool:
         task_id = task["id"]
         _log(f"Claimed task {task_id}: {task['kind']} / {task.get('field_name')} / {task.get('model_id','*')}")
 
+    # Heartbeat while the (blocking) task runs so the coordinator's stale-task
+    # sweep doesn't reclaim a slow-but-alive task. If this worker dies, the
+    # heartbeat stops and the task is requeued after STALE_TASK_TIMEOUT_S.
+    stop = threading.Event()
+
+    def _heartbeat() -> None:
+        while not stop.wait(HEARTBEAT_S):
+            try:
+                with db_pg.get_pg_conn() as pg:
+                    db_pg.heartbeat_task(pg, task_id)
+            except Exception as exc:  # noqa: BLE001
+                _log(f"heartbeat failed for task {task_id}: {exc}")
+
+    hb = threading.Thread(target=_heartbeat, daemon=True)
+    hb.start()
     try:
         _execute_task(task)
         with db_pg.get_pg_conn() as pg:
@@ -114,6 +130,9 @@ def run_once(project_id: int | None = None) -> bool:
         _log(f"Task {task_id} FAILED: {exc}")
         with db_pg.get_pg_conn() as pg:
             db_pg.finish_task(pg, task_id, status="failed", error=str(exc)[:500])
+    finally:
+        stop.set()
+        hb.join(timeout=5)
     return True
 
 

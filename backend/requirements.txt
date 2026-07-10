@@ -1,11 +1,14 @@
-pandas
-python-calamine
-httpx
-pyyaml
-rapidfuzz
-fastapi
-uvicorn[standard]
-ecologits
-python-multipart
-pymupdf4llm
-psycopg2-binary
+# Pinned to compatible-release ranges (minor pinned, patch updates allowed) for
+# reproducible deploys. Versions reflect the working dev/prod environment; bump
+# deliberately. Regenerate an exact lockfile with `pip freeze > requirements.lock`.
+pandas~=2.3.3
+python-calamine>=0.2,<1
+httpx~=0.28.1
+pyyaml~=6.0.2
+rapidfuzz~=3.10.1
+fastapi~=0.137.2
+uvicorn[standard]~=0.32.1
+ecologits>=0.5,<1
+python-multipart~=0.0.32
+pymupdf4llm>=0.0.17,<0.1
+psycopg2-binary~=2.9.11

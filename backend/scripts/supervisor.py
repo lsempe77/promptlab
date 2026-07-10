@@ -77,6 +77,16 @@ def _run_parallel(cmds: list[list[str]], max_workers: int) -> list[int]:
     return results
 
 
+def _run_checked(args: list[str]) -> int:
+    """_run + surface a non-zero exit so a failed extraction/optimize/judge
+    subprocess isn't silently treated as success (which would let the supervisor
+    advance a stage or declare convergence on failed state)."""
+    rc = _run(args)
+    if rc != 0:
+        _log(f"[warn] subprocess exited with code {rc}: {' '.join(args)}")
+    return rc
+
+
 def _target_models(tiers: list[str] | None) -> list[str]:
     roster = config.load_models()
     if tiers:
@@ -275,10 +285,13 @@ def main() -> None:
                              "--field", field, "--n", str(arg), "--models", m, "--logprobs"]
                             for m in models
                         ]
-                        _run_parallel(cmds, max_workers=args.parallelism)
+                        codes = _run_parallel(cmds, max_workers=args.parallelism)
+                        n_failed = sum(1 for c in codes if c != 0)
+                        if n_failed:
+                            _log(f"[{field}] [warn] {n_failed}/{len(codes)} extraction subprocess(es) failed.")
                     else:
-                        _run(["backend.scripts.run_extraction", "--project", args.project, "--field", field,
-                              "--n", str(arg), "--tiers", args.tiers, "--logprobs"])
+                        _run_checked(["backend.scripts.run_extraction", "--project", args.project, "--field", field,
+                                      "--n", str(arg), "--tiers", args.tiers, "--logprobs"])
                 elif action == "judge":
                     if _USE_PG:
                         with db_pg.get_pg_conn() as pg:
@@ -289,8 +302,8 @@ def main() -> None:
                             }, priority=3)
                         _log(f"[{field}] {'Enqueued judge task.' if result else 'Judge task already queued.'}")
                     else:
-                        _run(["backend.scripts.llm_judge", "--project", args.project, "--field", field,
-                              "--n", "100000", "--cross-family"])
+                        _run_checked(["backend.scripts.llm_judge", "--project", args.project, "--field", field,
+                                      "--n", "100000", "--cross-family"])
                 elif action == "optimize":
                     eps = FIELD_IMPROVEMENT_EPSILON.get(field, DEFAULT_IMPROVEMENT_EPSILON)
                     if _USE_PG:
@@ -310,9 +323,9 @@ def main() -> None:
                     else:
                         # Phase 1 fallback: sequential shell-out
                         for m in opt_models:
-                            _run(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
-                                  "--model", m, "--reflector-model", args.reflector_model,
-                                  "--improvement-epsilon", str(eps)])
+                            _run_checked(["backend.scripts.optimize_prompt", "--project", args.project, "--field", field,
+                                          "--model", m, "--reflector-model", args.reflector_model,
+                                          "--improvement-epsilon", str(eps)])
 
             if not any_action:
                 _log("Converged: no field has an actionable step this run.")
@@ -331,14 +344,23 @@ def main() -> None:
         if _USE_PG:
             with db.get_conn() as conn:
                 project_id = db.get_project_id(conn, args.project)
-            with db_pg.get_pg_conn() as pg:
-                n_pending = db_pg.pending_task_count(pg, project_id)
-            if n_pending > 0:
-                _log(f"Waiting for {n_pending} worker task(s) to complete before next run...")
-                while n_pending > 0:
+
+            def _active_after_requeue() -> int:
+                # Reclaim tasks abandoned by a dead worker so the drain can't hang
+                # forever on a stuck 'running' row, then count pending + running so
+                # we genuinely wait for in-flight work.
+                with db_pg.get_pg_conn() as pg:
+                    requeued = db_pg.requeue_stale_tasks(pg, project_id=project_id)
+                    if requeued:
+                        _log(f"Requeued {requeued} stale task(s) from dead worker(s).")
+                    return db_pg.active_task_count(pg, project_id)
+
+            n_active = _active_after_requeue()
+            if n_active > 0:
+                _log(f"Waiting for {n_active} worker task(s) to complete before next run...")
+                while n_active > 0:
                     time.sleep(30)
-                    with db_pg.get_pg_conn() as pg:
-                        n_pending = db_pg.pending_task_count(pg, project_id)
+                    n_active = _active_after_requeue()
                 _log("Queue drained — starting next run.")
 
         _log(f"Sleeping {args.interval}s before next run...")

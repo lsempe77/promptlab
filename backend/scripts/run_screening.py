@@ -213,7 +213,7 @@ def run_screening(
     # Process each model
     for model_id in model_ids:
         print(f"\n── Model: {model_id} ──")
-        n_correct = n_total = n_errors = n_skipped = 0
+        n_correct = n_total = n_errors = n_skipped = n_gt = 0
 
         with db.get_conn() as conn:
             for rec in all_records:
@@ -276,6 +276,8 @@ def run_screening(
                 is_correct = int(score == 1.0)
                 n_correct += is_correct
                 n_total += 1
+                if gt_val:
+                    n_gt += 1  # accuracy denominator: records that have ground truth
 
                 excerpt_verified = (1 if excerpt and excerpt in text else 0) if excerpt else None
 
@@ -297,10 +299,12 @@ def run_screening(
                 label = "✓" if is_correct else ("?" if score == 0.5 else "✗")
                 print(f"  {label} rec={record_id} → {decision} [{tag or '-'}]  ({resp.latency_ms}ms)")
 
-        with_gt = n_total - sum(1 for r in all_records if gt_map.get(r["id"]) is None)
-        print(f"\n  Results: {n_correct}/{n_total} correct "
-              f"({'%.1f' % (100 * n_correct / n_total if n_total else 0)}%) | "
-              f"errors={n_errors} | skipped={n_skipped}")
+        # Accuracy is over records WITH ground truth only; no-GT records (scored
+        # 0.5) are screened but must not dilute the denominator.
+        print(f"\n  Results: {n_correct}/{n_gt} correct "
+              f"({'%.1f' % (100 * n_correct / n_gt if n_gt else 0)}%) "
+              f"| screened={n_total} (no-GT={n_total - n_gt}) "
+              f"| errors={n_errors} | skipped={n_skipped}")
 
 
 def main() -> None:

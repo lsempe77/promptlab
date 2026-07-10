@@ -1,9 +1,8 @@
-"""Read-only FastAPI layer over promptlab.db, for the observability frontend.
+"""FastAPI layer over promptlab.db, for the observability frontend.
 
-Runs locally (this is a single-user local tool, same as the rest of the
-backend — no auth, no task queue). CORS is opened up for the Vite dev server
-and the deployed GitHub Pages frontend so the dashboard can hit this API
-while it's running on the developer's own machine.
+Read endpoints (GET) are public so the deployed dashboard works for anonymous
+visitors; write endpoints require a Bearer JWT (see the auth section below).
+CORS is restricted to the dev server + deployed frontend origins.
 
 Run with:
     uvicorn backend.app.api:app --reload --port 8000
@@ -12,9 +11,12 @@ or:
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 import secrets
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +27,8 @@ from pydantic import BaseModel
 
 from . import analytics, config, db, db_pg, gateway, scoring
 from .projects import PROJECTS
+
+logger = logging.getLogger("promptlab.api")
 
 app = FastAPI(title="Agentic 3ie Prompt Lab API")
 
@@ -62,11 +66,17 @@ _JWT_TTL_HOURS = 72  # token valid for 3 days
 
 
 def _jwt_secret() -> bytes:
-    s = os.environ.get("JWT_SECRET", "")
+    # Prefer a dedicated JWT_SECRET; fall back to the password itself so the
+    # system still works if JWT_SECRET hasn't been set yet (tokens won't survive
+    # password changes). NEVER fall back to a hardcoded constant -- a value that
+    # lives in the public repo would let anyone forge a valid token. Fail closed
+    # if neither is configured.
+    s = os.environ.get("JWT_SECRET") or os.environ.get("PROMPTLAB_PASSWORD")
     if not s:
-        # Fall back to the password itself so the system still works if
-        # JWT_SECRET hasn't been set yet (tokens won't survive password changes).
-        s = os.environ.get("PROMPTLAB_PASSWORD", "insecure-dev-secret")
+        raise HTTPException(
+            status_code=503,
+            detail="Server authentication is not configured (JWT_SECRET / PROMPTLAB_PASSWORD unset).",
+        )
     return s.encode()
 
 
@@ -111,17 +121,83 @@ class AuthRequest(BaseModel):
     password: str
 
 
+# ── Login throttle (in-memory; single Fly machine) ──────────────────────────
+# Brute-forcing the one shared password would yield org-wide write access, so
+# cap failed attempts per client IP within a rolling window.
+_LOGIN_MAX_FAILURES = 10
+_LOGIN_WINDOW_S = 300
+_login_failures: dict[str, list[float]] = defaultdict(list)
+
+
+_MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB per file
+
+
+async def _read_upload_capped(upload: UploadFile, max_bytes: int = _MAX_UPLOAD_BYTES) -> bytes:
+    """Read an upload in bounded chunks and reject anything over the cap, so a
+    single huge upload can't exhaust server memory."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail=f"File too large (max {max_bytes // (1024 * 1024)} MB).")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _client_ip(request: Request) -> str:
+    fwd = request.headers.get("fly-client-ip") or request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _hash_password(password: str) -> str:
+    """Salted PBKDF2-SHA256 (stdlib, no deps) for the optional project write
+    password. Format: pbkdf2_sha256$iterations$salt_hex$hash_hex."""
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000)
+    return f"pbkdf2_sha256$200000${salt.hex()}${dk.hex()}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        algo, iters, salt_hex, hash_hex = stored.split("$")
+        if algo != "pbkdf2_sha256":
+            return False
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt_hex), int(iters))
+        return secrets.compare_digest(dk.hex(), hash_hex)
+    except Exception:
+        return False
+
+
+def _check_login_rate(ip: str) -> None:
+    now = time.time()
+    recent = [t for t in _login_failures[ip] if now - t < _LOGIN_WINDOW_S]
+    _login_failures[ip] = recent
+    if len(recent) >= _LOGIN_MAX_FAILURES:
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again in a few minutes.")
+
+
 @app.post("/api/auth/token")
-def auth_token(body: AuthRequest):
+def auth_token(request: Request, body: AuthRequest):
     """Issue a signed JWT for a verified @3ieimpact.org email + shared password.
     Token is valid for 72 hours and survives server restarts."""
+    ip = _client_ip(request)
+    _check_login_rate(ip)
     if not body.email.lower().endswith(_ALLOWED_DOMAIN):
+        _login_failures[ip].append(time.time())
         raise HTTPException(status_code=401, detail="Email must be a @3ieimpact.org address.")
     env_password = os.environ.get("PROMPTLAB_PASSWORD", "")
     if not env_password:
         raise HTTPException(status_code=503, detail="PROMPTLAB_PASSWORD env var not set on this server.")
     if not secrets.compare_digest(body.password, env_password):
+        _login_failures[ip].append(time.time())
         raise HTTPException(status_code=401, detail="Incorrect password.")
+    _login_failures.pop(ip, None)  # reset on success
     return {"token": _make_jwt(body.email)}
 
 
@@ -131,6 +207,19 @@ def _require_auth(request_headers) -> None:
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Authentication required.")
     _verify_jwt(auth.removeprefix("Bearer ").strip())
+
+
+def _is_authed(request_headers) -> bool:
+    """Non-raising auth check for read endpoints that expose more detail to
+    signed-in users (e.g. server log tails) while staying public otherwise."""
+    auth = request_headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        return False
+    try:
+        _verify_jwt(auth.removeprefix("Bearer ").strip())
+        return True
+    except HTTPException:
+        return False
 
 
 def _field_or_404(project_slug: str, field_name: str) -> None:
@@ -182,9 +271,12 @@ def health() -> dict:
 
 
 @app.get("/api/activity")
-def activity(log_lines: int = 30) -> dict:
+def activity(request: Request, log_lines: int = 30) -> dict:
     """Live activity feed: worker task queue state + recent supervisor log lines.
-    Designed for polling every 5s from the dashboard's Live panel."""
+    Designed for polling every 5s from the dashboard's Live panel. The raw
+    supervisor log tail can leak internal paths/exception detail, so it is only
+    returned to authenticated callers; the queue state stays public."""
+    log_lines = max(1, min(log_lines, 200))  # bound the file tail read
     tasks: list[dict] = []
     queue_summary: dict = {"pending": 0, "running": 0, "total_active": 0}
 
@@ -212,20 +304,23 @@ def activity(log_lines: int = 30) -> dict:
         except Exception as exc:
             tasks = []
             recent_done = []
-            queue_summary["error"] = str(exc)
+            logger.warning("activity: worker-task query failed: %s", exc)
+            queue_summary["error"] = "queue unavailable"
     else:
         recent_done = []
 
-    # Supervisor log tail
+    # Supervisor log tail — only for authenticated callers (raw log content can
+    # contain internal paths / exception detail we don't expose anonymously).
     log_tail: list[str] = []
-    log_path = os.environ.get("SUPERVISOR_LOG", "/data/supervisor.log")
-    try:
-        if os.path.exists(log_path):
-            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-                all_lines = f.readlines()
-            log_tail = [l.rstrip() for l in all_lines[-log_lines:] if l.strip()]
-    except Exception:
-        pass
+    if _is_authed(request.headers):
+        log_path = os.environ.get("SUPERVISOR_LOG", "/data/supervisor.log")
+        try:
+            if os.path.exists(log_path):
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    all_lines = f.readlines()
+                log_tail = [l.rstrip() for l in all_lines[-log_lines:] if l.strip()]
+        except Exception:
+            pass
 
     return {
         "queue": queue_summary,
@@ -633,6 +728,7 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
                 "gate_metric": gm["metric"],
                 "precision": gm["precision"],
                 "recall": gm["recall"],
+                "sensitivity": gm.get("sensitivity"),  # categorical macro-sensitivity (not a gate input)
                 "f1": gm["f1"],
                 "accuracy": gm["accuracy"],
                 "kappa": gm["kappa"],
@@ -694,6 +790,7 @@ def iterations(project_slug: str, field_name: str, model_id: str | None = None) 
 @app.get("/api/projects/{project_slug}/fields/{field_name}/runs")
 def runs(project_slug: str, field_name: str, model_id: str | None = None, limit: int = 200) -> list[dict]:
     _field_or_404(project_slug, field_name)
+    limit = max(1, min(limit, 2000))  # cap: this is a public, unauthenticated read
     q = "SELECT * FROM runs WHERE project_id = ? AND field_name = ?"
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, project_slug)
@@ -851,11 +948,10 @@ async def create_project(request: Request, body: CreateProjectBody):
     if not re.match(r'^[a-z0-9][a-z0-9\-]{1,60}$', body.slug):
         raise HTTPException(400, "Slug must be lowercase alphanumeric + hyphens, 2-61 chars.")
 
-    # Optional password hash
+    # Optional password hash (salted PBKDF2, not bare SHA-256)
     pw_hash: str | None = None
     if body.password:
-        import hashlib
-        pw_hash = hashlib.sha256(body.password.encode()).hexdigest()
+        pw_hash = _hash_password(body.password)
 
     with db.get_conn() as conn:
         existing = conn.execute("SELECT id FROM projects WHERE slug = ?", (body.slug,)).fetchone()
@@ -927,7 +1023,7 @@ async def upload_corpus(request: Request, project_slug: str, files: list[UploadF
 
     for upload in files:
         stem = Path(upload.filename or "unnamed").stem
-        raw = await upload.read()
+        raw = await _read_upload_capped(upload)
 
         if (upload.filename or "").lower().endswith(".pdf"):
             try:
@@ -966,7 +1062,7 @@ async def upload_ground_truth(request: Request, project_slug: str, file: UploadF
     _project_or_404(project_slug)
 
     import csv, io
-    text = (await file.read()).decode("utf-8", errors="replace")
+    text = (await _read_upload_capped(file)).decode("utf-8", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
     headers = reader.fieldnames or []
 
@@ -1071,11 +1167,11 @@ async def suggest_screening_question(request: Request):
 async def parse_eppi(request: Request, file: UploadFile):
     """Parse an EPPI-Reviewer Excel export."""
     _require_auth(dict(request.headers))
-    import tempfile, traceback as _tb, re
+    import tempfile, re
     import pandas as pd
 
     try:
-        raw = await file.read()
+        raw = await _read_upload_capped(file)
         suffix = ".xlsx" if (file.filename or "").lower().endswith((".xlsx", ".xls")) else ".csv"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(raw)
@@ -1155,7 +1251,8 @@ async def parse_eppi(request: Request, file: UploadFile):
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(500, f"parse-eppi error: {_tb.format_exc()}")
+        logger.exception("parse-eppi failed")
+        raise HTTPException(500, "Failed to parse the EPPI export.")
 
 
 @app.post("/api/projects/{project_slug}/process-eppi")
@@ -1169,7 +1266,7 @@ async def process_eppi(request: Request, project_slug: str, file: UploadFile):
     import tempfile, re
     import pandas as pd
 
-    raw = await file.read()
+    raw = await _read_upload_capped(file)
     suffix = ".xlsx" if (file.filename or "").lower().endswith((".xlsx", ".xls")) else ".csv"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(raw)

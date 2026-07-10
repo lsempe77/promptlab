@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS iterations (
     field_name TEXT NOT NULL,
     iteration_num INTEGER NOT NULL,
     prompt_version_id INTEGER NOT NULL REFERENCES prompt_versions(id),
-    model_id TEXT NOT NULL,
+    model_id TEXT,  -- nullable to match the Postgres schema (shared/field-level rows have no owner model)
     mean_score REAL,
     n_records INTEGER,
     feedback TEXT,
@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL REFERENCES projects(id),
     field_name TEXT NOT NULL,
-    model_id TEXT NOT NULL,
+    model_id TEXT,  -- nullable to match Postgres (judge jobs have no single model)
     kind TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'running',
     total INTEGER,

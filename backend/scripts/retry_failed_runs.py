@@ -54,37 +54,49 @@ def main() -> None:
 
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, args.project)
-        pv = get_or_create_baseline(conn, project_id, args.field)
         pairs = find_failed_pairs(conn, project_id, args.field, models_filter)
         if not pairs:
             print(f"No fully-failed (record, model) pairs found for field={args.field}.")
             return
+
+        # Resolve each model's OWN prompt version. Per-model prompts diverge from
+        # the shared baseline once a model's optimizer accepts a rewrite, and
+        # run_extraction runs each model on its per-model version. Retries must use
+        # the same version, else the retried rows land under a different
+        # prompt_version_id and stay invisible to per-model accounting (and get
+        # re-run forever).
+        models_in_pairs = {mid for _, mid in pairs}
+        model_pv = {m: get_or_create_baseline(conn, project_id, args.field, m) for m in models_in_pairs}
 
         record_ids = {rid for rid, _ in pairs}
         records_by_id = {
             rec["id"]: rec for rec in db.get_records_with_field(conn, project_id, args.field) if rec["id"] in record_ids
         }
 
-    print(f"Retrying {len(pairs)} failed (record, model) pairs for field={args.field} | prompt v{pv['version']}")
+    print(f"Retrying {len(pairs)} failed (record, model) pairs for field={args.field}")
     print(f"Batch id: {batch_id}\n")
 
     jobs: list[dict] = []
     job_meta: list[tuple[dict, str]] = []
-    prompt_cache: dict[int, tuple[str, str]] = {}
+    # Keyed by (record_id, prompt_version_id): different models may resolve to
+    # different templates, so the cache must not collapse them by record alone.
+    prompt_cache: dict[tuple[int, int], tuple[str, str]] = {}
     skipped = 0
     for rec_id, model_id in sorted(pairs):
         rec = records_by_id.get(rec_id)
         if rec is None:
             continue
-        if rec_id not in prompt_cache:
+        pv = model_pv[model_id]
+        cache_key = (rec_id, pv["id"])
+        if cache_key not in prompt_cache:
             try:
                 md_text = read_md(rec["md_path"])
             except OSError as exc:
                 print(f"  [skip] record {rec_id}: cannot read md ({exc})")
                 skipped += 1
                 continue
-            prompt_cache[rec_id] = prompts.build_prompt(args.field, rec["title"] or "", md_text, instruction=pv["template"])
-        system_prompt, user_prompt = prompt_cache[rec_id]
+            prompt_cache[cache_key] = prompts.build_prompt(args.field, rec["title"] or "", md_text, instruction=pv["template"])
+        system_prompt, user_prompt = prompt_cache[cache_key]
         jobs.append({"model_id": model_id, "system_prompt": system_prompt, "user_prompt": user_prompt})
         job_meta.append((rec, model_id))
 
@@ -102,7 +114,7 @@ def main() -> None:
                 rec, model_id = job_meta[i]
                 run_kwargs = dict(
                     project_id=project_id,
-                    prompt_version_id=pv["id"],
+                    prompt_version_id=model_pv[model_id]["id"],
                     model_id=model_id,
                     record_id=rec["id"],
                     field_name=args.field,

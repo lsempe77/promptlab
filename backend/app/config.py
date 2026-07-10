@@ -9,22 +9,6 @@ import yaml
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 DEP_ROOT = BACKEND_DIR.parent
 
-# Corpus of markdown full texts, filtered to only the verified-OK matches from
-# the earlier QA pass (see ../../README.md). Overridable via DEP_MD_DIR (e.g. a
-# mounted volume path in a cloud deploy) so the same code works locally and
-# remotely without a fork.
-MD_DIR = Path(
-    os.environ.get(
-        "DEP_MD_DIR",
-        r"C:\Users\LucasSempe\OneDrive - International Initiative for Impact Evaluation"
-        r"\Desktop\International Initiative for Impact Evaluation"
-        r"\DEP Chatbot - full_text_md_apache_ok_only_final",
-    )
-)
-
-IER_RECORDS_XLSX = DEP_ROOT / "1770900869-ier-records.xlsx"
-MODELS_YAML = BACKEND_DIR / "models.yaml"
-
 
 def _load_dotenv(path: Path) -> None:
     if not path.exists():
@@ -37,7 +21,18 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+# Load .env BEFORE reading any env-derived value below (otherwise DEP_MD_DIR /
+# OPENROUTER_* set in backend/.env would be ignored).
 _load_dotenv(BACKEND_DIR / ".env")
+
+# Corpus of markdown full texts, filtered to only the verified-OK matches from
+# the earlier QA pass (see ../../README.md). Set DEP_MD_DIR (in backend/.env
+# locally, or a mounted volume path in a cloud deploy) to point at the corpus;
+# the default is a repo-relative folder so no personal path is baked into source.
+MD_DIR = Path(os.environ.get("DEP_MD_DIR", str(DEP_ROOT / "corpus_md")))
+
+IER_RECORDS_XLSX = DEP_ROOT / "1770900869-ier-records.xlsx"
+MODELS_YAML = BACKEND_DIR / "models.yaml"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")

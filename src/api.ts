@@ -218,8 +218,14 @@ export interface Job {
   stale: boolean;
 }
 
-async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`);
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  // Reads are public, but attach the token when signed in so endpoints that
+  // reveal more to authenticated callers (e.g. /api/activity log tail) work.
+  const token = sessionStorage.getItem("promptlab_token");
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    signal,
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
   if (!res.ok) {
     throw new Error(`API error ${res.status} for ${path}`);
   }

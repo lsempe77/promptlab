@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { StageStatus, Job } from "../api";
+import type { StageStatus, Job, FieldInfo } from "../api";
 
 interface FieldState {
   status: StageStatus | null;
@@ -8,16 +8,7 @@ interface FieldState {
   error: boolean;
 }
 
-const FIELDS = ["authors", "author_country", "author_affiliation", "sector_name", "sub_sector"] as const;
-const FIELD_LABELS: Record<string, string> = {
-  authors: "Authors",
-  author_country: "Country",
-  author_affiliation: "Affiliation",
-  sector_name: "Sector",
-  sub_sector: "Sub-sector",
-};
 const POLL_MS = 15_000;
-const TOTAL_MODELS = 12;
 
 function fieldActionLabel(jobs: Job[]): { label: string; kind: "extraction" | "optimization" | "judge" | null } {
   const running = jobs.find((j) => j.status === "running" && !j.stale);
@@ -38,41 +29,67 @@ function MiniBar({ passing, total }: { passing: number; total: number }) {
 }
 
 export default function SupervisorStatusBar({ project }: { project: string }) {
-  const [fields, setFields] = useState<Record<string, FieldState>>(() =>
-    Object.fromEntries(FIELDS.map((f) => [f, { status: null, jobs: [], error: false }]))
-  );
+  // Fields and the per-field model count are derived from the project itself, not
+  // hardcoded — so this bar is correct for any project (extraction, screening, …),
+  // not just the default extraction one.
+  const [fieldList, setFieldList] = useState<FieldInfo[]>([]);
+  const [states, setStates] = useState<Record<string, FieldState>>({});
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  const fetchAll = async () => {
-    const results = await Promise.all(
-      FIELDS.map(async (f) => {
-        try {
-          const [status, jobs] = await Promise.all([
-            api.stageStatus(project, f),
-            api.jobs(project, f),
-          ]);
-          return [f, { status, jobs, error: false }] as const;
-        } catch {
-          return [f, { status: null, jobs: [], error: true }] as const;
-        }
-      })
-    );
-    setFields(Object.fromEntries(results));
-    setLastUpdated(new Date());
-  };
-
   useEffect(() => {
-    fetchAll();
-    const id = window.setInterval(fetchAll, POLL_MS);
-    return () => window.clearInterval(id);
+    let cancelled = false;
+    let pollId: number | undefined;
+
+    const fetchAll = async (fields: FieldInfo[]) => {
+      const results = await Promise.all(
+        fields.map(async (f) => {
+          try {
+            const [status, jobs] = await Promise.all([
+              api.stageStatus(project, f.name),
+              api.jobs(project, f.name),
+            ]);
+            return [f.name, { status, jobs, error: false }] as const;
+          } catch {
+            return [f.name, { status: null, jobs: [], error: true }] as const;
+          }
+        })
+      );
+      if (cancelled) return;
+      setStates(Object.fromEntries(results));
+      setLastUpdated(new Date());
+    };
+
+    (async () => {
+      let fields: FieldInfo[];
+      try {
+        fields = await api.fields(project);
+      } catch {
+        if (!cancelled) { setFieldList([]); setStates({}); }
+        return;
+      }
+      if (cancelled) return;
+      setFieldList(fields);
+      await fetchAll(fields);
+      pollId = window.setInterval(() => fetchAll(fields), POLL_MS);
+    })();
+
+    return () => {
+      cancelled = true;
+      if (pollId) window.clearInterval(pollId);
+    };
   }, [project]);
 
-  const totalPassing = FIELDS.reduce((sum, f) => sum + (fields[f].status?.n_models_passing ?? 0), 0);
-  const totalPairs = FIELDS.length * TOTAL_MODELS;
-  const overallPct = Math.round((totalPassing / totalPairs) * 100);
-  const anyRunning = FIELDS.some((f) => fields[f].jobs.some((j) => j.status === "running" && !j.stale));
+  const totalPassing = fieldList.reduce((sum, f) => sum + (states[f.name]?.status?.n_models_passing ?? 0), 0);
+  // Denominator = models actually evaluated per field, summed. No fixed roster size.
+  const totalPairs = fieldList.reduce((sum, f) => sum + (states[f.name]?.status?.n_models_evaluated ?? 0), 0);
+  const overallPct = totalPairs > 0 ? Math.round((totalPassing / totalPairs) * 100) : 0;
+  const anyRunning = fieldList.some((f) =>
+    (states[f.name]?.jobs ?? []).some((j) => j.status === "running" && !j.stale)
+  );
 
   const secAgo = lastUpdated ? Math.round((Date.now() - lastUpdated.getTime()) / 1000) : null;
+
+  if (fieldList.length === 0) return null;
 
   return (
     <div className="sbar-card">
@@ -91,20 +108,20 @@ export default function SupervisorStatusBar({ project }: { project: string }) {
       </div>
 
       <div className="sbar-fields">
-        {FIELDS.map((f) => {
-          const { status, jobs } = fields[f];
+        {fieldList.map((f) => {
+          const { status, jobs } = states[f.name] ?? { status: null, jobs: [], error: false };
           const passing = status?.n_models_passing ?? 0;
           const evaluated = status?.n_models_evaluated ?? 0;
           const refs = status?.references ?? 0;
           const { label: actionLabel, kind: actionKind } = fieldActionLabel(jobs);
-          const done = passing === TOTAL_MODELS;
+          const done = evaluated > 0 && passing === evaluated;
 
           return (
-            <div key={f} className={`sbar-field ${done ? "sbar-done" : ""}`}>
-              <span className="sbar-fname">{FIELD_LABELS[f]}</span>
-              <MiniBar passing={passing} total={TOTAL_MODELS} />
+            <div key={f.name} className={`sbar-field ${done ? "sbar-done" : ""}`}>
+              <span className="sbar-fname">{f.label || f.name}</span>
+              <MiniBar passing={passing} total={evaluated} />
               <span className="sbar-counts">
-                {passing}/{TOTAL_MODELS}
+                {passing}/{evaluated}
                 {refs > 0 && <span className="sbar-refs"> · {refs} refs</span>}
               </span>
               {actionLabel ? (

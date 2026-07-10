@@ -110,7 +110,7 @@ def main() -> None:
             for m in models:
                 for r in conn.execute(
                     "SELECT DISTINCT record_id FROM runs WHERE project_id = ? AND field_name = ? "
-                    "AND model_id = ? AND prompt_version_id = ?",
+                    "AND model_id = ? AND prompt_version_id = ? AND error IS NULL",
                     (project_id, args.field, m, model_pv[m]["id"]),
                 ).fetchall():
                     done_pairs.add((r["record_id"], m))
@@ -273,8 +273,12 @@ def main() -> None:
                         n_done = len(results[model_id]) + errors[model_id]
                         _w_update_job(conn, job_id, n_done)
 
-                    if not _pg_conn:
-                        conn.commit()  # SQLite: commit per result; PG: auto-committed per statement
+                    # Commit per result so a crash/kill only loses in-flight calls.
+                    # SQLite is the coordinator's ground truth and is always written;
+                    # the PG mirror (psycopg2 is NOT autocommit) must be committed too.
+                    conn.commit()
+                    if _pg_conn:
+                        _pg_conn.commit()
 
                 gateway.call_model_batch(jobs, max_workers=args.concurrency, on_complete=_on_complete)
 
