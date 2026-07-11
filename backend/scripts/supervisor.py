@@ -39,7 +39,7 @@ try:  # pragma: no cover - Windows console cp1252 guard
 except Exception:
     pass
 
-from backend.app import analytics, config, db, prompt_store, scoring  # noqa: E402
+from backend.app import analytics, config, db, optimization_policy, prompt_store, scoring  # noqa: E402
 from backend.app.optimizer import FIELD_IMPROVEMENT_EPSILON, DEFAULT_IMPROVEMENT_EPSILON  # noqa: E402
 from backend.app.scoring import RECALL_FLOOR  # noqa: E402
 from backend.app import db_pg  # noqa: E402 -- Phase 2: task-queue mode
@@ -104,6 +104,7 @@ def _field_state(conn, project_id: int, field: str, models: list[str]) -> dict:
     judged: dict[str, tuple[float, int]] = {}
     gate: dict[str, tuple[float, int]] = {}  # runs-based gate metric (F1 for lists / accuracy for categorical)
     exhausted: dict[str, bool] = {}
+    opt_stats: dict[str, tuple[int, int]] = {}  # model -> (n_iters, iters_since_last_accept)
     for m in models:
         pvid = pv_of[m]["id"]
         per_model_refs[m] = conn.execute(
@@ -150,9 +151,30 @@ def _field_state(conn, project_id: int, field: str, models: list[str]) -> dict:
             "AND pv.parent_id = ? LIMIT 1",
             (project_id, field, m, pvid),
         ).fetchone() is not None
+        # Lifetime optimizer stats for the cost-benefit stop rule: total candidates
+        # tried and how many have been tried since the last accepted gain.
+        n_iters = conn.execute(
+            "SELECT COUNT(*) AS c FROM iterations WHERE project_id=? AND field_name=? AND model_id=?",
+            (project_id, field, m),
+        ).fetchone()["c"]
+        last_acc = conn.execute(
+            "SELECT MAX(created_at) AS t FROM iterations "
+            "WHERE project_id=? AND field_name=? AND model_id=? AND accepted=1",
+            (project_id, field, m),
+        ).fetchone()["t"]
+        if last_acc is None:
+            since_accept = n_iters
+        else:
+            since_accept = conn.execute(
+                "SELECT COUNT(*) AS c FROM iterations "
+                "WHERE project_id=? AND field_name=? AND model_id=? AND created_at > ?",
+                (project_id, field, m, last_acc),
+            ).fetchone()["c"]
+        opt_stats[m] = (n_iters, since_accept)
     refs = min((per_model_refs.get(m, 0) for m in models), default=0) if models else 0
     return {"pv_of": pv_of, "refs": refs, "per_model_refs": per_model_refs,
-            "unjudged": unjudged, "judged": judged, "gate": gate, "exhausted": exhausted}
+            "unjudged": unjudged, "judged": judged, "gate": gate, "exhausted": exhausted,
+            "opt_stats": opt_stats}
 
 
 def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str], str]:
@@ -183,7 +205,25 @@ def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str],
     # Gate on the runs-based quality metric (F1 for list fields, accuracy for
     # categorical) -- same metric the dashboard shows -- not judged accuracy.
     below = [m for m in evaluated if not _passes_gate(m)]
-    optimizable = [m for m in below if not state["exhausted"].get(m)]
+
+    # Cost-benefit stop rule: a below-gate model is optimized this cycle only if
+    # (a) it hasn't already produced a rejected candidate off its current prompt
+    # (short-term exhaustion) AND (b) the plateau/budget policy still says it's
+    # worth trying. Pairs the policy stops are flagged for human review instead
+    # of being re-optimized every cycle forever.
+    opt_stats = state.get("opt_stats", {})
+    optimizable: list[str] = []
+    flagged: list[tuple[str, str, str]] = []  # (model, status, reason)
+    for m in below:
+        n_iters, since_accept = opt_stats.get(m, (0, 0))
+        ok, status, reason = optimization_policy.decide(
+            n_iters, since_accept, gate[m][0], scoring.GATE_THRESHOLD
+        )
+        if not ok:
+            flagged.append((m, status, reason))
+        elif not state["exhausted"].get(m):
+            optimizable.append(m)
+        # else: exhausted this round but policy still allows -> retry after its prompt changes
     if optimizable:
         return "optimize", None, optimizable, (
             f"{len(optimizable)} model(s) below gate {scoring.GATE_THRESHOLD:.0%} -> optimize each on its own prompt"
@@ -201,11 +241,27 @@ def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str],
             )
         return "done", None, [], f"at final stage ({stages[-1]}) and best model passes gate -> production-ready"
 
+    # Every below-gate model has been stopped by the cost-benefit policy: don't
+    # keep spending on them — surface for human review (Loop B: ground truth /
+    # taxonomy / few-shot examples the reflector cannot add itself).
+    if flagged:
+        by_status: dict[str, int] = {}
+        for _m, status, _r in flagged:
+            by_status[status] = by_status.get(status, 0) + 1
+        summary = ", ".join(f"{n} {s}" for s, n in by_status.items())
+        return "review", None, [], (
+            f"{len(flagged)} model(s) stopped by cost-benefit policy ({summary}) -> human review, "
+            "not worth more auto-optimization"
+        )
+
     if below:
         return "stuck", None, [], (
             f"{len(below)} model(s) below gate {scoring.GATE_THRESHOLD:.0%}, each already has a rejected "
-            "candidate -> gated (needs prompt/ground-truth work)"
+            "candidate this round -> waiting (will retry after prompts change)"
         )
+
+    # Defensive fallback (should be unreachable given the branches above).
+    return "stuck", None, [], "no actionable step"
 
 
 def main() -> None:
@@ -260,7 +316,7 @@ def main() -> None:
                      f"judged={len(state['judged'])} passing={passing}/{len(models)} "
                      f"-> {action.upper()} {arg if arg is not None else ''} ({reason})")
 
-                if action in ("done", "stuck"):
+                if action in ("done", "stuck", "review"):
                     continue
                 any_action = True
                 if args.dry_run:
