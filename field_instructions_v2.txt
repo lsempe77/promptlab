@@ -1,0 +1,167 @@
+DEP Prompt Lab — Baseline Field Instructions (v2, 2026-07-07)
+==============================================================
+
+These are the v1 baseline instructions used as the starting point for each
+field's prompt optimisation. The optimizer rewrites only this instruction text;
+the system prompt, JSON contract, and allowed-values list are fixed.
+
+──────────────────────────────────────────────────────────────
+FIELD: authors  (list_text)
+──────────────────────────────────────────────────────────────
+List EVERY author of the paper, one entry per author, in the order they appear
+in the title/author block — check for co-authors named after the first author
+and in footnotes, do not stop at the first name you find. Format each as
+'Last name, First name Middle name' (e.g. 'Sabet, Shayda Mae'). If the paper
+gives only initials for the first/middle name, keep the initials exactly as
+printed (e.g. 'Miranda, J. M.') — do not guess or invent a full name you are
+not certain of from the text.
+
+──────────────────────────────────────────────────────────────
+FIELD: author_affiliation  (list_text)
+──────────────────────────────────────────────────────────────
+The institution(s)/organization(s) that authors are affiliated with
+(university, research center, government agency, NGO). Report the PRIMARY
+parent institution for each author (e.g. 'Cornell University'), NOT its
+internal departments, schools, centers or programs (e.g. do not list 'Atkinson
+Center for a Sustainable Future' or 'Master of Public Health Program'
+separately from their parent university). List each distinct parent institution
+once, using its full name with any abbreviation in brackets (e.g. 'International
+Initiative for Impact Evaluation (3ie)'). Treat known name variants of the same
+organization as one (e.g. 'ICDDR,B' and 'Centre for Health and Population
+Research' are the same institution). If an author's affiliation is not stated
+in the paper, do not invent one.
+
+──────────────────────────────────────────────────────────────
+FIELD: author_country  (list_categorical — 224 allowed values)
+──────────────────────────────────────────────────────────────
+The country/countries where EACH author's institutional affiliation is located
+— check every co-author's affiliation (title page, footnotes, acknowledgments),
+not just the first author, and report one country per distinct institution
+(there may be several if co-authors are affiliated with institutions in different
+countries). If an affiliation names an organization that has country offices
+worldwide (e.g. 'World Bank', 'JPAL') without specifying a particular office,
+use the country of that organization's headquarters (e.g. 'JPAL' alone ->
+United States; 'JPAL Africa' -> South Africa; 'World Bank' -> United States).
+Use standard country names (e.g. 'United States', not 'USA' or 'US'). If a
+country cannot be determined from the paper, output 'Not specified' rather than
+guessing.
+
+──────────────────────────────────────────────────────────────
+FIELD: sector_name  (single_categorical — 11 allowed values)
+──────────────────────────────────────────────────────────────
+Select the single World Bank sector that is the PRIMARY focus of the paper.
+Papers often touch multiple sectors; pick the one that is most central to the
+intervention evaluated.
+
+Sector definitions:
+- Agriculture fishing and forestry: Primary food/raw-material production —
+  crop cultivation, livestock, irrigation, fisheries, forestry. NOT
+  agri-business or trade.
+- Education: Learning systems — early childhood, primary, secondary, tertiary,
+  vocational training, adult literacy.
+- Energy and extractives: Power generation, oil/gas extraction, mining, energy
+  transmission and distribution.
+- Financial sector: Banking, insurance, capital markets, microfinance, financial
+  inclusion for the unbanked.
+- Health: Medical care, disease prevention/treatment, nutrition programmes,
+  maternal/child health, health system capacity — any intervention delivered
+  through clinics, hospitals or health workers.
+- Social protection: Cash transfers (conditional or unconditional), food
+  vouchers, pensions, social insurance, safety nets, labour market programmes.
+  Distinguishable from Health because the core intervention is a monetary
+  transfer or entitlement, not medical care.
+- Industry trade and services: Manufacturing, trade policy,
+  agri-business/commercialisation, tourism, housing construction, retail and
+  hospitality services.
+- Information and communications technologies: Internet infrastructure, mobile
+  networks, digital services.
+- Public administration: Governance reform, institutional capacity, law and
+  justice, decentralisation — ONLY when government management or governance
+  itself is the primary subject, NOT when the paper evaluates a programme that
+  happens to be administered by government.
+- Transportation: Roads, railways, aviation, ports, urban transit.
+- Water sanitation and waste management: Water supply, sanitation facilities,
+  sewerage, solid-waste management.
+
+Key disambiguation rules:
+1. Health vs Social protection: A deworming campaign → Health. A conditional
+   cash transfer requiring health check-ups → Social protection. A vitamin
+   supplementation programme → Health.
+2. Public administration vs any sector: A paper about reforming the health
+   ministry → Health (not Public administration). A paper about fiscal
+   decentralisation itself → Public administration.
+3. Agriculture vs Industry/trade: Growing maize → Agriculture.
+   Selling/marketing maize or agri-business → Industry trade and services.
+
+──────────────────────────────────────────────────────────────
+FIELD: sub_sector  (single_categorical — 28 allowed values)
+──────────────────────────────────────────────────────────────
+Select the most specific World Bank sub-sector using a two-step approach:
+
+STEP 1 — Identify the main sector from the 11 options:
+  Agriculture fishing and forestry | Education | Energy and extractives |
+  Financial sector | Health | Social protection | Industry trade and services |
+  Information and communications technologies | Public administration |
+  Transportation | Water sanitation and waste management
+
+STEP 2 — Pick the sub-sector ONLY from within that sector:
+
+Agriculture fishing and forestry →
+  Crops | Livestock | Irrigation and drainage |
+  Agricultural extension, research and other support activities |
+  Forestry | Fisheries |
+  Public admin - Agriculture, fishing and forestry |
+  Other - Agriculture, fishing and forestry
+
+Education →
+  Early childhood education | Primary education | Secondary education |
+  Tertiary education | Workforce development and vocational education |
+  Adult basic and continuing education |
+  Public admin - Education | Other - Education
+
+Energy and extractives →
+  Mining | Oil and gas | Renewable energy - Hydro | Renewable energy - Solar |
+  Renewable energy - Wind | Renewable energy - Biomass |
+  Renewable energy - Geothermal | Non-renewable energy generation |
+  Energy transmission and distribution |
+  Public admin - Energy and extractives | Other - Energy and extractives
+
+Financial sector →
+  Banking institutions | Insurance and pension | Capital markets |
+  Financial Inclusion | Other non-bank financial institutions |
+  Public admin - Financial sector
+
+Health →
+  Health | Health facilities and construction | Public admin - Health
+
+Social protection →
+  Social protection | Public admin - Social protection
+
+Industry trade and services →
+  Agricultural markets, commercialization and agri-business |
+  Housing contruction | Trade | Services | Manufacturing | Tourism |
+  Public admin - Industry, trade and services |
+  Other - Industry, trade and services
+
+Information and communications technologies →
+  ICT infrastructure | ICT services |
+  Public admin - Information and communications technologies |
+  Other - Information and communications technologies
+
+Public administration →
+  Law and justice | Central government or agencies |
+  Sub-national government | Other - Public administration
+
+Transportation →
+  Rural and inter-urban roads | Railways | Aviation | Ports/waterways |
+  Urban transportation | Public admin - Transportation | Other - Transportation
+
+Water sanitation and waste management →
+  Sanitation | Waste management | Water supply |
+  Public admin - Water, sanitation and waste management |
+  Other - Water, sanitation and waste management
+
+Rules:
+- Use 'Other - [Sector]' only when no specific sub-sector fits.
+- Use 'Public admin - [Sector]' only when the paper is about managing the
+  sector's administration, not evaluating service delivery.

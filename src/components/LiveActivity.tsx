@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type ActivityData } from "../api";
+import { api, type ActivityData, type OptimizerHealth } from "../api";
 
 const KIND_LABEL: Record<string, string> = {
   extraction: "extract",
@@ -18,6 +18,36 @@ function relTime(iso: string | null): string {
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
   return `${Math.round(diff / 3600)}h ago`;
+}
+
+function OptimizerHealthBadge({ health }: { health?: OptimizerHealth }) {
+  if (!health) return null;
+  const { failure_rate, accept_rate, runs_24h, failed_24h } = health;
+  // Highlight failure rate > 20% (red) or > 5% (amber) — the exact bug the
+  // system had (68% crash rate shown as "idle") must never be invisible again.
+  const fr = failure_rate;
+  let cls = "oh-badge--ok";
+  let label = "optimizer healthy";
+  if (fr > 0.20) {
+    cls = "oh-badge--bad";
+    label = `optimizer failing ${Math.round(fr * 100)}%`;
+  } else if (fr > 0.05) {
+    cls = "oh-badge--warn";
+    label = `optimizer ${Math.round(fr * 100)}% failures`;
+  } else if (runs_24h === 0) {
+    cls = "oh-badge--ok";
+    label = "no optimizer runs (24h)";
+  }
+  const accPct = accept_rate != null ? `${Math.round(accept_rate * 100)}%` : "—";
+  return (
+    <span
+      className={`oh-badge ${cls}`}
+      title={`Last 24h: ${runs_24h} runs, ${failed_24h} failed (${Math.round(fr * 100)}%). Accept rate: ${accPct} of candidates.`}
+    >
+      {label}
+      {runs_24h > 0 && <span className="oh-accept"> · accept {accPct}</span>}
+    </span>
+  );
 }
 
 export function LiveActivity() {
@@ -44,7 +74,7 @@ export function LiveActivity() {
 
   if (!data) return null;
 
-  const { queue, active_tasks, recently_done, log_tail } = data;
+  const { queue, active_tasks, recently_done, log_tail, optimizer_health } = data;
   const isActive = queue.total_active > 0;
 
   // Most recent supervisor decision from the log
@@ -62,6 +92,7 @@ export function LiveActivity() {
             ? `${queue.running} running · ${queue.pending} queued`
             : "Idle"}
         </span>
+        <OptimizerHealthBadge health={optimizer_health} />
         {lastDecision && (
           <span className="live-activity__last-line" title={lastDecision}>
             {lastDecision.replace(/^\[.*?Z\]\s*/, "").slice(0, 80)}

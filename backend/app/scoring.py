@@ -20,6 +20,7 @@ from typing import Any
 from rapidfuzz import fuzz
 
 from .fields import FIELDS
+from .normalize import normalize_value
 
 FUZZY_MATCH_THRESHOLD = 95  # rapidfuzz 0-100 scale
 CORRECT_THRESHOLD = 0.9  # score (0-1) at/above which a run counts as "correct"
@@ -193,9 +194,15 @@ def _score_single_categorical(predicted: Any, truth: Any) -> ScoreResult:
                        outcome=OUTCOME_WRONG, honesty_score=0.0)
 
 
-def _score_list(predicted: Any, truth: Any, fuzzy: bool) -> ScoreResult:
-    pred_list = [str(x) for x in predicted] if isinstance(predicted, list) else ([] if not predicted else [str(predicted)])
-    truth_list = [str(x) for x in truth] if isinstance(truth, list) else ([] if not truth else [str(truth)])
+def _score_list(predicted: Any, truth: Any, fuzzy: bool, field_name: str = "") -> ScoreResult:
+    # Normalize institution/country names to canonical forms BEFORE comparison,
+    # so the scorer credits semantically-equal names that differ only in
+    # abbreviation or word order (the judge proved ~9 pts / ~3 pts were lost
+    # here).  Applied symmetrically to both sides; unknown values pass through
+    # unchanged and fall back to the existing fuzzy/exact logic.
+    norm = lambda v: normalize_value(field_name, str(v)) if field_name else str(v)
+    pred_list = [norm(x) for x in predicted] if isinstance(predicted, list) else ([] if not predicted else [norm(predicted)])
+    truth_list = [norm(x) for x in truth] if isinstance(truth, list) else ([] if not truth else [norm(truth)])
 
     if not truth_list:
         if not pred_list:
@@ -266,9 +273,9 @@ def score_field(field_name: str, predicted: Any, truth: Any,
     if spec.value_type == "single_categorical":
         result = _score_single_categorical(predicted, truth)
     elif spec.value_type == "list_categorical":
-        result = _score_list(predicted, truth, fuzzy=False)
+        result = _score_list(predicted, truth, fuzzy=False, field_name=field_name)
     elif spec.value_type == "list_text":
-        result = _score_list(predicted, truth, fuzzy=True)
+        result = _score_list(predicted, truth, fuzzy=True, field_name=field_name)
     else:
         raise ValueError(f"Unknown value_type for field {field_name!r}: {spec.value_type}")
 

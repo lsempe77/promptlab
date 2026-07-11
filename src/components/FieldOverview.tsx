@@ -20,9 +20,18 @@ function bestAccuracy(s: StageStatus | null): number | null {
   return Math.max(...s.models.map((m) => m.gate_metric));
 }
 
-function statusLabel(acc: number | null, passing: number): {
+// The optimizer cost-benefit policy statuses that mean "stop auto-optimizing,
+// this needs a human" — surfaced from stage-status.opt_status per model.
+const REVIEW_STATUSES = new Set(["budget", "plateaued", "task_limited"]);
+
+function statusLabel(acc: number | null, passing: number, needsReview: boolean): {
   icon: string; label: string; cls: string;
 } {
+  // Needs-review takes priority over the pure-accuracy label: a field at 80%
+  // that's plateaued is NOT "still improving" — the optimizer has given up.
+  if (needsReview) {
+    return { icon: "⏸", label: "Needs human review", cls: "fo-status-review" };
+  }
   if (acc === null) return { icon: "⋯", label: "No data yet", cls: "fo-status-na" };
   if (passing > 0) return { icon: "✅", label: "Good enough to use", cls: "fo-status-pass" };
   if (acc >= 0.85) return { icon: "⚠", label: "Almost there", cls: "fo-status-close" };
@@ -83,7 +92,10 @@ export function FieldOverview({
         {rows.map(({ field, status }) => {
           const acc = bestAccuracy(status);
           const passing = status?.n_models_passing ?? 0;
-          const { icon, label, cls } = statusLabel(acc, passing);
+          const needsReview = status?.n_needs_review != null
+            ? status.n_needs_review > 0
+            : status?.models.some((m) => m.opt_status && REVIEW_STATUSES.has(m.opt_status)) ?? false;
+          const { icon, label, cls } = statusLabel(acc, passing, needsReview);
           const barPct = acc != null ? Math.min(acc * 100, 100) : 0;
           const isSelected = field.name === selectedField;
 

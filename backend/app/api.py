@@ -25,7 +25,7 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import analytics, config, db, db_pg, gateway, scoring
+from . import analytics, config, db, db_pg, gateway, optimization_policy, scoring
 from .projects import PROJECTS
 
 logger = logging.getLogger("promptlab.api")
@@ -279,6 +279,9 @@ def activity(request: Request, log_lines: int = 30) -> dict:
     log_lines = max(1, min(log_lines, 200))  # bound the file tail read
     tasks: list[dict] = []
     queue_summary: dict = {"pending": 0, "running": 0, "total_active": 0}
+    # Optimizer health over the last 24h — so a crash-loop or stall is visible,
+    # never silent (this is exactly the signal that was missing before).
+    optimizer_health: dict = {}
 
     if db_pg.pg_enabled():
         try:
@@ -301,6 +304,32 @@ def activity(request: Request, log_lines: int = 30) -> dict:
                         "ORDER BY finished_at DESC NULLS LAST LIMIT 5"
                     )
                     recent_done = [dict(r) for r in cur.fetchall()]
+                    cur.execute(
+                        "SELECT status, COUNT(*) AS n FROM worker_tasks "
+                        "WHERE kind = 'optimization' AND finished_at > now() - interval '24 hours' "
+                        "GROUP BY status"
+                    )
+                    oc = {r["status"]: r["n"] for r in cur.fetchall()}
+                    done_24h, failed_24h = oc.get("done", 0), oc.get("failed", 0)
+                    total_24h = done_24h + failed_24h
+                    # Accept-rate: of the optimization candidates logged in the
+                    # last 24h, what fraction were *accepted* as improvements.
+                    cur.execute(
+                        "SELECT COUNT(*) AS n, "
+                        "SUM(CASE WHEN accepted = 1 THEN 1 ELSE 0 END) AS acc "
+                        "FROM iterations WHERE created_at > now() - interval '24 hours'"
+                    )
+                    irow = cur.fetchone()
+                    i_total = irow["n"] or 0
+                    i_acc = irow["acc"] or 0
+                    optimizer_health = {
+                        "runs_24h": total_24h,
+                        "failed_24h": failed_24h,
+                        "failure_rate": (failed_24h / total_24h) if total_24h else 0.0,
+                        "candidates_24h": i_total,
+                        "accepted_24h": i_acc,
+                        "accept_rate": (i_acc / i_total) if i_total else 0.0,
+                    }
         except Exception as exc:
             tasks = []
             recent_done = []
@@ -327,6 +356,7 @@ def activity(request: Request, log_lines: int = 30) -> dict:
         "active_tasks": tasks,
         "recently_done": recent_done,
         "log_tail": log_tail,
+        "optimizer_health": optimizer_health,
     }
 
 
@@ -704,6 +734,29 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
             (project_id, field_name),
         ).fetchone()
 
+        # Per-model optimizer stats for the cost-benefit status (same policy the
+        # supervisor uses): total candidates, accepted, and how many tried since
+        # the last accepted gain.
+        opt_stats: dict[str, tuple[int, int, int]] = {}
+        for orow in conn.execute(
+            "SELECT model_id, COUNT(*) AS n, "
+            "SUM(CASE WHEN accepted = 1 THEN 1 ELSE 0 END) AS acc, "
+            "MAX(CASE WHEN accepted = 1 THEN created_at END) AS last_acc "
+            "FROM iterations WHERE project_id = ? AND field_name = ? AND model_id IS NOT NULL "
+            "GROUP BY model_id",
+            (project_id, field_name),
+        ).fetchall():
+            mid, n, acc, last_acc = orow["model_id"], orow["n"], orow["acc"] or 0, orow["last_acc"]
+            if last_acc is None:
+                since = n
+            else:
+                since = conn.execute(
+                    "SELECT COUNT(*) AS c FROM iterations WHERE project_id = ? AND field_name = ? "
+                    "AND model_id = ? AND created_at > ?",
+                    (project_id, field_name, mid, last_acc),
+                ).fetchone()["c"]
+            opt_stats[mid] = (n, since, acc)
+
     # Judged accuracy is kept as a reported *concordance* companion; the GATE
     # itself is now the field-type-aware quality metric (F1 for list fields,
     # accuracy for categorical) computed from runs -- see analytics.gate_metrics.
@@ -721,6 +774,31 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
     for model_id, mrows in rows_by_model.items():
         gm = analytics.gate_metrics(field_name, mrows)
         judged = judged_by_model.get(model_id)
+        gate_passed = gm["metric"] >= scoring.GATE_THRESHOLD
+        # Judge companion gate (authors over-crediting fix): the element-level
+        # F1 is too lenient on near-miss author lists — it accepts partial /
+        # reordered / dropped-co-author matches a human would reject. When an
+        # LLM judge is available and disagrees by more than the tolerance band,
+        # the model does NOT truly pass the gate even if F1 clears the bar.
+        # This is the exact gap the judge-vs-scorer analysis found: F1 said 77%
+        # but the judge said 66% for authors.
+        judge_disagreement = False
+        judge_accuracy = judged[0] if judged else None
+        if judge_accuracy is not None and gate_passed:
+            JUDGE_TOLERANCE = 0.10  # 10 pts: scorer flatters by more than this -> not truly passing
+            if gm["metric"] - judge_accuracy > JUDGE_TOLERANCE:
+                gate_passed = False
+                judge_disagreement = True
+        n_cand, since_accept, n_acc = opt_stats.get(model_id, (0, 0, 0))
+        # Optimizer cost-benefit status for this (field, model): 'passed' if it
+        # clears the gate, else the policy verdict (optimize / plateaued /
+        # task_limited / budget). Lets the UI show what's still worth chasing.
+        if gate_passed:
+            opt_status, opt_reason = "passed", ""
+        else:
+            _ok, opt_status, opt_reason = optimization_policy.decide(
+                n_cand, since_accept, gm["metric"], scoring.GATE_THRESHOLD
+            )
         models.append(
             {
                 "model_id": model_id,
@@ -733,13 +811,19 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
                 "accuracy": gm["accuracy"],
                 "kappa": gm["kappa"],
                 "n": gm["n"],
-                "llm_judged_accuracy": judged[0] if judged else None,
+                "llm_judged_accuracy": judge_accuracy,
                 "n_judged": judged[1] if judged else 0,
-                "gate_passed": gm["metric"] >= scoring.GATE_THRESHOLD,
+                "gate_passed": gate_passed,
+                "judge_disagreement": judge_disagreement,
                 "prompt_version": model_version_map.get(model_id),
+                "opt_status": opt_status,
+                "opt_reason": opt_reason,
+                "n_candidates": n_cand,
+                "n_accepted": n_acc,
             }
         )
     models.sort(key=lambda m: m["gate_metric"], reverse=True)
+    n_needs_review = sum(1 for m in models if m["opt_status"] in optimization_policy.STOP_STATUSES)
 
     stages = list(config.PRODUCTION_ROLLOUT_STAGES)
     next_target = next((s for s in stages if s > references), None)  # None = final stage reached
@@ -753,6 +837,7 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
         "n_models_evaluated": len(models),
         "n_models_judged": sum(1 for m in models if m["llm_judged_accuracy"] is not None),
         "n_models_passing": sum(1 for m in models if m["gate_passed"]),
+        "n_needs_review": n_needs_review,
         "n_judged": sum(m["n_judged"] for m in models),
         "prompt_versions": (pv["total"] if pv else 0) or 0,
         "prompt_versions_accepted": (pv["accepted"] if pv else 0) or 0,

@@ -101,6 +101,11 @@ export interface StageModelGate {
   n_judged: number;
   gate_passed: boolean;
   prompt_version?: number | null;
+  judge_disagreement?: boolean;
+  opt_status?: "optimize" | "passed" | "budget" | "plateaued" | "task_limited";
+  opt_reason?: string;
+  n_candidates?: number;
+  n_accepted?: number;
 }
 
 export interface StageStatus {
@@ -113,6 +118,7 @@ export interface StageStatus {
   n_models_evaluated: number;
   n_models_judged: number;
   n_models_passing: number;
+  n_needs_review: number;
   n_judged: number;
   prompt_versions: number;
   prompt_versions_accepted: number;
@@ -196,11 +202,21 @@ export interface RecentTask {
   error: string | null;
 }
 
+export interface OptimizerHealth {
+  runs_24h: number;
+  failed_24h: number;
+  failure_rate: number;
+  candidates_24h: number;
+  accepted_24h: number;
+  accept_rate: number;
+}
+
 export interface ActivityData {
   queue: { pending: number; running: number; total_active: number; error?: string };
   active_tasks: WorkerTask[];
   recently_done: RecentTask[];
   log_tail: string[];
+  optimizer_health?: OptimizerHealth;
 }
 
 export interface Job {

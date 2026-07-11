@@ -678,6 +678,15 @@ body {
   0%, 100% { opacity: 1; } 50% { opacity: 0.35; }
 }
 .live-activity__title { font-weight: 600; white-space: nowrap; }
+.oh-badge {
+  display: inline-flex; align-items: center; gap: 2px;
+  font-size: 0.72rem; font-weight: 600; white-space: nowrap;
+  padding: 2px 7px; border-radius: 10px; border: 1px solid transparent;
+}
+.oh-badge--ok   { color: var(--good); background: var(--good-soft); border-color: color-mix(in srgb, var(--good) 25%, transparent); }
+.oh-badge--warn { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 25%, transparent); }
+.oh-badge--bad  { color: var(--bad);  background: var(--bad-soft);  border-color: color-mix(in srgb, var(--bad) 25%, transparent); }
+.oh-accept { opacity: 0.7; font-weight: 400; }
 .live-activity__last-line {
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--muted); font-family: monospace; font-size: 0.76rem;
@@ -817,6 +826,7 @@ body {
 .fo-status-progress { color: var(--accent); }
 .fo-status-far      { color: var(--muted); }
 .fo-status-na       { color: var(--muted); }
+.fo-status-review   { color: var(--warn); font-weight: 600; }
 .fo-footnote { font-size: 0.78rem; margin: 10px 0 0; }
 
 /* details/summary collapsible table */
