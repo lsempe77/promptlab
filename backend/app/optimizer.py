@@ -449,7 +449,7 @@ def optimize_field(
     if holdout_models is None:
         holdout_models = _default_holdout_models(model_id)
 
-    with db.get_conn() as conn:
+    with db.get_conn(autocommit=True) as conn:
         project_id = db.get_project_id(conn, project_slug)
         baseline_pv = prompt_store.get_or_create_baseline(conn, project_id, field_name, model_id=model_id)
         all_records = db.get_records_with_field(conn, project_id, field_name)
@@ -459,7 +459,7 @@ def optimize_field(
     if len(all_records) < 4:
         raise ValueError(f"Not enough ground-truthed records for field={field_name} to optimize (need >= 4).")
 
-    with db.get_conn() as conn:
+    with db.get_conn(autocommit=True) as conn:
         job_id = db.start_job(conn, project_id, field_name, model_id, kind="optimization", total=max_iterations)
 
     try:
@@ -474,10 +474,10 @@ def optimize_field(
             history_window=history_window, job_id=job_id,
         )
     except Exception as exc:
-        with db.get_conn() as conn:
+        with db.get_conn(autocommit=True) as conn:
             db.finish_job(conn, job_id, status="failed", error=str(exc))
         raise
-    with db.get_conn() as conn:
+    with db.get_conn(autocommit=True) as conn:
         db.finish_job(conn, job_id, status="completed")
     return result
 
@@ -551,7 +551,7 @@ def _run_optimization(
     _pg_ctx = _db_pg.get_pg_conn() if _USE_PG else None
     _pg_conn = _pg_ctx.__enter__() if _pg_ctx else None
     try:
-        with db.get_conn() as conn:
+        with db.get_conn(autocommit=True) as conn:
             baseline_outcome = evaluate_instruction(
                 field_name, best_instruction, val, model_id, conn=conn, pg_conn=_pg_conn,
                 project_id=project_id, prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
@@ -560,7 +560,7 @@ def _run_optimization(
         best_gate, best_gate_n, best_gate_recall = _gate_score(field_name, baseline_outcome.predictions)
         best_holdout_avg = 0.0
         if gen_gate:
-            with db.get_conn() as conn:
+            with db.get_conn(autocommit=True) as conn:
                 best_holdout_avg, base_per = _holdout_generalization(
                     field_name, best_instruction, holdout, holdout_models, conn=conn,
                     project_id=project_id, prompt_version_id=best_pv_id, batch_id=batch_id,
@@ -581,7 +581,7 @@ def _run_optimization(
         no_improve_count = 0
         rejected_history: list[dict[str, Any]] = []  # {"instruction", "diagnosis"}, most recent last
 
-        with db.get_conn() as conn:
+        with db.get_conn(autocommit=True) as conn:
             for it in range(1, max_iterations + 1):
                 if job_id is not None:
                     db.update_job_progress(conn, job_id, it - 1)

@@ -164,12 +164,19 @@ def now() -> str:
 
 
 @contextmanager
-def get_conn(db_path: Path = DB_PATH) -> Iterator[sqlite3.Connection]:
+def get_conn(db_path: Path = DB_PATH, autocommit: bool = False) -> Iterator[sqlite3.Connection]:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     # timeout=30: Python-native busy-wait — more reliable than PRAGMA for
     # multi-process concurrent writers (--parallelism > 1).
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
+    # autocommit=True (isolation_level=None): each statement commits on its own,
+    # so the SQLite write lock is held for the statement only — never across an
+    # LLM network call. Essential for long-running writers (the optimizer) that
+    # would otherwise hold the single writer lock for minutes and make every
+    # other concurrent worker fail with "database is locked".
+    if autocommit:
+        conn.isolation_level = None
     conn.execute("PRAGMA foreign_keys = ON")
     # WAL mode: concurrent readers + serialised writers, no reader blocking.
     conn.execute("PRAGMA journal_mode=WAL")
@@ -177,7 +184,8 @@ def get_conn(db_path: Path = DB_PATH) -> Iterator[sqlite3.Connection]:
     conn.execute("PRAGMA busy_timeout=30000")
     try:
         yield conn
-        conn.commit()
+        if not autocommit:
+            conn.commit()
     finally:
         conn.close()
 
