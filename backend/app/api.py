@@ -149,10 +149,35 @@ async def _read_upload_capped(upload: UploadFile, max_bytes: int = _MAX_UPLOAD_B
 
 
 def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("fly-client-ip") or request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
+    # Trust ONLY the proxy-set header (Fly sets `fly-client-ip`). The
+    # client-supplied `x-forwarded-for` is deliberately NOT trusted for
+    # rate-limiting: honoring it lets an attacker rotate the header to get a
+    # fresh throttle bucket per request and bypass the login attempt cap.
+    fly = request.headers.get("fly-client-ip", "").split(",")[0].strip()
+    if fly:
+        return fly
     return request.client.host if request.client else "unknown"
+
+
+def _stable_id(value) -> int:
+    """Deterministic integer ``record_id`` from an arbitrary string key.
+
+    Numeric keys (e.g. EPPI IDs like the corpus filename ``"10154"``) map to
+    their integer value so corpus records and ground-truth rows keyed on the
+    same ID join correctly. Non-numeric keys hash via SHA-256, which is stable
+    across processes — unlike the builtin ``hash()`` (salted per-process by
+    PYTHONHASHSEED), whose result changed on every restart/worker and both broke
+    INSERT-OR-IGNORE dedup and silently prevented corpus↔ground-truth joins.
+    """
+    s = str(value).strip()
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        return int(float(s))  # tolerate "10154.0" from pandas/CSV
+    except (ValueError, OverflowError):
+        return int(hashlib.sha256(s.encode("utf-8")).hexdigest()[:8], 16)
 
 
 def _hash_password(password: str) -> str:
@@ -1129,8 +1154,8 @@ async def upload_corpus(request: Request, project_slug: str, files: list[UploadF
 
         # Register record in DB (use stem as record_id placeholder)
         with db.get_conn() as conn:
-            # Use a hash of the filename as a stable integer record_id
-            record_id = abs(hash(stem)) % (2**31)
+            # Stable integer record_id derived from the filename stem
+            record_id = _stable_id(stem)
             conn.execute(
                 "INSERT OR IGNORE INTO records (project_id, id, title, md_path) VALUES (?, ?, ?, ?)",
                 (project_id, record_id, stem, str(out_path)),
@@ -1168,10 +1193,7 @@ async def upload_ground_truth(request: Request, project_slug: str, file: UploadF
             rid_raw = row.get("record_id", "").strip()
             if not rid_raw:
                 continue
-            try:
-                record_id = int(rid_raw)
-            except ValueError:
-                record_id = abs(hash(rid_raw)) % (2**31)
+            record_id = _stable_id(rid_raw)
 
             if is_screening:
                 field_name = "screening_decision"
@@ -1383,10 +1405,12 @@ async def process_eppi(request: Request, project_slug: str, file: UploadFile):
 
         for idx, row in df.iterrows():
             raw_id = str(row[id_col]).strip() if id_col and pd.notna(row.get(id_col)) else None
-            try:
-                record_id = int(float(raw_id)) if raw_id and raw_id not in ("nan", "") else abs(hash(str(idx))) % (2**31)
-            except ValueError:
-                record_id = abs(hash(raw_id)) % (2**31)
+            if raw_id and raw_id not in ("nan", ""):
+                record_id = _stable_id(raw_id)
+            else:
+                # No usable ID column → derive from the row index. Prefix so a
+                # bare index can never collide with a real numeric record_id.
+                record_id = _stable_id(f"row-{idx}")
 
             title    = str(row[title_col]).strip()    if title_col    and pd.notna(row.get(title_col))    else ""
             abstract = str(row[abstract_col]).strip() if abstract_col and pd.notna(row.get(abstract_col)) else ""
