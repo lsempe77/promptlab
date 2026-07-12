@@ -238,6 +238,19 @@
     "Transportation",
     "Water sanitation and waste management"
   ],
+  "sector_definitions": {
+    "Agriculture fishing and forestry": "Farming, livestock, fisheries, forestry, irrigation — the production of food and raw materials from land and water. Classify here when the paper studies agricultural production, crop yields, livestock, forestry management, or irrigation as the primary subject.",
+    "Education": "Schooling, teaching, learning outcomes, educational institutions, curriculum, school management — the delivery and quality of education itself. Classify here when the paper studies what happens inside schools or education systems as the primary outcome.",
+    "Energy and extractives": "Power generation, electricity, oil, gas, mining, renewable energy, energy efficiency, extractive industries. Classify here when the paper studies energy production, extraction of resources, or energy infrastructure as the primary subject — NOT when energy is only a keyword or setting for a policy/governance study.",
+    "Financial sector": "Banking, credit, monetary policy, financial markets, insurance, financial regulation. Classify here when the paper studies the financial system itself — monetary policy, banking access, financial markets — NOT when a financial mechanism (like cash transfers or microfinance) is used as a welfare intervention (that is Social protection).",
+    "Health": "Medical care, public health, disease, nutrition, healthcare delivery, health outcomes. Classify here when the paper studies health outcomes or healthcare systems as the primary subject — NOT when health is merely the outcome of a welfare/safety-net program (that is Social protection).",
+    "Social protection": "Welfare, safety nets, cash transfers, social insurance, labor market programs, pensions, food-for-work, conditional cash transfers. Classify here when the paper studies a program that provides financial or in-kind support to vulnerable populations — EVEN IF the measured outcome is health, nutrition, education, or employment. The key question: is the paper about a welfare/safety-net intervention? If yes, this is Social protection, not the outcome domain.",
+    "Industry trade and services": "Manufacturing, trade, commerce, firm productivity, industrial policy, business development, services sector. Classify here when the paper studies firms, trade, manufacturing, or industry as the primary subject — NOT when a jobs program places workers with firms (that is Social protection).",
+    "Information and communications technologies": "Telecommunications, internet, digital infrastructure, ICT for development, mobile technology. Classify here when the paper studies digital or communications infrastructure as the primary subject.",
+    "Public administration": "Governance, institutions, public sector management, property rights, legal systems, anti-corruption, decentralization, transparency, tax administration. Classify here when the paper studies government institutions, legal frameworks, or administrative systems as the primary subject — NOT when a government program delivers welfare (that is Social protection) or agriculture (that is Agriculture).",
+    "Transportation": "Roads, transport infrastructure, logistics, public transit, ports, railways. Classify here when the paper studies physical transportation infrastructure or logistics systems as the primary subject.",
+    "Water sanitation and waste management": "Water supply, sanitation, wastewater, solid waste, water quality, water treatment. Classify here when the paper studies water/sanitation infrastructure or environmental contamination as the primary subject — NOT when health effects of contaminated water are merely the motivation (that is still Water/sanitation)."
+  },
   "sub_sectors_by_sector": {
     "Agriculture fishing and forestry": [
       "Crops",
