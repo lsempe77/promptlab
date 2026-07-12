@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+from collections import Counter
 
 from backend.app import db, prompts
 from backend.app.corpus import read_md
@@ -66,6 +67,14 @@ def main() -> None:
                          "UNDER sector. 'true' puts the human sector_name in the prompt so the "
                          "allowed sub-sectors are narrowed to that sector's ~8 children (matches "
                          "production; the biggest accuracy lever). 'none' = flat 66-way single-step.")
+    # Pilot sizing (cheap first run): shrink TRAIN/VAL only; TEST stays full so the
+    # gate reading is honest. Applied after the split so no test record leaks in.
+    ap.add_argument("--max-per-label", type=int, default=0,
+                    help="cap training examples per categorical label (0=off) — curbs the "
+                         "majority-class skew (e.g. Health ~39%%) and shrinks a pilot")
+    ap.add_argument("--sample", type=int, default=0,
+                    help="cap total TRAIN examples (0=off); VAL scaled to ~1/5 of it. For a "
+                         "cheap pilot before committing to the full run")
     args = ap.parse_args()
 
     spec = FIELDS[args.field]
@@ -99,8 +108,9 @@ def main() -> None:
     for rid in ids[n_test + n_val:]:
         split_of[rid] = "train"
 
-    buckets: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
-    split_ids: dict[str, list[int]] = {"train": [], "val": [], "test": []}
+    # Per split: list of (record_id, target_label, chat_example). target_label is
+    # the single-categorical value (for capping) or None for list fields.
+    built: dict[str, list[tuple]] = {"train": [], "val": [], "test": []}
     skipped = 0
     for rec in records:
         rid = rec["id"]
@@ -126,17 +136,44 @@ def main() -> None:
         )
         meta = {"excerpt": None, "notes": None, "confidence": 1.0}
         assistant = canonical_assistant_json(spec.value_type, gt_value, meta)
-        split = split_of[rid]
-        buckets[split].append(_chat_example(system, user, assistant))
-        split_ids[split].append(rid)
+        label = gt_value if spec.value_type == "single_categorical" else None
+        built[split_of[rid]].append((rid, label, _chat_example(system, user, assistant)))
+
+    def _cap(rows: list[tuple], max_per_label: int, sample: int, seed: int) -> list[tuple]:
+        """Shrink a split: at most `max_per_label` per categorical label and at
+        most `sample` total. Deterministic. 0 = no limit."""
+        if not (max_per_label or sample):
+            return rows
+        order = list(range(len(rows)))
+        random.Random(seed).shuffle(order)
+        per: Counter = Counter()
+        kept = []
+        for i in order:
+            rid, label, _ex = rows[i]
+            if max_per_label and label is not None:
+                if per[label] >= max_per_label:
+                    continue
+                per[label] += 1
+            kept.append(rows[i])
+            if sample and len(kept) >= sample:
+                break
+        return kept
+
+    val_sample = (args.sample // 5) if args.sample else 0
+    built["train"] = _cap(built["train"], args.max_per_label, args.sample, SEED)
+    built["val"] = _cap(built["val"], args.max_per_label, val_sample, SEED + 1)
+    # TEST is never capped — the gate must be read on the full held-out split.
 
     fd = field_dir(args.field)
+    split_ids: dict[str, list[int]] = {}
     for split in ("train", "val", "test"):
-        write_jsonl(fd / f"{split}.jsonl", buckets[split])
+        write_jsonl(fd / f"{split}.jsonl", [ex for _rid, _lbl, ex in built[split]])
+        split_ids[split] = [rid for rid, _lbl, _ex in built[split]]
     (fd / "splits.json").write_text(json.dumps(split_ids, indent=2), encoding="utf-8")
 
-    print(f"field={args.field}  usable={sum(len(v) for v in buckets.values())}  skipped_md={skipped}")
-    print(f"  train={len(buckets['train'])}  val={len(buckets['val'])}  test={len(buckets['test'])}")
+    pilot = " (PILOT: train/val capped)" if (args.max_per_label or args.sample) else ""
+    print(f"field={args.field}  skipped_md={skipped}{pilot}")
+    print(f"  train={len(built['train'])}  val={len(built['val'])}  test={len(built['test'])}")
     print(f"Wrote {fd}/train.jsonl, val.jsonl, test.jsonl and splits.json")
     print("IMPORTANT: evaluate with  eval_distilled.py --test-ids "
           f"{fd/'splits.json'}  — scoring on train/val rows would be leakage.")

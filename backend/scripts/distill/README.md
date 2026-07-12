@@ -54,14 +54,20 @@ eval_distilled.py   run teacher AND student over the 100 human GT, score with th
 
 ```bash
 # 1. Build train/val/test from human GT (point DEP_DB_PATH/DEP_MD_DIR at the full corpus).
-python -m backend.scripts.distill.build_dataset_from_gt --field sub_sector
+#    Cheap PILOT first: cap the majority class + subsample train (test stays full):
+python -m backend.scripts.distill.build_dataset_from_gt --field sub_sector \
+    --max-per-label 60 --sample 1500
+#    Full run later: drop the --max-per-label/--sample flags.
 
-# 2. Train. Option B (hosted, no GPU) — validate first (no spend), then submit:
+# 2. Train — Option B (hosted, no GPU). Fireworks (recommended, cheapest inference):
+#    validates data + prints a firectl playbook (upload → LoRA tune → deploy → eval).
+python -m backend.scripts.distill.submit_fireworks --field sub_sector \
+    --account <your-fw-account> --base-model accounts/fireworks/models/qwen2p5-14b-instruct
+#    ...or OpenAI (simplest, auto-served):
 python -m backend.scripts.distill.submit_openai --field sub_sector            # validate + cost
 OPENAI_API_KEY=sk-... python -m backend.scripts.distill.submit_openai \
     --field sub_sector --base-model gpt-4o-mini-2024-07-18 --submit           # launch
-python -m backend.scripts.distill.submit_openai --field sub_sector --job ftjob-... --poll
-#    Option A (own GPU): python -m backend.scripts.distill.train_lora --field sub_sector ...
+#    ...or Option A (own GPU): python -m backend.scripts.distill.train_lora --field sub_sector ...
 
 # 3. Evaluate ONLY on the held-out test split (leakage-safe) vs. the teacher.
 #    (submit_openai --poll prints this command with the tuned model id filled in.)
@@ -130,6 +136,7 @@ The student **passes** if, on the 100 human GT:
 | `build_dataset_from_gt.py` | **human GT** → `train/val/test.jsonl` + `splits.json` (recommended) | DB+corpus |
 | `label_corpus.py`  | teacher labels unlabelled corpus → `raw.jsonl` (scarce-label path) | `OPENROUTER_API_KEY`, DB+corpus |
 | `build_dataset.py` | filter/split teacher labels → `train/val.jsonl` (chat format) | local only |
-| `submit_openai.py` | validate + cost-estimate, then (`--submit`) fine-tune on OpenAI (Option B, no GPU) | `OPENAI_API_KEY` |
-| `train_lora.py`    | LoRA SFT a cheap open base model on `train.jsonl` (Option A) | GPU + `torch`,`transformers`,`peft`,`trl`,`datasets` |
+| `submit_fireworks.py` | validate + cost pre-flight, then print a `firectl` playbook to LoRA-tune + serve a small OPEN model (Option B, recommended — cheapest inference) | `firectl`, Fireworks account |
+| `submit_openai.py` | validate + cost-estimate, then (`--submit`) fine-tune on OpenAI (Option B, simplest) | `OPENAI_API_KEY` |
+| `train_lora.py`    | LoRA SFT a cheap open base model on `train.jsonl` (Option A, own GPU) | GPU + `torch`,`transformers`,`peft`,`trl`,`datasets` |
 | `eval_distilled.py`| teacher vs. student on the gate + cost/CO₂e; `--test-ids` for leakage-safe holdout | served student endpoint |
