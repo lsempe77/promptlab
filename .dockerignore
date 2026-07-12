@@ -1,0 +1,17 @@
+# Fly build context is the promptlab repo root, but the Dockerfile only ever
+# COPYs specific backend folders (backend/app, backend/scripts,
+# backend/models.yaml, backend/__init__.py). This keeps the upload context
+# small and ensures nothing sensitive/heavy is ever included by accident.
+**/__pycache__/
+**/*.pyc
+.venv/
+backend/.env
+backend/data/
+backend/deploy/
+.git/
+
+# Frontend — not part of the read-only API image.
+node_modules/
+dist/
+src/
+public/
