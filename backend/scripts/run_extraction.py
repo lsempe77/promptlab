@@ -73,6 +73,32 @@ def existing_pairs(conn, project_id: int, field_name: str, prompt_version_id: in
     return {(r["record_id"], r["model_id"]) for r in rows}
 
 
+def _get_prior_extraction(
+    project_id: int, field_name: str, record_id: int, model_id: str
+) -> str | None:
+    """Get the most recent extracted value for a field/record/model from the
+    runs table.  Used to pass sector_name as context to sub_sector extraction
+    so the prompt can narrow the options."""
+    import json
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT parsed_value_json FROM runs "
+            "WHERE project_id=? AND field_name=? AND record_id=? AND model_id=? "
+            "AND parsed_value_json IS NOT NULL "
+            "ORDER BY created_at DESC LIMIT 1",
+            (project_id, field_name, record_id, model_id),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        val = json.loads(row["parsed_value_json"])
+        if isinstance(val, list):
+            return val[0] if val else None
+        return val
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project", default="dep-extraction", help="project slug (see backend/app/projects.py)")
@@ -102,6 +128,38 @@ def main() -> None:
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, args.project)
         records = db.get_records_with_field(conn, project_id, args.field)
+        # For sub_sector: re-order records so those that already have a
+        # sector_name extraction for the target model come first.  This lets
+        # the context-narrowing kick in immediately (66 options → ~8) instead
+        # of running sub_sector blindly on records where no sector_name exists.
+        if args.field == "sub_sector":
+            # For sub_sector: filter to ONLY records that already have a
+            # sector_name extraction for at least one target model.  This
+            # guarantees the context-narrowing (66 → ~8 options) applies to
+            # every record.  If not enough records have sector_name yet,
+            # fall back to all records (so extraction isn't blocked).
+            rec_ids_with_sector = set()
+            for m in models:
+                for r in conn.execute(
+                    "SELECT DISTINCT record_id FROM runs "
+                    "WHERE project_id=? AND field_name='sector_name' AND model_id=? "
+                    "AND parsed_value_json IS NOT NULL",
+                    (project_id, m),
+                ).fetchall():
+                    rec_ids_with_sector.add(r["record_id"])
+            if rec_ids_with_sector:
+                filtered = [rec for rec in records if rec["id"] in rec_ids_with_sector]
+                if len(filtered) >= 10:
+                    records = filtered
+                    print(f"  [context] {len(records)} records have a prior sector_name extraction (using these)")
+                else:
+                    records.sort(
+                        key=lambda rec: (rec["id"] not in rec_ids_with_sector, rec["id"])
+                    )
+                    n_with = sum(1 for rec in records if rec["id"] in rec_ids_with_sector)
+                    print(f"  [context] only {n_with} have sector_name — too few, using all records (prioritizing those with context)")
+            else:
+                print(f"  [context] no records have prior sector_name extraction — extract sector_name first for best results")
         # Per-model accepted baseline: each model runs its OWN current best
         # prompt (seeded from the shared baseline on first use).
         model_pv = {m: get_or_create_baseline(conn, project_id, args.field, model_id=m) for m in models}
@@ -156,9 +214,20 @@ def main() -> None:
             continue
         source_cache[rec["id"]] = md_text[: prompts.MAX_CHARS]
         for model_id in needed_models:
+            # For sub_sector: look up the previously extracted sector_name for
+            # this record (same model) so the prompt can narrow sub-sector
+            # options to only those under the known sector. 99.2% of GT
+            # sub_sectors belong to the same parent sector as the GT sector_name
+            # — this narrows 66 options → ~8.
+            context_value = None
+            if args.field == "sub_sector":
+                context_value = _get_prior_extraction(
+                    project_id, "sector_name", rec["id"], model_id
+                )
             # each model uses its own accepted prompt template
             system_prompt, user_prompt = prompts.build_prompt(
-                args.field, rec["title"] or "", md_text, instruction=model_pv[model_id]["template"]
+                args.field, rec["title"] or "", md_text, instruction=model_pv[model_id]["template"],
+                context_value=context_value,
             )
             jobs.append({"model_id": model_id, "system_prompt": system_prompt, "user_prompt": user_prompt,
                          "logprobs": args.logprobs})

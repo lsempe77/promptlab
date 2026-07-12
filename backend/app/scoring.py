@@ -111,7 +111,22 @@ def _norm(s: str) -> str:
 
 
 def _fuzzy_equal(a: str, b: str, threshold: int = FUZZY_MATCH_THRESHOLD) -> bool:
-    return fuzz.token_set_ratio(_norm(a), _norm(b)) >= threshold
+    na, nb = _norm(a), _norm(b)
+    if fuzz.token_set_ratio(na, nb) >= threshold:
+        return True
+    # Substring containment: when the model reports a department-level
+    # affiliation (e.g. "Dept of Economics, Leibniz University of Hannover")
+    # but the ground truth is just the parent university ("Leibniz University
+    # of Hannover"), token_set_ratio scores ~82 (below 95) because the extra
+    # department tokens drag it down.  partial_ratio catches this: it finds
+    # the best-aligned substring and scores it 100.  This is the #1 cause of
+    # the affiliation under-crediting the judge identified (~9 pts lost).
+    # Only apply when one string is meaningfully longer than the other (avoids
+    # spurious partial matches on short strings).
+    if len(na) > len(nb) * 1.5 or len(nb) > len(na) * 1.5:
+        if fuzz.partial_ratio(na, nb) >= threshold:
+            return True
+    return False
 
 
 def fold_display(s: str) -> str:
