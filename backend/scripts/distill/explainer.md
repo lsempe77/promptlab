@@ -41,6 +41,33 @@ Two rules that must never break:
   The big cost later is *inference*, which is exactly why we picked Fireworks (serverless LoRA runs at
   the small model's cheap token rate).
 
+## API keys — where they go
+
+**Never put a key in the code or in git.** Set them as environment variables in the shell
+*before* you run the commands. (`.env` files here are already gitignored.)
+
+| key | used by | get it from |
+|-----|---------|-------------|
+| `FIREWORKS_API_KEY` | `firectl` (training/deploy) **and** the eval step (`--api-key`) | Fireworks dashboard → API keys |
+| `OPENROUTER_API_KEY` | the teacher model + existing pipeline | already set in `backend/.env` |
+| account id (not secret) | `submit_fireworks --account <id>` (or `FIREWORKS_ACCOUNT_ID`) | Fireworks dashboard |
+
+Set it for your shell session (do this in the same terminal you run the commands in):
+
+```powershell
+# Windows PowerShell
+$env:FIREWORKS_API_KEY = "fw_xxx"
+```
+```bash
+# macOS/Linux/Git-Bash
+export FIREWORKS_API_KEY=fw_xxx
+```
+
+To persist it (optional), add a line `FIREWORKS_API_KEY=fw_xxx` to `backend/.env`. Note: that file
+is auto-loaded only when the Python app runs — `firectl` reads the **shell** env var, so for the
+training/deploy steps you still need the `export`/`$env:` above. The eval step's `--api-key
+$FIREWORKS_API_KEY` also reads the shell env var, so setting it once in the shell covers everything.
+
 ## Do this (copy-paste, from the repo root)
 
 Run `sector_name` first (simpler), confirm it passes, then `sub_sector`.
