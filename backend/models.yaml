@@ -1,26 +1,16 @@
 ﻿# Roster of OpenRouter models to compare.
-# Revised 2026-07-08: retired 7 broken/weak/uneconomical models:
-#   glm-4.7-flash    -- 96-100% error rate (json_object mode broken)
-#   gemini-pro-latest -- 54% error rate on authors, 0.075 F1
-#   kimi-k2.5         -- 25-36% errors, consistently weak
-#   kimi-latest       -- 40-59% errors, unstable
-#   llama-4-scout     -- 0.05-0.10 below top models, marginal value
-#   gpt-latest        -- 6x more expensive than gpt-mini; loses on authors
-#                        and affiliation; fails dual gate (recall=0.843<0.85)
-# 12 models remain across cheap and mid tiers.
+# Revised 2026-07-12: trimmed to 4 models for a clean fresh start.
+# The 12-model roster was burning API credits cycling through fields that
+# had already plateaued. 4 models (3 families) gives enough diversity for
+# the cross-model generalization gate while keeping cost ~3x lower.
+# Based on the 2026-07-12 supervisor run results:
+#   gpt-mini-latest    -- best overall (84% sector_name with definitions)
+#   gemini-flash-latest -- strongest extraction baseline (83% sector_name)
+#   claude-haiku-latest -- solid second (82% sector_name)
+#   deepseek-v4-flash  -- cross-family reference for the holdout gate
 
 cheap:
   - "~openai/gpt-mini-latest"
   - "~anthropic/claude-haiku-latest"
   - "~google/gemini-flash-latest"
   - deepseek/deepseek-v4-flash
-  - qwen/qwen3-30b-a3b-instruct-2507
-  - mistralai/mistral-small-3.2-24b-instruct
-
-mid:
-  - "~anthropic/claude-sonnet-latest"
-  - deepseek/deepseek-v4-pro
-  - qwen/qwen3-235b-a22b-2507
-  - meta-llama/llama-4-maverick
-  - mistralai/mistral-medium-3-5
-  - z-ai/glm-5.2
