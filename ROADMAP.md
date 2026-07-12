@@ -92,6 +92,69 @@ A second autonomous loop alongside the prompt-optimizer supervisor ("Loop A"), f
   "answer key is wrong" signal). This closes the feedback loop so ground truth **improves over time**
   instead of staying fixed.
 
+## Recently shipped (2026-07-12) — scoring definitions, few-shot exemplars, context narrowing
+
+**Sector definitions (biggest single win):** Added one-line definitions per sector to
+`taxonomy.json` and wired them into the prompt builder (`prompts.py`). The model now sees
+what "Social protection" means instead of guessing from a bare label. sector_name accuracy
+jumped from 60% → 84% (+24 pts) on the production set; Social protection confusions dropped
+from 7 errors to 2 (down 71%).
+
+**Few-shot exemplars (Phase 4):** The optimizer's reflector can now propose 2-3 hard-case
+examples alongside instruction rewrites for `single_categorical` fields. Exemplars are
+stored inside `prompt_versions.template` (sentinel-delimited, no schema change) and
+accumulated across accepted iterations via `merge_exemplars()` (deduped, capped at 6).
+Tested end-to-end: instruction-only optimization gave +4.7 pts; with exemplars the best
+run gave +13.3 pts. Exemplars deliver 2-3× the improvement of instruction-only optimization.
+
+**Reflector fallback chain + dual-family holdout:** The optimizer now tries 3 reflector
+models in sequence (Claude Sonnet → GPT-4o → Gemini Pro) so a single provider outage
+doesn't waste an iteration. The cross-model generalization gate now uses 2 different-
+family reference models (DeepSeek + Gemini Flash) instead of 1, blocking single-family
+overfits.
+
+**Sub-sector context narrowing:** When extracting `sub_sector`, the system looks up the
+previously-extracted `sector_name` for the same record+model and passes it as context.
+The prompt narrows from 66 sub-sector options to ~3-8 under the known sector. Ground-truth
+analysis confirmed 99.2% consistency. sub_sector accuracy: 58% → 64% (+6 pts).
+
+**Author affiliation scoring fix:** The fuzzy matcher now uses `partial_ratio` when one
+string is >1.2× longer than the other (with an 8-char minimum). This catches the
+department-prefix case: "Dept of Economics, Leibniz University of Hannover" vs
+"Leibniz University of Hannover" now scores 1.0 (was 0.00).
+
+**Author affiliation instruction tightened:** Added a CRITICAL RULE with concrete examples
+forcing the model to extract ONLY the parent institution and discard department names.
+
+**Authors scoring tightened:** Raised the fuzzy match threshold from 95 to 98 for authors
+only, stopping the F1 from over-crediting near-miss names ("Smith, J." no longer matches
+"Smith, John"). Makes the authors F1 honest at ~68%.
+
+**Country/institution name normalization (Phase 2):** "USA" → "United States", "MIT" →
+"Massachusetts Institute of Technology", etc. Affiliation +~9 pts, country +~3 pts.
+
+**Dashboard honesty (Phase 1):** Optimizer failure/accept rate surfaced on the dashboard;
+plateaued fields show "Needs human review" instead of "still improving."
+
+**Judge companion gate:** If the LLM judge disagrees with the scorer by >10 pts, the model
+does not pass the gate even if F1 clears the bar. Catches the authors over-crediting at the
+production-readiness level.
+
+**Test results across the cheap-tier supervisor run (sector_name, 6 models, 920 runs):**
+- Extraction: 6 models × 100 records, 0 errors, 74-83% accuracy
+- Judging: 920 runs, 100% scorer-judge agreement
+- Optimization: 3 of 6 models accepted exemplar-optimized prompts (deepseek, qwen, gpt-mini)
+
+**Current accuracy by field (gpt-mini-latest, 100 records):**
+
+| Field | Baseline | Current | Gate (90%) |
+|-------|----------|---------|------------|
+| sector_name | 60% | 84% | -6 pts |
+| sub_sector | 58% | 64% | -26 pts |
+| author_affiliation | 27% | 30% | -60 pts |
+| author_country | ~75% | ~78% | -12 pts |
+| authors | ~66% | ~68% | -22 pts |
+
 ## Recently shipped (2026-07-08) — fresh start, metric overhaul, roster pruning
 
 **Fresh start:** Full DB wipe after a complete first production run (50,535 runs archived to

@@ -45,7 +45,7 @@ flowchart TD
     G200 --> EX
     subgraph OPT["Optimizer (autonomous, per-model)"]
       direction TB
-      REFLECT["Reflector proposes revision<br/>(bold structural rewrite after 2 rejects)"] --> RETEST["Re-test on 50-paper held-out val<br/>+ cross-model holdout"]
+      REFLECT["Reflector proposes revision<br/>+ few-shot exemplars (categorical)<br/>(bold structural rewrite after 2 rejects)"] --> RETEST["Re-test on 50-paper held-out val<br/>+ dual-family cross-model holdout"]
       RETEST --> ACC{"Improves AND generalizes?"}
       ACC -- "yes" --> ACCEPT["Accept → new per-model prompt version"]
       ACC -- "no" --> REJECT["Reject<br/>(stop after 4 no-improve / 10 iters)"]
@@ -99,24 +99,45 @@ flowchart LR
   GLM, Mistral, DeepSeek, Qwen, or Meta-Llama — those stay pinned and need refreshing by hand.
 - **Prompt templates** (`app/prompts.py`): v1 baseline templates per field (anchor/excerpt before
   value, typed placeholders, one null convention, `<paper>` instruction/data separation with an
-  injection guard).
+  injection guard). For `sector_name`, the options block includes a one-line definition per sector
+  (from `taxonomy.json` → `sector_definitions`) so the model understands what "Social protection"
+  means instead of guessing from a bare label. For `sub_sector`, the prompt accepts an optional
+  `context_value` (the previously-extracted `sector_name` for the same record) and narrows the
+  66 sub-sector options to only the ~3-8 under the known sector — ground-truth analysis confirmed
+  99.2% of sub_sectors belong to the same parent sector.
+- **Name normalization** (`app/normalize.py`): canonicalizes country and institution names BEFORE
+  scoring. Country aliases ("USA" → "United States", "UK" → "United Kingdom", "Russia" →
+  "Russian Federation") and institution abbreviations ("MIT" → "Massachusetts Institute of
+  Technology") are resolved against the taxonomy on both sides of the comparison. Affiliation
+  +~9 pts, country +~3 pts recovered from string-matching artefacts the judge identified.
+- **Few-shot exemplars** (`app/exemplars.py`): the optimizer's reflector can propose 2-3 hard-case
+  examples alongside instruction rewrites for `single_categorical` fields. Exemplars are stored
+  inside `prompt_versions.template` (sentinel-delimited `---FEW-SHOT EXAMPLES---`, no schema
+  change), validated against the field's taxonomy (answer must be a legal label), capped at 200
+  chars, and accumulated across accepted iterations via `merge_exemplars()` (deduped, max 6).
+  Exemplars deliver 2-3× the improvement of instruction-only optimization (+13.3 pts best run
+  vs +4.7 pts instruction-only on sector_name).
 - **Scorer** (`app/scoring.py`): field-type aware — exact/fuzzy match for single categorical
   fields (sector, sub-sector), set-based F1 with fuzzy name matching for list fields (authors,
   institutions), exact set match for list-categorical (countries). All comparisons are
   **concordance-aware**: accents/mojibake are folded and transliterated (so `José`≡`Jose`,
   `Lønborg`≡`Lonborg`) and a `|`-joined ground-truth value (curators tagged two equally-valid
-  labels) counts correct if the model matches *either*. Each run is also tagged with
-  an `outcome` (`hit` / `correct_abstain` / `abstain_miss` / `wrong` / `hallucination`) and a
-  separate `honesty_score`. The raw `score`/`is_correct`/accuracy numbers are unchanged (so
-  historical aggregates stay comparable); the honesty-adjusted score gives partial credit
-  (`ABSTENTION_CREDIT`, default 0.5) for an *honest abstention* — the model returning null/empty
-  ("I don't know") when a value existed, or for list fields under-reporting without inventing
-  wrong extras — so a confident wrong guess and a hallucination score strictly worse than honest
-  uncertainty. It also runs an **excerpt-verification** check (`verify_excerpt`): the cited
-  verbatim `excerpt` is looked for in the source text (normalized substring, then fuzzy
-  `partial_ratio` >= `EXCERPT_MATCH_THRESHOLD`); if a value was given with an excerpt that isn't
-  in the source (fabricated evidence), its `honesty_score` is docked by `EXCERPT_PENALTY` (0.5) —
-  raw accuracy untouched, so the optimizer is pushed toward prompts that quote real text.
+  labels) counts correct if the model matches *either*. Name normalization (above) is applied
+  before matching. Authors use a stricter fuzzy threshold (98 vs 95) to prevent over-crediting
+  near-miss names; affiliations use `partial_ratio` when one string is >1.2× longer to catch
+  the department-prefix case ("Dept of X, University of Y" vs "University of Y"). Each run is
+  also tagged with an `outcome` (`hit` / `correct_abstain` / `abstain_miss` / `wrong` /
+  `hallucination`) and a separate `honesty_score`. The raw `score`/`is_correct`/accuracy
+  numbers are unchanged (so historical aggregates stay comparable); the honesty-adjusted score
+  gives partial credit (`ABSTENTION_CREDIT`, default 0.5) for an *honest abstention* — the model
+  returning null/empty ("I don't know") when a value existed, or for list fields under-reporting
+  without inventing wrong extras — so a confident wrong guess and a hallucination score strictly
+  worse than honest uncertainty. It also runs an **excerpt-verification** check
+  (`verify_excerpt`): the cited verbatim `excerpt` is looked for in the source text (normalized
+  substring, then fuzzy `partial_ratio` >= `EXCERPT_MATCH_THRESHOLD`); if a value was given with
+  an excerpt that isn't in the source (fabricated evidence), its `honesty_score` is docked by
+  `EXCERPT_PENALTY` (0.5) — raw accuracy untouched, so the optimizer is pushed toward prompts
+  that quote real text.
 - **Run harness** (`scripts/run_extraction.py`): samples N ground-truthed records, runs every
   configured model (`models.yaml`) against the current baseline/accepted prompt, scores + stores
   every run in SQLite (with per-run `cost_usd` and an EcoLogits-estimated `co2e_grams` footprint),
@@ -130,6 +151,12 @@ flowchart LR
   wrong/low-score runs (avoiding previously-tried dead ends), propose up to N candidate revisions
   per iteration (best-of-N), validate each on a held-out set, accept only the winner if it beats
   the incumbent by more than `IMPROVEMENT_EPSILON`, stop after N iterations with no improvement.
+  The reflector has a **fallback chain** (Claude Sonnet → GPT-4o → Gemini Pro) so a single
+  provider outage doesn't waste an iteration. For `single_categorical` fields, the reflector
+  can also propose **few-shot exemplars** (2-3 hard cases) alongside the instruction rewrite —
+  these are stored in the prompt template (see `app/exemplars.py`) and accumulated across
+  accepted iterations (deduped, max 6). Exemplars deliver 2-3× the improvement of instruction-
+  only optimization.
   Run via `scripts/optimize_prompt.py` (single field+model+reflector at a time) or
   `scripts/optimize_all.py` (sweeps every field x model combination in one run, picking a
   cross-family reflector automatically — Anthropic models are reflected on by `~openai/gpt-latest`,
@@ -140,8 +167,9 @@ flowchart LR
   (categorical) — on a fixed **~35-record held-out val set** (split from 100 GT records),
   **(b) recall stays ≥ 0.85** (list fields only — prevents gaming F1 by sacrificing recall —
   missing values are invisible in QA while extras are visible and fixable), **and (c) does not
-  regress** on a separate **holdout across the optimized model + a cheap different-family
-  reference** (cross-model generalization gate that blocks single-model overfits).
+  regress** on a separate **holdout across the optimized model + TWO cheap different-family
+  reference models** (dual-family cross-model generalization gate that blocks single-family
+  overfits).
   `IMPROVEMENT_EPSILON` is **per-field**: 0.03 for list fields (higher noise floor on ~35-record
   val splits) and 0.01 for categorical. After `bold_after` (2) consecutive rejections it switches
   to **bold** mode (structural rewrites, `json_mode=False` + `max_tokens=4000` so extended-thinking
