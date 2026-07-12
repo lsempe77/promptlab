@@ -1134,6 +1134,46 @@ table.glossary .glossary-dir {
   border-radius: 4px;
 }
 
+/* ErrorBoundary — inline error + retry button */
+.error-boundary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: var(--text);
+  margin: 12px 0;
+  font-size: 0.88rem;
+}
+.error-boundary__icon { color: var(--warn); font-size: 1.1rem; }
+.error-boundary__text { flex: 1; }
+.error-boundary__retry {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.error-boundary__retry:hover { background: var(--accent-soft); }
+
+/* SkeletonLoader — shimmer placeholder */
+.skeleton { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+.skeleton__line {
+  background: linear-gradient(90deg, var(--bg-elevated-2) 25%, var(--border) 50%, var(--bg-elevated-2) 75%);
+  background-size: 200% 100%;
+  border-radius: 4px;
+  animation: shimmer 1.5s infinite;
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 .dashboard-body {
   display: flex;
   gap: 24px;

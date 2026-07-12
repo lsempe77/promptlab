@@ -23,11 +23,11 @@ import { Methodology } from "./components/Methodology";
 import { About } from "./components/About";
 import { VersionProgressionTable } from "./components/VersionProgressionTable";
 import { useWalkthrough } from "./components/Walkthrough";
-import NewProjectWizard from "./components/NewProjectWizard";
 import SupervisorStatusBar from "./components/SupervisorStatusBar";
 import { LiveActivity } from "./components/LiveActivity";
 import { FieldOverview } from "./components/FieldOverview";
 import { ProcessSteps } from "./components/ProcessSteps";
+import { SkeletonLoader } from "./components/SkeletonLoader";
 import "./App.css";
 
 const JOBS_POLL_MS = 6000;
@@ -74,7 +74,6 @@ function StageBadge({ s }: { s: StageStatus }) {
 
 function App() {
   const [tab, setTab] = useState<"dashboard" | "about">("dashboard");
-  const [showWizard, setShowWizard] = useState(false);
   const [projects, setProjects] = useState<ProjectInfo[] | null>(null);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [fields, setFields] = useState<FieldInfo[] | null>(null);
@@ -103,7 +102,7 @@ function App() {
         if (p.length > 0) setSelectedProject(p[0].slug);
       })
       .catch((e) => setApiError(String(e)));
-    api.thresholds().then(setThresholds).catch(() => {});
+    api.thresholds().then(setThresholds).catch((e) => console.warn("[thresholds]", e));
   }, []);
 
   useEffect(() => {
@@ -132,9 +131,11 @@ function App() {
     // for the previous selection must not clobber the current one's data.
     let cancelled = false;
     api.selfConsistency(selectedProject, selected)
-      .then((d) => { if (!cancelled) setSelfConsistency(d); }).catch(() => { if (!cancelled) setSelfConsistency([]); });
+      .then((d) => { if (!cancelled) setSelfConsistency(d); })
+      .catch((e) => { console.warn("[selfConsistency]", e); if (!cancelled) setSelfConsistency([]); });
     api.stageStatus(selectedProject, selected)
-      .then((d) => { if (!cancelled) setStageStatus(d); }).catch(() => { if (!cancelled) setStageStatus(null); });
+      .then((d) => { if (!cancelled) setStageStatus(d); })
+      .catch((e) => { console.warn("[stageStatus]", e); if (!cancelled) setStageStatus(null); });
     // Multi-version progression: fetch run-version list then gate metrics (real F1/accuracy) for each.
     api.runVersions(selectedProject, selected)
       .then((vs: RunVersion[]) => {
@@ -162,11 +163,14 @@ function App() {
       .catch((e) => { if (!cancelled) setApiError(String(e)); })
       .finally(() => { if (!cancelled) setLoadingField(false); });
     api.llmJudgeSummary(selectedProject, selected)
-      .then((d) => { if (!cancelled) setLlmJudge(d); }).catch(() => { if (!cancelled) setLlmJudge([]); });
+      .then((d) => { if (!cancelled) setLlmJudge(d); })
+      .catch((e) => { console.warn("[llmJudge]", e); if (!cancelled) setLlmJudge([]); });
     api.crossModelAgreement(selectedProject, selected)
-      .then((d) => { if (!cancelled) setCrossAgreement(d); }).catch(() => { if (!cancelled) setCrossAgreement([]); });
+      .then((d) => { if (!cancelled) setCrossAgreement(d); })
+      .catch((e) => { console.warn("[crossAgreement]", e); if (!cancelled) setCrossAgreement([]); });
     api.calibration(selectedProject, selected)
-      .then((d) => { if (!cancelled) setCalibration(d); }).catch(() => { if (!cancelled) setCalibration([]); });
+      .then((d) => { if (!cancelled) setCalibration(d); })
+      .catch((e) => { console.warn("[calibration]", e); if (!cancelled) setCalibration([]); });
     return () => { cancelled = true; };
   }, [selectedProject, selected]);
 
@@ -186,11 +190,13 @@ function App() {
           setJobs(j);
           const runningCount = j.filter((job) => job.status === "running" && !job.stale).length;
           if (runningCount === 0 && prevRunningCount.current > 0) {
-            api.modelsSummary(selectedProject, selected).then(setSummaries).catch(() => {});
+            api.modelsSummary(selectedProject, selected)
+              .then(setSummaries)
+              .catch((e) => console.warn("[modelsSummary re-fetch]", e));
           }
           prevRunningCount.current = runningCount;
         })
-        .catch(() => {});
+        .catch((e) => console.warn("[jobs poll]", e));
     };
     poll();
     const id = window.setInterval(poll, JOBS_POLL_MS);
@@ -248,9 +254,6 @@ function App() {
           <button className="tab-btn tour-btn" onClick={startWalkthrough} title="Start guided walkthrough">
             Tour
           </button>
-          <button className="tab-btn new-project-btn" onClick={() => setShowWizard(true)} title="Create a new prompt lab">
-            + New Project
-          </button>
         </nav>
       </header>
 
@@ -265,7 +268,7 @@ function App() {
             </div>
           )}
 
-          {!apiError && !fields && <p className="muted">Loading fields…</p>}
+          {!apiError && !fields && <SkeletonLoader lines={2} />}
 
           {/* How it works — 3 plain steps up top; full pipeline is opt-in below. */}
           {!apiError && <ProcessSteps />}
@@ -326,7 +329,7 @@ function App() {
                     )}
 
                     {loadingField ? (
-                      <p className="muted">Loading…</p>
+                      <SkeletonLoader lines={4} />
                     ) : (
                       <>
                         {/* Charts first — answer "which AI is best?" before the history */}
@@ -425,15 +428,6 @@ function App() {
         </>
       )}
 
-      {showWizard && (
-        <NewProjectWizard
-          onClose={() => setShowWizard(false)}
-          onProjectCreated={(slug) => {
-            setShowWizard(false);
-            setSelectedProject(slug);
-          }}
-        />
-      )}
     </div>
   );
 }

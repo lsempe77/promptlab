@@ -8,8 +8,6 @@
 import { useEffect, useState } from "react";
 import { api, type StageStatus, type FieldInfo } from "../api";
 
-const GATE = 0.9;
-
 type FieldRow = {
   field: FieldInfo;
   status: StageStatus | null;
@@ -24,9 +22,12 @@ function bestAccuracy(s: StageStatus | null): number | null {
 // this needs a human" — surfaced from stage-status.opt_status per model.
 const REVIEW_STATUSES = new Set(["budget", "plateaued", "task_limited"]);
 
-function statusLabel(acc: number | null, passing: number, needsReview: boolean): {
-  icon: string; label: string; cls: string;
-} {
+function statusLabel(
+  acc: number | null,
+  passing: number,
+  needsReview: boolean,
+  gate: number,
+): { icon: string; label: string; cls: string } {
   // Needs-review takes priority over the pure-accuracy label: a field at 80%
   // that's plateaued is NOT "still improving" — the optimizer has given up.
   if (needsReview) {
@@ -34,8 +35,8 @@ function statusLabel(acc: number | null, passing: number, needsReview: boolean):
   }
   if (acc === null) return { icon: "⋯", label: "No data yet", cls: "fo-status-na" };
   if (passing > 0) return { icon: "✅", label: "Good enough to use", cls: "fo-status-pass" };
-  if (acc >= 0.85) return { icon: "⚠", label: "Almost there", cls: "fo-status-close" };
-  if (acc >= 0.70) return { icon: "↻", label: "Still improving", cls: "fo-status-progress" };
+  if (acc >= gate * 0.85) return { icon: "⚠", label: "Almost there", cls: "fo-status-close" };
+  if (acc >= gate * 0.70) return { icon: "↻", label: "Still improving", cls: "fo-status-progress" };
   return { icon: "✗", label: "Needs more work", cls: "fo-status-far" };
 }
 
@@ -70,21 +71,23 @@ export function FieldOverview({
           next[i] = { field: f, status: s };
           return next;
         });
-      }).catch(() => {});
+      }).catch(() => {
+        // Silently leave the row at null (shows "No data yet") — a per-field
+        // API failure shouldn't crash the whole overview.  The App-level
+        // ErrorBoundary catches persistent failures.
+      });
     });
     return () => { cancelled = true; };
   }, [project, fields]);
 
   if (rows.length === 0) return null;
 
-  const gatePct = GATE * 100;
-
   return (
     <section className="field-overview panel">
       <div className="fo-header">
         <h3 className="fo-title">How accurate are our AIs at pulling out each piece of information?</h3>
         <p className="fo-subtitle muted">
-          We accept an AI when it gets answers right at least {gatePct}% of the time.
+          We accept an AI when it gets answers right at least 90% of the time.
           Bars show the best AI's accuracy for each task.
         </p>
       </div>
@@ -92,11 +95,13 @@ export function FieldOverview({
         {rows.map(({ field, status }) => {
           const acc = bestAccuracy(status);
           const passing = status?.n_models_passing ?? 0;
+          const gate = status?.gate_threshold ?? 0.9;
           const needsReview = status?.n_needs_review != null
             ? status.n_needs_review > 0
             : status?.models.some((m) => m.opt_status && REVIEW_STATUSES.has(m.opt_status)) ?? false;
-          const { icon, label, cls } = statusLabel(acc, passing, needsReview);
+          const { icon, label, cls } = statusLabel(acc, passing, needsReview, gate);
           const barPct = acc != null ? Math.min(acc * 100, 100) : 0;
+          const gatePct = gate * 100;
           const isSelected = field.name === selectedField;
 
           return (
@@ -109,10 +114,10 @@ export function FieldOverview({
               <span className="fo-field-label">{field.label}</span>
               <div className="fo-bar-wrap" aria-label={`${pct(acc)} accuracy`}>
                 <div
-                  className={`fo-bar ${acc != null && acc >= GATE ? "fo-bar--pass" : acc != null && acc >= 0.85 ? "fo-bar--close" : "fo-bar--fail"}`}
+                  className={`fo-bar ${acc != null && acc >= gate ? "fo-bar--pass" : acc != null && acc >= gate * 0.85 ? "fo-bar--close" : "fo-bar--fail"}`}
                   style={{ width: `${barPct}%` }}
                 />
-                {/* 90% gate marker */}
+                {/* Gate marker */}
                 <div className="fo-gate-line" style={{ left: `${gatePct}%` }} />
               </div>
               <span className="fo-pct">{pct(acc)}</span>
