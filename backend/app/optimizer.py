@@ -50,17 +50,39 @@ DEFAULT_HOLDOUT_SIZE = 30  # records held out ENTIRELY from candidate selection;
 # accepted rewrite generalizes rather than overfitting to a single model. Overridable per run.
 DEFAULT_HOLDOUT_REFERENCE = "deepseek/deepseek-v4-flash"
 _HOLDOUT_REFERENCE_ALT = "~openai/gpt-mini-latest"  # used when the optimized model IS the reference
+# A second different-family holdout reference — two families makes the
+# generalization gate stricter (blocks overfits that pass one family but
+# not the other).  Only used when the pool is large enough to support it.
+_HOLDOUT_REFERENCE_2 = "~google/gemini-flash-latest"
+
+# Reflector fallback chain: if the primary reflector fails (API error, DNS,
+# rate limit, unparseable response), try the next one.  Different families
+# also catch different blind spots in the diagnosis.  The supervisor passes
+# the first entry; the optimizer falls back to the rest automatically.
+DEFAULT_REFLECTOR_FALLBACKS = ["~openai/gpt-4o", "~google/gemini-pro-latest"]
 DEFAULT_BOLD_AFTER = 2  # after this many consecutive rejections, switch the reflector to "bold"
                         # mode (structural rewrites) instead of small incremental edits.
 
 
 def _default_holdout_models(model_id: str) -> list[str]:
-    """[optimized model, a cheap different-family reference] for the cross-model
-    generalization gate."""
-    ref = DEFAULT_HOLDOUT_REFERENCE
-    if ref.split("/")[-1].lower() in model_id.lower():
-        ref = _HOLDOUT_REFERENCE_ALT
-    return [model_id, ref]
+    """[optimized model, a cheap different-family reference, optionally a second
+    different-family reference] for the cross-model generalization gate.
+
+    Two reference families makes the gate stricter: a candidate must generalize
+    across BOTH, not just one.  The second reference is skipped if it's the
+    same family as the optimized model or the first reference.
+    """
+    ref1 = DEFAULT_HOLDOUT_REFERENCE
+    if ref1.split("/")[-1].lower() in model_id.lower():
+        ref1 = _HOLDOUT_REFERENCE_ALT
+    models = [model_id, ref1]
+    # Add a second reference from a different family if it's not already in the list
+    ref2 = _HOLDOUT_REFERENCE_2
+    ref2_family = ref2.split("/")[0].lower() if "/" in ref2 else ""
+    existing_families = {m.split("/")[0].lower() for m in models if "/" in m}
+    if ref2 not in models and ref2_family not in existing_families:
+        models.append(ref2)
+    return models
 
 
 def _gate_score(field_name: str, predictions: list[tuple[Any, Any]]) -> tuple[float, int, float | None]:
@@ -442,58 +464,67 @@ def propose_revision(
     # already finds the {...} via regex fallback.  Bold mode also gets a larger
     # token budget so thinking tokens don't crowd out the actual JSON reply.
     reflector_max_tokens = 4000 if bold else 2000
-    for attempt in range(max_attempts):
-        user_prompt = base_prompt
-        if attempt > 0:
-            user_prompt += (
-                "\n\nIMPORTANT: Output ONLY the raw JSON object shown above — no preamble, no "
-                "commentary, no markdown code fences, and no step-by-step reasoning before it."
+    # Build the reflector chain: the primary model followed by fallbacks.
+    # If the primary fails (API error, DNS, rate limit, unparseable response),
+    # we try each fallback in order so a single provider outage doesn't waste
+    # an entire optimizer iteration.
+    reflector_chain = [reflector_model] + [
+        m for m in DEFAULT_REFLECTOR_FALLBACKS if m != reflector_model
+    ]
+    for ref_model in reflector_chain:
+        for attempt in range(max_attempts):
+            user_prompt = base_prompt
+            if attempt > 0:
+                user_prompt += (
+                    "\n\nIMPORTANT: Output ONLY the raw JSON object shown above — no preamble, no "
+                    "commentary, no markdown code fences, and no step-by-step reasoning before it."
+                )
+            resp = gateway.call_model(
+                ref_model,
+                system_prompt,
+                user_prompt,
+                temperature=(0.9 if bold else 0.7) if attempt == 0 else 0.3,
+                max_tokens=reflector_max_tokens,
+                json_mode=False,
             )
-        resp = gateway.call_model(
-            reflector_model,
-            system_prompt,
-            user_prompt,
-            temperature=(0.9 if bold else 0.7) if attempt == 0 else 0.3,
-            max_tokens=reflector_max_tokens,
-            json_mode=False,
-        )
-        try:
-            obj = parse_json_object(resp.content)
-        except ParseError as exc:
-            last_err = exc
-            continue
-        revised = obj.get("revised_instruction")
-        if revised and str(revised).strip():
-            revised_str = str(revised).strip()
-            # If the reflector proposed exemplars, serialize them into the
-            # instruction template so they appear in the extraction prompt.
-            if allow_exemplars:
-                raw_exemplars = obj.get("exemplars")
-                if isinstance(raw_exemplars, list) and raw_exemplars:
-                    # Validate exemplars against the field's taxonomy so the
-                    # reflector can't inject arbitrary labels or prompt-control
-                    # text.  Cap paper length and strip newlines from both
-                    # fields so they can't introduce new prompt structure.
-                    from .taxonomy import get_options
-                    valid_answers = set(
-                        a.lower().strip() for a in get_options(
-                            prompts.FIELDS[field_name].taxonomy_key or ""
-                        )
-                    ) if prompts.FIELDS[field_name].taxonomy_key else None
-                    exemplars = []
-                    for ex in raw_exemplars:
-                        if not isinstance(ex, dict):
-                            continue
-                        paper = str(ex.get("paper", "")).strip().replace("\n", " ")[:200]
-                        answer = str(ex.get("answer", "")).strip().replace("\n", " ")
-                        if not paper or not answer:
-                            continue
-                        if valid_answers is not None and answer.lower() not in valid_answers:
-                            continue
-                        exemplars.append(Exemplar(paper=paper, answer=answer))
-                    if exemplars:
-                        revised_str = serialize_exemplars(revised_str, exemplars)
-            return revised_str, obj.get("diagnosis")
+            try:
+                obj = parse_json_object(resp.content)
+            except ParseError as exc:
+                last_err = exc
+                continue
+            revised = obj.get("revised_instruction")
+            if revised and str(revised).strip():
+                revised_str = str(revised).strip()
+                # If the reflector proposed exemplars, serialize them into the
+                # instruction template so they appear in the extraction prompt.
+                if allow_exemplars:
+                    raw_exemplars = obj.get("exemplars")
+                    if isinstance(raw_exemplars, list) and raw_exemplars:
+                        # Validate exemplars against the field's taxonomy so the
+                        # reflector can't inject arbitrary labels or prompt-control
+                        # text.  Cap paper length and strip newlines from both
+                        # fields so they can't introduce new prompt structure.
+                        from .taxonomy import get_options
+                        valid_answers = set(
+                            a.lower().strip() for a in get_options(
+                                prompts.FIELDS[field_name].taxonomy_key or ""
+                            )
+                        ) if prompts.FIELDS[field_name].taxonomy_key else None
+                        exemplars = []
+                        for ex in raw_exemplars:
+                            if not isinstance(ex, dict):
+                                continue
+                            paper = str(ex.get("paper", "")).strip().replace("\n", " ")[:200]
+                            answer = str(ex.get("answer", "")).strip().replace("\n", " ")
+                            if not paper or not answer:
+                                continue
+                            if valid_answers is not None and answer.lower() not in valid_answers:
+                                continue
+                            exemplars.append(Exemplar(paper=paper, answer=answer))
+                        if exemplars:
+                            revised_str = serialize_exemplars(revised_str, exemplars)
+                return revised_str, obj.get("diagnosis")
+        # All retries on this reflector failed — try the next fallback
     raise last_err if last_err else ParseError("Reflector produced no usable revision")
 
 
