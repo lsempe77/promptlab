@@ -9,6 +9,7 @@ import {
   type LlmJudgeSummary,
   type ModelSummary,
   type SelfConsistency,
+  type StageModelGate,
 } from "../api";
 import { IterationChart } from "./IterationChart";
 import { ConfusionMatrix } from "./ConfusionMatrix";
@@ -133,7 +134,7 @@ export function ModelCard({
   selfConsistency = null,
   calibration = null,
   gateThreshold = null,
-  promptVersion = undefined,
+  stageGate = null,
 }: {
   projectSlug: string;
   fieldName: string;
@@ -144,7 +145,7 @@ export function ModelCard({
   selfConsistency?: SelfConsistency | null;
   calibration?: Calibration | null;
   gateThreshold?: number | null;
-  promptVersion?: number;
+  stageGate?: StageModelGate | null;
 }) {
   const [iters, setIters] = useState<IterationLog[] | null>(null);
   const [confusion, setConfusion] = useState<Confusion | null>(null);
@@ -152,21 +153,18 @@ export function ModelCard({
   // Re-fetch this model's own iteration/confusion data once its running job
   // count drops back to zero, so a finished run shows up without a reload.
   const wasRunning = useRef(false);
-  const prevVersion = useRef(promptVersion);
 
   useEffect(() => {
     const isRunningNow = runningJobs.length > 0;
     const justFinished = wasRunning.current && !isRunningNow;
     wasRunning.current = isRunningNow;
-    const versionChanged = prevVersion.current !== promptVersion;
-    prevVersion.current = promptVersion;
-    if (iters !== null && !justFinished && !versionChanged) return;
+    if (iters !== null && !justFinished) return;
     let cancelled = false;
     setIters(null);
     setConfusion(null);
     Promise.all([
       api.iterations(projectSlug, fieldName, summary.model_id),
-      api.confusion(projectSlug, fieldName, summary.model_id, promptVersion),
+      api.confusion(projectSlug, fieldName, summary.model_id),
     ])
       .then(([it, c]) => {
         if (cancelled) return;  // don't write a prior field/model's data after a switch
@@ -180,7 +178,7 @@ export function ModelCard({
       });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectSlug, fieldName, summary.model_id, runningJobs.length, promptVersion]);
+  }, [projectSlug, fieldName, summary.model_id, runningJobs.length]);
 
   const accepted = iters?.filter((i) => i.accepted).length ?? 0;
   const rejected = (iters?.length ?? 0) - accepted;
@@ -222,6 +220,16 @@ export function ModelCard({
           )}
           {gateMetric == null && (
             <span className="gate-chip">—</span>
+          )}
+          {stageGate?.opt_status && stageGate.opt_status !== "optimize" && stageGate.opt_status !== "passed" && (
+            <span className="opt-chip opt-chip--review" title={stageGate.opt_reason ?? undefined}>
+              {stageGate.opt_status === "plateaued" ? "⏸ plateaued" : stageGate.opt_status === "task_limited" ? "⏸ task-limited" : "⏸ budget"}
+            </span>
+          )}
+          {stageGate?.judge_disagreement && (
+            <span className="opt-chip opt-chip--judge" title="The LLM judge disagrees with the score by more than 10 points">
+              ⚖ judge disagrees
+            </span>
           )}
           <span className="model-card-cost muted">
             {summary.total_cost_usd != null && summary.n > 0
