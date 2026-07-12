@@ -39,14 +39,25 @@ FIELDS: dict[str, FieldSpec] = {
         taxonomy_key=None,
         description=(
             "The institution(s)/organization(s) that authors are affiliated with (university, research "
-            "center, government agency, NGO). Report the PRIMARY parent institution for each author "
+            "center, government agency, NGO). Report ONLY the PRIMARY parent institution for each author "
             "(e.g. 'Cornell University'), NOT its internal departments, schools, centers or programs "
             "(e.g. do not list 'Atkinson Center for a Sustainable Future' or 'Master of Public Health "
             "Program' separately from their parent university). List each distinct parent institution "
             "once, using its full name with any abbreviation in brackets (e.g. 'International Initiative "
             "for Impact Evaluation (3ie)'). Treat known name variants of the same organization as one "
             "(e.g. 'ICDDR,B' and 'Centre for Health and Population Research' are the same institution). "
-            "If an author's affiliation is not stated in the paper, do not invent one."
+            "If an author's affiliation is not stated in the paper, do not invent one.\n\n"
+            "CRITICAL RULE FOR PRECISION: If an author lists a department, school, center, or lab "
+            "affiliation, extract ONLY the parent institution and discard the department. For example:\n"
+            "- 'Department of Economics, Harvard University' → report 'Harvard University' (NOT "
+            "'Department of Economics, Harvard University')\n"
+            "- 'School of Public Health, Johns Hopkins University' → report 'Johns Hopkins University'\n"
+            "- 'Center for Global Health, University of Nairobi' → report 'University of Nairobi'\n"
+            "Do NOT include the department, school, center, faculty, or lab name in the value. Only the "
+            "parent university/organization name.\n"
+            "Also do NOT list the same institution twice if two authors are from the same university — "
+            "list each distinct institution only once. Fewer, correct parent institutions is better than "
+            "many department-level entries."
         ),
     ),
     "author_country": FieldSpec(

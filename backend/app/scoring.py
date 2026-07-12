@@ -121,9 +121,12 @@ def _fuzzy_equal(a: str, b: str, threshold: int = FUZZY_MATCH_THRESHOLD) -> bool
     # department tokens drag it down.  partial_ratio catches this: it finds
     # the best-aligned substring and scores it 100.  This is the #1 cause of
     # the affiliation under-crediting the judge identified (~9 pts lost).
-    # Only apply when one string is meaningfully longer than the other (avoids
-    # spurious partial matches on short strings).
-    if len(na) > len(nb) * 1.5 or len(nb) > len(na) * 1.5:
+    # Apply when one string is meaningfully longer than the other AND the
+    # shorter one is at least 8 chars (avoids spurious partial matches on
+    # short strings like "UN" matching "United Nations").
+    short_len = min(len(na), len(nb))
+    long_len = max(len(na), len(nb))
+    if short_len >= 8 and long_len > short_len * 1.2:
         if fuzz.partial_ratio(na, nb) >= threshold:
             return True
     return False
@@ -231,13 +234,21 @@ def _score_list(predicted: Any, truth: Any, fuzzy: bool, field_name: str = "") -
         return ScoreResult(0.0, 0.0 >= CORRECT_THRESHOLD, "abstained (returned empty list) but values existed",
                            outcome=OUTCOME_ABSTAIN_MISS, honesty_score=ABSTENTION_CREDIT)
 
+    # For authors: use a stricter fuzzy threshold (98 vs 95) to prevent
+    # over-crediting near-miss author lists. The judge analysis showed the F1
+    # was too lenient — it accepted partial/reordered/dropped co-author matches
+    # a human would reject (e.g. 'Smith, J.' matched 'Smith, John' at 95).
+    # At 98, only near-identical names match (case/punctuation differences are
+    # still fine via _norm, but significant name variants are rejected).
+    fuzzy_threshold = 98 if field_name == "authors" else FUZZY_MATCH_THRESHOLD
+
     matched_truth: set[int] = set()
     matched_pred: set[int] = set()
     for pi, p in enumerate(pred_list):
         for ti, t in enumerate(truth_list):
             if ti in matched_truth:
                 continue
-            same = _norm(p) == _norm(t) or (fuzzy and _fuzzy_equal(p, t))
+            same = _norm(p) == _norm(t) or (fuzzy and _fuzzy_equal(p, t, threshold=fuzzy_threshold))
             if same:
                 matched_truth.add(ti)
                 matched_pred.add(pi)
