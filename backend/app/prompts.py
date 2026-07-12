@@ -77,6 +77,22 @@ def _categorical_options_block(spec: FieldSpec) -> str:
             lines.append(f"  {sector}: {', '.join(subs)}")
         return "\n" + "\n".join(lines) + "\n"
     options = get_options(spec.taxonomy_key)
+    # For sector_name: include the one-line definition per sector so the model
+    # understands what each sector means (not just a name to guess from). This
+    # directly addresses the "Social protection vs Health" confusion that caused
+    # 50% of misclassifications — the model had no definition to disambiguate.
+    if spec.taxonomy_key == "sectors":
+        from .taxonomy import load_taxonomy
+        defs = load_taxonomy().get("sector_definitions", {})
+        if defs:
+            lines = ["Allowed values — choose exactly one, verbatim (with definitions):"]
+            for sector in options:
+                definition = defs.get(sector, "")
+                if definition:
+                    lines.append(f"  {sector}: {definition}")
+                else:
+                    lines.append(f"  {sector}")
+            return "\n" + "\n".join(lines) + "\n"
     return "\nAllowed values (choose exactly one, verbatim):\n" + ", ".join(options) + "\n"
 
 
