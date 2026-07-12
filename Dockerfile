@@ -25,4 +25,7 @@ ENV DEP_MD_DIR=/data/corpus
 
 EXPOSE 8080
 
-CMD ["uvicorn", "backend.app.api:app", "--host", "0.0.0.0", "--port", "8080"]
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+CMD ["/app/entrypoint.sh"]
