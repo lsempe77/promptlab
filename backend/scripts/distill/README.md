@@ -11,20 +11,28 @@ eval-logic/code change — it must go through **human review before it ever ente
 The autonomous loop only ever moves prompts; it must never mint or promote a fine-tuned model on
 its own (that would hand the reward-hacking loop a weight-space surface to overfit the answer key).
 
-## Why distillation instead of training on ground truth
+## Two training paths — pick by how many human labels you have
 
-You have only ~100 human-labelled records per field. Training on those and then scoring against
-them is leakage; holding out enough to evaluate honestly leaves too little to train on.
-Distillation sidesteps both problems:
+| Human labels / field | Recommended path | Build step |
+|----------------------|------------------|------------|
+| ~100 | **Distillation** — too few humans to train on directly | `build_dataset.py` (teacher labels the unlabelled corpus) |
+| a few hundred | Ground truth, optionally + distilled examples | `build_dataset_from_gt.py` (+ `build_dataset.py`) |
+| **1,000+ (this repo has ~7k/field)** | **Direct fine-tune on human ground truth** — strongest, cleanest signal | `build_dataset_from_gt.py` |
 
-- **Training labels** come from the *teacher* (your best model + optimized prompt) run over the
-  **unlabelled** corpus — free, abundant, and containing **zero** ground-truth records.
-- **Evaluation** stays on the untouched 100 human GT records, scored with the *same*
-  `scoring.score_field` / `analytics.gate_metrics` the production gate uses.
+**Ground-truth path (recommended here).** Human answers beat a big model's guesses, so with
+thousands of labels you train directly on them. The only rule is **no leakage**: you must not score
+on records you trained on. `build_dataset_from_gt.py` splits records into **train / val / test**
+(70/15/15, seeded) and writes `splits.json`; `eval_distilled.py --test-ids splits.json` scores only
+the held-out **test** split with the same `scoring.score_field` / `analytics.gate_metrics` as the
+production gate.
 
-The scripts enforce the split: `label_corpus.py` only pulls records with **no** ground truth for
-the field, and `build_dataset.py` drops (as a second guard) any labelled record that slips
-through. The eval set is the human GT and never touches training.
+**Distillation path (for scarce labels).** The teacher (your best model + optimized prompt) labels
+the **unlabelled** corpus — free, abundant, and containing **zero** ground-truth records — so the
+whole human GT stays a clean eval set. `label_corpus.py` only pulls records with no GT, and
+`build_dataset.py` drops (second guard) any labelled record that slips through.
+
+You can also **combine**: fine-tune on the human train split *plus* distilled examples for more
+coverage on the hard fields.
 
 ## Pipeline
 
@@ -42,7 +50,23 @@ eval_distilled.py   run teacher AND student over the 100 human GT, score with th
                     production gate, print gate pass/fail + cost + CO₂e side by side
 ```
 
-## Run it (from the repo root, venv active)
+## Run it — ground-truth path (recommended, ~7k labels/field)
+
+```bash
+# 1. Build train/val/test from human GT (point DEP_DB_PATH/DEP_MD_DIR at the full corpus).
+python -m backend.scripts.distill.build_dataset_from_gt --field sub_sector
+
+# 2. Train (GPU) — or upload {train,val}.jsonl to a hosted FT provider.
+python -m backend.scripts.distill.train_lora \
+    --field sub_sector --base-model Qwen/Qwen2.5-7B-Instruct
+
+# 3. Evaluate ONLY on the held-out test split (leakage-safe) vs. the teacher.
+python -m backend.scripts.distill.eval_distilled --field sub_sector \
+    --test-ids backend/scripts/distill/data/sub_sector/splits.json \
+    --models "~anthropic/claude-sonnet-latest,my-distilled-sub-sector"
+```
+
+## Run it — distillation path (scarce labels)
 
 ```bash
 # 1. Teacher-label unlabelled corpus (needs OPENROUTER_API_KEY + a DB with corpus).
@@ -53,15 +77,9 @@ python -m backend.scripts.distill.label_corpus \
 python -m backend.scripts.distill.build_dataset \
     --field sub_sector --min-confidence 0.7 --val-frac 0.1
 
-# 3a. Train locally (GPU). Or 3b: upload {train,val}.jsonl to a hosted FT provider.
-python -m backend.scripts.distill.train_lora \
-    --field sub_sector --base-model Qwen/Qwen2.5-7B-Instruct
-
-# 4. Evaluate teacher vs. student on the human GT with the production gate.
-#    Point --base-url/--api-key (or env DISTILL_BASE_URL/DISTILL_API_KEY) at wherever
-#    the student is served (local vLLM, Fireworks/Together deployment, or OpenRouter).
-python -m backend.scripts.distill.eval_distilled \
-    --field sub_sector \
+# 3. Train (as above). 4. Evaluate on the whole human GT (no --test-ids needed —
+#    training used no GT, so the entire GT is a clean holdout):
+python -m backend.scripts.distill.eval_distilled --field sub_sector \
     --models "~anthropic/claude-sonnet-latest,my-distilled-sub-sector"
 ```
 
@@ -91,7 +109,8 @@ The student **passes** if, on the 100 human GT:
 
 | file | what it does | needs |
 |------|--------------|-------|
-| `label_corpus.py`  | teacher labels unlabelled corpus → `raw.jsonl` | `OPENROUTER_API_KEY`, DB+corpus |
-| `build_dataset.py` | filter/split → `train.jsonl`,`val.jsonl` (chat format) | local only |
-| `train_lora.py`    | LoRA SFT a cheap open base model | GPU + `torch`,`transformers`,`peft`,`trl`,`datasets` |
-| `eval_distilled.py`| teacher vs. student on human GT, production gate + cost/CO₂e | served student endpoint |
+| `build_dataset_from_gt.py` | **human GT** → `train/val/test.jsonl` + `splits.json` (recommended) | DB+corpus |
+| `label_corpus.py`  | teacher labels unlabelled corpus → `raw.jsonl` (scarce-label path) | `OPENROUTER_API_KEY`, DB+corpus |
+| `build_dataset.py` | filter/split teacher labels → `train/val.jsonl` (chat format) | local only |
+| `train_lora.py`    | LoRA SFT a cheap open base model on `train.jsonl` | GPU + `torch`,`transformers`,`peft`,`trl`,`datasets` |
+| `eval_distilled.py`| teacher vs. student on the gate + cost/CO₂e; `--test-ids` for leakage-safe holdout | served student endpoint |

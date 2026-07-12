@@ -25,7 +25,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
+from pathlib import Path
 
 from backend.app import analytics, carbon, config, db, gateway, prompts, scoring
 from backend.app.fields import FIELDS
@@ -75,7 +77,11 @@ def main() -> None:
     ap.add_argument("--project", default="dep-extraction")
     ap.add_argument("--field", required=True, choices=list(FIELDS.keys()))
     ap.add_argument("--models", required=True, help="comma-separated model ids (teacher,student,...)")
-    ap.add_argument("--n", type=int, default=100, help="GT records to evaluate on")
+    ap.add_argument("--n", type=int, default=100, help="GT records to evaluate on (ignored if --test-ids given)")
+    ap.add_argument("--test-ids", default=None,
+                    help="path to splits.json (or a JSON list of record_ids). REQUIRED when the "
+                         "model was fine-tuned on this field's ground truth: restricts scoring to "
+                         "the held-out TEST split so you don't measure memorised train rows (leakage).")
     ap.add_argument("--concurrency", type=int, default=gateway.DEFAULT_MAX_CONCURRENCY)
     ap.add_argument("--single-step", action="store_true", help="for sub_sector: skip sector context")
     ap.add_argument("--base-url", default=os.environ.get("DISTILL_BASE_URL"))
@@ -94,9 +100,21 @@ def main() -> None:
     field = args.field
     two_step = field == "sub_sector" and not args.single_step
 
+    # Held-out test set: when the model was fine-tuned on this field's GT, only
+    # these records give an honest score. Load all GT and filter to the test ids.
+    test_ids: set[int] | None = None
+    if args.test_ids:
+        raw = json.loads(Path(args.test_ids).read_text(encoding="utf-8"))
+        ids = raw["test"] if isinstance(raw, dict) else raw
+        test_ids = {int(i) for i in ids}
+        print(f"Restricting to {len(test_ids)} held-out TEST records (leakage-safe).")
+
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, args.project)
-        records = db.get_records_with_field(conn, project_id, field, limit=args.n)
+        limit = None if test_ids is not None else args.n
+        records = db.get_records_with_field(conn, project_id, field, limit=limit)
+        if test_ids is not None:
+            records = [r for r in records if r["id"] in test_ids]
         templates = {m: get_or_create_baseline(conn, project_id, field, model_id=m)["template"]
                      for m in models}
         sector_templates = (
