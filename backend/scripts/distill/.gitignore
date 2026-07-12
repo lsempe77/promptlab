@@ -1,0 +1,6 @@
+# Generated distillation artifacts — NEVER commit.
+# These contain corpus paper text + extracted author/affiliation names (PII) and
+# can be large. Keep them local / in object storage, not in git.
+data/
+out/
+*.jsonl
