@@ -22,6 +22,7 @@ from . import analytics, db, gateway, prompt_store, prompts, scoring
 from .scoring import RECALL_FLOOR
 from . import carbon
 from . import db_pg as _db_pg  # Phase 2: Postgres routing
+from .exemplars import Exemplar, parse_exemplars, serialize_exemplars, merge_exemplars
 
 _USE_PG = _db_pg.pg_enabled()
 from .corpus import read_md
@@ -319,6 +320,7 @@ def propose_revision(
     bold: bool = False,
     successes: list[dict[str, Any]] | None = None,
     field_value_type: str | None = None,
+    allow_exemplars: bool = False,
 ) -> tuple[str, str | None]:
     """Calls the reflector model and returns (revised_instruction, diagnosis).
     `avoid` is a list of {"instruction", "diagnosis"} dicts for recently
@@ -326,7 +328,17 @@ def propose_revision(
     twice. When `bold` is set (after repeated rejections) the reflector is asked
     for a substantially different rewrite and is shown `successes` (cases the
     current instruction gets right) so the bolder rewrite doesn't break them.
+
+    When `allow_exemplars` is True (categorical fields where few-shot examples
+    are most effective), the reflector may also propose 2-3 hard-case examples
+    alongside the revised instruction. These are serialized into the instruction
+    template (see exemplars.py) so they appear in the prompt the extraction model
+    sees — the one automated lever that can lift a plateaued categorical field
+    that text rewording alone cannot.
     """
+    # Parse any existing exemplars from the current instruction so the reflector
+    # can see and modify them rather than starting from scratch each iteration.
+    base_instruction, existing_exemplars = parse_exemplars(current_instruction)
     cases_text = _format_failures(failures, max_cases)
     avoid_text = _format_avoid_history(avoid or [])
     keep_text = ""
@@ -353,18 +365,67 @@ def propose_revision(
         for sector, subs in sbs.items():
             lines.append(f"  {sector}: {', '.join(subs)}")
         taxonomy_text = "\n".join(lines) + "\n"
+    # Show existing exemplars (if any) so the reflector can build on them
+    exemplar_context = ""
+    if allow_exemplars:
+        if existing_exemplars:
+            ex_lines = [
+                "\n\nCURRENT FEW-SHOT EXAMPLES already in the prompt (these will be KEPT — "
+                "propose NEW examples that cover DIFFERENT confusion patterns):\n"
+            ]
+            for ex in existing_exemplars:
+                ex_lines.append(f'  Paper: "{ex.paper}" -> Answer: {ex.answer}')
+            ex_lines.append(
+                "\nDo NOT duplicate the patterns above. Look at the FAILURE CASES and the "
+                "PER-CATEGORY CONFUSION PATTERN, then propose examples for confusion pairs "
+                "NOT already covered (e.g. if the existing examples cover Health-vs-Education "
+                "and you see Social-protection->Health failures, propose an example for that).\n"
+            )
+            exemplar_context = "\n".join(ex_lines) + "\n"
+        else:
+            exemplar_context = (
+                "\n\nNo few-shot examples yet. You SHOULD propose 2-3 hard cases as examples "
+                "(see the exemplars field in the JSON format below). Pick cases that illustrate "
+                "the exact confusion pattern in the failure cases — papers where the obvious "
+                "keyword points to one sector but the correct answer is a different one.\n"
+            )
+    exemplar_json_field = ""
+    exemplar_instructions = ""
+    if allow_exemplars:
+        exemplar_json_field = (
+            '    "exemplars": [{"paper": "<short paper description>", "answer": "<correct label>"}, ...]\n'
+        )
+        if existing_exemplars:
+            exemplar_instructions = (
+                "The instruction already has few-shot examples that help. Your main job now is to "
+                "propose NEW exemplars for confusion patterns NOT already covered. Keep the "
+                "revised_instruction as close to the current one as possible — a small tweak is fine, "
+                "but do NOT restructure it. The exemplars are the improvement, not the instruction.\n\n"
+            )
+        else:
+            exemplar_instructions = (
+                "You SHOULD also include 2-3 'exemplars' — hard cases where the obvious keyword misleads "
+                "but the correct answer is different. These will be shown to the extraction model as "
+                "worked examples. Pick cases from the FAILURE CASES above that best illustrate the "
+                "confusion pattern. Use the paper's actual content (title + key detail), not the record ID. "
+                "Keep the revised_instruction close to the current one — your main improvement "
+                "should be the exemplars, not a wholesale rewrite of the instruction.\n\n"
+            )
     base_prompt = (
         f"FIELD BEING EXTRACTED: {field_name}\n\n"
-        f"CURRENT INSTRUCTION:\n{current_instruction}\n\n"
+        f"CURRENT INSTRUCTION:\n{base_instruction}\n\n"
         f"FAILURE CASES (predicted vs. expected ground truth):\n{cases_text}"
         f"{confusion_text}"
         f"{taxonomy_text}"
+        f"{exemplar_context}"
         f"{keep_text}"
         f"{avoid_text}\n\n"
+        f"{exemplar_instructions}"
         "RESPOND IN VALID JSON:\n"
         "{\n"
         '    "diagnosis": "<1-2 sentences on the main failure pattern you see>",\n'
-        '    "revised_instruction": "<the new instruction text>"\n'
+        f'    "revised_instruction": "<the new instruction text>"{("," if allow_exemplars else "")}\n'
+        f"{exemplar_json_field}"
         "}\n"
     )
     # Reasoning-capable reflectors (e.g. Claude Sonnet) can spend their whole
@@ -403,10 +464,36 @@ def propose_revision(
             continue
         revised = obj.get("revised_instruction")
         if revised and str(revised).strip():
-            return str(revised).strip(), obj.get("diagnosis")
-        last_err = ParseError(
-            f"Reflector did not return a usable revised_instruction: {resp.content[:300]!r}"
-        )
+            revised_str = str(revised).strip()
+            # If the reflector proposed exemplars, serialize them into the
+            # instruction template so they appear in the extraction prompt.
+            if allow_exemplars:
+                raw_exemplars = obj.get("exemplars")
+                if isinstance(raw_exemplars, list) and raw_exemplars:
+                    # Validate exemplars against the field's taxonomy so the
+                    # reflector can't inject arbitrary labels or prompt-control
+                    # text.  Cap paper length and strip newlines from both
+                    # fields so they can't introduce new prompt structure.
+                    from .taxonomy import get_options
+                    valid_answers = set(
+                        a.lower().strip() for a in get_options(
+                            prompts.FIELDS[field_name].taxonomy_key or ""
+                        )
+                    ) if prompts.FIELDS[field_name].taxonomy_key else None
+                    exemplars = []
+                    for ex in raw_exemplars:
+                        if not isinstance(ex, dict):
+                            continue
+                        paper = str(ex.get("paper", "")).strip().replace("\n", " ")[:200]
+                        answer = str(ex.get("answer", "")).strip().replace("\n", " ")
+                        if not paper or not answer:
+                            continue
+                        if valid_answers is not None and answer.lower() not in valid_answers:
+                            continue
+                        exemplars.append(Exemplar(paper=paper, answer=answer))
+                    if exemplars:
+                        revised_str = serialize_exemplars(revised_str, exemplars)
+            return revised_str, obj.get("diagnosis")
     raise last_err if last_err else ParseError("Reflector produced no usable revision")
 
 
@@ -602,6 +689,7 @@ def _run_optimization(
                     print(f"[iter {it}] bold mode ON ({no_improve_count} consecutive rejections >= bold_after={bold_after})")
 
                 field_value_type = prompts.FIELDS[field_name].value_type if field_name in prompts.FIELDS else None
+                allow_exemplars = field_value_type == "single_categorical"
                 candidates: list[dict[str, Any]] = []
                 for k in range(candidates_per_iteration):
                     try:
@@ -609,6 +697,7 @@ def _run_optimization(
                             field_name, best_instruction, train_outcome.failures, reflector_model,
                             avoid=avoid, bold=bold, successes=train_outcome.successes,
                             field_value_type=field_value_type,
+                            allow_exemplars=allow_exemplars,
                         )
                     except (ParseError, gateway.GatewayError) as exc:
                         if verbose:
@@ -703,6 +792,30 @@ def _run_optimization(
                 ))
 
                 if accepted:
+                    # Phase 4+: Accumulate exemplars across accepted iterations.
+                    # The reflector proposes fresh examples each iteration, but
+                    # earlier accepted examples targeted different confusion
+                    # patterns — we don't want to lose them.  Merge the
+                    # candidate's exemplars with the incumbent's (deduped,
+                    # capped at MAX_EXEMPLARS) so the prompt builds a growing
+                    # library of hard cases instead of replacing them each time.
+                    if allow_exemplars:
+                        _inc_base, _inc_exs = parse_exemplars(best_instruction)
+                        _cand_base, _cand_exs = parse_exemplars(candidate_instruction)
+                        merged = merge_exemplars(_inc_exs, _cand_exs)
+                        if merged != _cand_exs:
+                            # Re-serialize with the merged exemplar set and
+                            # update the stored prompt version so the lineage
+                            # reflects what the model actually sees.
+                            candidate_instruction = serialize_exemplars(_cand_base, merged)
+                            db.set_prompt_version_accepted(conn, pv["id"], True)
+                            # Update the template in-place with merged exemplars
+                            conn.execute(
+                                "UPDATE prompt_versions SET template=? WHERE id=?",
+                                (candidate_instruction, pv["id"]),
+                            )
+                            if verbose:
+                                print(f"           merged exemplars: {len(_inc_exs)} incumbent + {len(_cand_exs)} proposed -> {len(merged)} total")
                     best_instruction = candidate_instruction
                     best_pv_id = pv["id"]
                     best_score = candidate_outcome.mean_score  # honesty, for ranking the next minibatch

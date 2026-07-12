@@ -16,6 +16,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+try:  # pragma: no cover - Windows console cp1252 guard
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from backend.app import gateway, optimizer  # noqa: E402
 from backend.app.optimizer import optimize_field  # noqa: E402
 from backend.app.prompts import BASELINE_INSTRUCTIONS  # noqa: E402
