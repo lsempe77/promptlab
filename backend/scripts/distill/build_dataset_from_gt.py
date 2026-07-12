@@ -16,10 +16,14 @@ Two limitations to know:
     teaches the student NOT to cite. To keep citation behaviour, populate excerpts
     from a teacher/existing runs (a documented enhancement) or mix in distilled
     examples that do carry excerpts.
-  * sub_sector is built SINGLE-STEP by default (full grouped hierarchy, no sector
-    context) so training and inference match. --sub-sector-context true uses the
-    TRUE human sector as context instead (stronger signal, but then eval must
-    supply a sector too — see README).
+  * sub_sector is a 2nd-level hierarchy UNDER sector, so it is built with the
+    human sector as context by DEFAULT (--sub-sector-context true): the prompt
+    narrows the ~66 sub-sectors to the ~8 under that sector. eval_distilled.py
+    mirrors this (it extracts sector first, then sub_sector with that context).
+    Caveat: if the upstream sector prediction is wrong at eval time, the correct
+    sub_sector may not even be in the narrowed list — so pair this with a good
+    sector model (ideally fine-tune sector too and chain them). Use
+    --sub-sector-context none for a flat 66-way single-step model instead.
 
 Usage (from repo root; point DEP_DB_PATH/DEP_MD_DIR at the full corpus):
     python -m backend.scripts.distill.build_dataset_from_gt --field sub_sector \
@@ -56,9 +60,11 @@ def main() -> None:
     ap.add_argument("--field", required=True, choices=list(FIELDS.keys()))
     ap.add_argument("--val-frac", type=float, default=0.15)
     ap.add_argument("--test-frac", type=float, default=0.15)
-    ap.add_argument("--sub-sector-context", choices=["none", "true"], default="none",
-                    help="sub_sector only: 'none' = single-step; 'true' = use the human "
-                         "sector_name as context (needs a sector at eval time too)")
+    ap.add_argument("--sub-sector-context", choices=["none", "true"], default="true",
+                    help="sub_sector only (default 'true'): sub_sector is a 2nd-level hierarchy "
+                         "UNDER sector. 'true' puts the human sector_name in the prompt so the "
+                         "allowed sub-sectors are narrowed to that sector's ~8 children (matches "
+                         "production; the biggest accuracy lever). 'none' = flat 66-way single-step.")
     args = ap.parse_args()
 
     spec = FIELDS[args.field]

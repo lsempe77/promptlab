@@ -66,6 +66,14 @@ python -m backend.scripts.distill.eval_distilled --field sub_sector \
     --models "~anthropic/claude-sonnet-latest,my-distilled-sub-sector"
 ```
 
+> **`sub_sector` is a 2nd-level hierarchy under `sector`.** By default the dataset is built
+> *with the human sector as context* (`--sub-sector-context true`): the prompt narrows the ~66
+> sub-sectors to the ~8 children of that sector — the biggest accuracy lever, matching production.
+> Eval chains the same way (predict sector → narrow → predict sub_sector). For best results
+> **fine-tune `sector_name` too and chain the two models**, since a wrong sector prediction can put
+> the correct sub_sector outside the narrowed list. Use `--sub-sector-context none` for a flat
+> 66-way model instead.
+
 ## Run it — distillation path (scarce labels)
 
 ```bash
