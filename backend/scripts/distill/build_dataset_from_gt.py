@@ -39,6 +39,7 @@ from backend.app import db, prompts
 from backend.app.corpus import read_md
 from backend.app.fields import FIELDS
 from backend.app.prompt_store import get_or_create_baseline
+from backend.app.scoring import split_alternatives
 
 from ._common import canonical_assistant_json, field_dir, setup_utf8, write_jsonl
 
@@ -109,6 +110,13 @@ def main() -> None:
             skipped += 1
             continue
         gt_value = rec["ground_truth"]
+        # A single-categorical GT cell may list several equally-valid answers
+        # joined by " | " (curators tagged >1 label). The scorer accepts any one,
+        # but as a TRAINING target we must emit a single valid label — teaching
+        # the model to output the literal "A | B" string would be wrong. Take the
+        # first alternative as the target.
+        if spec.value_type == "single_categorical" and isinstance(gt_value, str) and "|" in gt_value:
+            gt_value = split_alternatives(gt_value)[0]
         # An empty GT value teaches abstention; keep it (abstention is a valid
         # target) but it carries no positive class signal.
         context_value = sector_gt.get(rid) if use_true_sector else None

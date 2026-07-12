@@ -48,7 +48,11 @@ def read_jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
     out = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    # Split ONLY on "\n" — never str.splitlines(), which also breaks on exotic
+    # Unicode line separators (\x0b, \x85,  ,  , ...) that appear in the
+    # extracted paper text and that json.dumps(ensure_ascii=False) leaves literal,
+    # which would split a single JSONL record mid-string and corrupt parsing.
+    for line in path.read_text(encoding="utf-8").split("\n"):
         line = line.strip()
         if line:
             out.append(json.loads(line))
