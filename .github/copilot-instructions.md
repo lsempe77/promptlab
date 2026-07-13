@@ -35,7 +35,10 @@ DEP, scores every model against human-curated ground truth, and improves prompts
 - **Phase 2 Postgres (Neon):** `backend/app/db_pg.py` — runs/iterations/judgments/jobs/tasks
   mirror to Postgres when `DATABASE_URL` is set. SQLite stays authoritative for coordinator-owned
   tables (records, ground_truth, prompt_versions, projects).
-- **Running daemons** (restart after every `fly deploy`): supervisor PID 690, workers PIDs 691–694.
+- **Running daemons**: `entrypoint.sh` (the container CMD) auto-starts **one supervisor + one
+  worker** (plus the uvicorn API) on every machine boot — so they are NOT started manually and must
+  NOT be relaunched by hand after a normal deploy (a second supervisor double-enqueues work). The
+  supervisor runs `--max-cycles 12 --interval 60` and self-terminates when it converges.
   Pre-wipe backup at `../DEP/backups/promptlab_prod_20260708_214047.db`.
 - Dashboard + docs are merged to `main` → live on GitHub Pages.
 - **`auto_stop_machines = 'off'`** in fly.toml — the machine never auto-stops (background daemons run 24/7).
@@ -60,10 +63,16 @@ DEP, scores every model against human-curated ground truth, and improves prompts
 - **Backend** → `fly deploy` from the **promptlab repo root** (Dockerfile + fly.toml are here; the
   image ships `backend/app`, `backend/scripts`, `models.yaml` — the DB + corpus stay on the `/data`
   volume, so redeploys don't re-upload data).
-- **A deploy restarts the machine → kills all daemon processes** (`nohup` processes do NOT survive
-  a machine restart; only `/data` persists; uvicorn auto-restarts but daemons do not). After
-  deploying, **relaunch**: `. fly_helpers.ps1; Launch-Daemons` (or `fly ssh console -C "sh /data/launch_all_new.sh"`);
-  verify with `Show-Procs`; stop with `Kill-Daemons`.
+- **A deploy restarts the machine, but `entrypoint.sh` re-starts the API + supervisor + worker
+  automatically** (only `/data` persists; the processes are respawned by the container CMD, not by
+  `nohup`). So a normal `fly deploy` needs **NO** manual relaunch.
+  - **Do NOT** run `launch_all_new.sh` / `Launch-Daemons` after a deploy — the entrypoint has already
+    started a supervisor, and a second one **double-enqueues work (wasted API spend)**. (This is the
+    old, now-stale step; it predates the entrypoint auto-start.)
+  - Verify: `fly ssh console -C "sh /data/list_procs2.sh"` — expect exactly **one** supervisor + one worker.
+  - Relaunch manually **only** if the entrypoint set is gone (e.g. the supervisor exited after its
+    `--max-cycles 12`). **Kill any existing set first** (`fly ssh console -C "kill <pids>"` or
+    `/data/kill_all.sh`) so you never run two supervisors, then `fly ssh console -C "sh /data/launch_all_new.sh"`.
 
 ## Stop rules / guardrails (don't remove without asking the user)
 - `config.MAX_PRODUCTION_RECORDS = 200`, `config.PRODUCTION_ROLLOUT_STAGES = (100,)` —
