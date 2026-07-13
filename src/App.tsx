@@ -128,40 +128,51 @@ function App() {
   // Fetch ALL field statuses + baselines for the hero cards.
   // This is separate from the per-field detail fetch so the hero updates
   // even when the user is looking at a different field.
+  // Polls every 15s so the cards stay live as the backend processes runs.
   useEffect(() => {
     if (!selectedProject || !fields) return;
     let cancelled = false;
-    const statuses = new Map<string, StageStatus>();
-    const baselines = new Map<string, number | null>();
-    fields.forEach((f) => {
-      api.stageStatus(selectedProject, f.name)
-        .then((s) => {
-          if (cancelled) return;
-          statuses.set(f.name, s);
-          // Baseline accuracy: fetch v1 stage status to get the starting point
-          return api.stageStatus(selectedProject, f.name, 1);
-        })
-        .then((s1) => {
-          if (cancelled) return;
-          if (s1 && s1.models.length > 0) {
-            baselines.set(f.name, Math.max(...s1.models.map((m) => m.gate_metric)));
-          } else {
-            baselines.set(f.name, null);
-          }
-          if (statuses.size === fields.length) {
-            setAllFieldStatuses(new Map(statuses));
-            setAllFieldBaselines(new Map(baselines));
-          }
-        })
-        .catch((e) => {
-          console.warn(`[hero ${f.name}]`, e);
-          if (statuses.size === fields.length) {
-            setAllFieldStatuses(new Map(statuses));
-            setAllFieldBaselines(new Map(baselines));
-          }
-        });
-    });
-    return () => { cancelled = true; };
+
+    const fetchAll = () => {
+      const statuses = new Map<string, StageStatus>();
+      const baselines = new Map<string, number | null>();
+      let completed = 0;
+      const total = fields.length;
+      fields.forEach((f) => {
+        api.stageStatus(selectedProject, f.name)
+          .then((s) => {
+            if (cancelled) return;
+            statuses.set(f.name, s);
+            return api.stageStatus(selectedProject, f.name, 1);
+          })
+          .then((s1) => {
+            if (cancelled) return;
+            if (s1 && s1.models.length > 0) {
+              baselines.set(f.name, Math.max(...s1.models.map((m) => m.gate_metric)));
+            } else {
+              baselines.set(f.name, null);
+            }
+          })
+          .catch((e) => {
+            console.warn(`[hero ${f.name}]`, e);
+          })
+          .finally(() => {
+            completed++;
+            if (cancelled) return;
+            if (completed >= total) {
+              setAllFieldStatuses(new Map(statuses));
+              setAllFieldBaselines(new Map(baselines));
+            }
+          });
+      });
+    };
+
+    fetchAll();
+    const id = window.setInterval(fetchAll, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
   }, [selectedProject, fields]);
 
   // On project/field change: fetch version-independent data (self-consistency + gate status)
