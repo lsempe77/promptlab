@@ -53,8 +53,12 @@ function HeroCard({ field, status, baselineAccuracy, selected, onClick }: HeroCa
   const acc = bestAccuracy(status);
   const gate = status?.gate_threshold ?? 0.9;
   const gatePct = Math.round(gate * 100);
-  const accPct = acc != null ? Math.round(acc * 100) : null;
-  const delta = acc != null && baselineAccuracy != null ? accPct! - Math.round(baselineAccuracy * 100) : null;
+  // For list fields this "best score" is element-level F1, not accuracy.
+  const metricName = field.value_type === "single_categorical" ? "accuracy" : "F1";
+  // Round DOWN so a sub-gate value (e.g. 0.895) never shows as "90%".
+  const accPct = acc != null ? Math.floor(acc * 100) : null;
+  // Compute Δ from the raw values (not the floored display) to avoid ±1 drift.
+  const delta = acc != null && baselineAccuracy != null ? Math.round((acc - baselineAccuracy) * 100) : null;
   const accepted = status?.prompt_versions_accepted ?? 0;
   const { label, cls, icon } = statusInfo(status, acc);
   const leader = status && status.models.length > 0
@@ -70,7 +74,7 @@ function HeroCard({ field, status, baselineAccuracy, selected, onClick }: HeroCa
       <span className="hero-card__name">{field.label}</span>
       <div className="hero-card__metric">
         {accPct != null ? (
-          <span className="hero-card__pct">{accPct}%</span>
+          <span className="hero-card__pct" title={`${accPct}% ${metricName}`}>{accPct}%</span>
         ) : (
           <span className="hero-card__pct hero-card__pct--na">—</span>
         )}
@@ -91,7 +95,7 @@ function HeroCard({ field, status, baselineAccuracy, selected, onClick }: HeroCa
         )}
       </div>
       <div className={`hero-card__badge ${cls}`}>{icon} {label}</div>
-      <div className="hero-card__gate muted">gate: {gatePct}%</div>
+      <div className="hero-card__gate muted">gate: {gatePct}% {metricName}</div>
     </button>
   );
 }

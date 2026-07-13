@@ -35,6 +35,8 @@ function statusLabel(
   }
   if (acc === null) return { icon: "⋯", label: "No data yet", cls: "fo-status-na" };
   if (passing > 0) return { icon: "✅", label: "Good enough to use", cls: "fo-status-pass" };
+  // The 0.85 / 0.70 fractions below are cosmetic "how close" display bands, NOT
+  // gate constants — unrelated to the recall floor (scoring.RECALL_FLOOR=0.85).
   if (acc >= gate * 0.85) return { icon: "⚠", label: "Almost there", cls: "fo-status-close" };
   if (acc >= gate * 0.70) return { icon: "↻", label: "Still improving", cls: "fo-status-progress" };
   return { icon: "✗", label: "Needs more work", cls: "fo-status-far" };
@@ -42,7 +44,9 @@ function statusLabel(
 
 function pct(n: number | null) {
   if (n == null) return "—";
-  return `${Math.round(n * 100)}%`;
+  // Round DOWN so a value below the gate (e.g. 0.895) never displays as "90%"
+  // and reads as passing when it isn't.
+  return `${Math.floor(n * 100)}%`;
 }
 
 export function FieldOverview({
@@ -87,8 +91,9 @@ export function FieldOverview({
       <div className="fo-header">
         <h3 className="fo-title">How accurate are our AIs at pulling out each piece of information?</h3>
         <p className="fo-subtitle muted">
-          We accept an AI when it gets answers right at least 90% of the time.
-          Bars show the best AI's accuracy for each task.
+          We accept an AI when its quality score reaches 90%. Bars show the best AI's score for
+          each task — that's F1 for list fields (authors, affiliations, countries) and accuracy for
+          single-choice fields (sector, sub-sector).
         </p>
       </div>
       <div className="fo-rows">
@@ -103,6 +108,12 @@ export function FieldOverview({
           const barPct = acc != null ? Math.min(acc * 100, 100) : 0;
           const gatePct = gate * 100;
           const isSelected = field.name === selectedField;
+          // For list fields the score is element-level F1, not accuracy.
+          const metricName = field.value_type === "single_categorical" ? "accuracy" : "F1";
+          // Green only when the backend says a model actually passes the gate
+          // (which includes the recall floor for list fields) — NOT on the bare
+          // best-metric >= threshold, which would ignore that floor.
+          const barCls = passing > 0 ? "fo-bar--pass" : acc != null && acc >= gate * 0.85 ? "fo-bar--close" : "fo-bar--fail";
 
           return (
             <button
@@ -112,15 +123,15 @@ export function FieldOverview({
               title={`Click to explore ${field.label} in detail`}
             >
               <span className="fo-field-label">{field.label}</span>
-              <div className="fo-bar-wrap" aria-label={`${pct(acc)} accuracy`}>
+              <div className="fo-bar-wrap" aria-label={`${pct(acc)} ${metricName}`}>
                 <div
-                  className={`fo-bar ${acc != null && acc >= gate ? "fo-bar--pass" : acc != null && acc >= gate * 0.85 ? "fo-bar--close" : "fo-bar--fail"}`}
+                  className={`fo-bar ${barCls}`}
                   style={{ width: `${barPct}%` }}
                 />
                 {/* Gate marker */}
                 <div className="fo-gate-line" style={{ left: `${gatePct}%` }} />
               </div>
-              <span className="fo-pct">{pct(acc)}</span>
+              <span className="fo-pct" title={`${pct(acc)} ${metricName}`}>{pct(acc)}</span>
               <span className={`fo-status ${cls}`}>{icon} {label}</span>
             </button>
           );
