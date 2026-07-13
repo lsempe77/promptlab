@@ -194,6 +194,11 @@ def add_run_pg(conn, **kwargs: Any) -> int | None:
     kwargs.setdefault("created_at", now_pg())
     if "parsed_value" in kwargs:
         kwargs["parsed_value_json"] = json.dumps(kwargs.pop("parsed_value"), ensure_ascii=False)
+    # Strip NUL bytes from all string values — some model responses or paper
+    # texts contain embedded 0x00 bytes that PostgreSQL rejects.
+    for k, v in kwargs.items():
+        if isinstance(v, str):
+            kwargs[k] = v.replace("\x00", "")
     cols = ", ".join(kwargs.keys())
     placeholders = ", ".join(f"%({k})s" for k in kwargs)
     with conn.cursor() as cur:
