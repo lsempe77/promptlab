@@ -183,11 +183,23 @@ export function ModelCard({
   const accepted = iters?.filter((i) => i.accepted).length ?? 0;
   const rejected = (iters?.length ?? 0) - accepted;
   const accCi = wilson95(summary.accuracy, summary.n);
-  // The production gate is the field-type-aware quality metric (F1 for list
-  // fields, accuracy for categorical), derived from this model's confusion.
+  // Trust the backend's authoritative, version-specific gate (stageGate): it
+  // applies the recall floor (list fields) and the judge companion, which this
+  // card must NOT re-derive. Fall back to this model's confusion only when no
+  // stage gate was provided (note: confusion is version-agnostic, so it can
+  // differ from the version-specific gate — hence stageGate is preferred).
   const gateMetric =
-    confusion == null ? null : confusion.type === "list" ? confusion.f1 : confusion.accuracy;
-  const gateMetricName = confusion?.type === "list" ? "F1" : "accuracy";
+    stageGate?.gate_metric ??
+    (confusion == null ? null : confusion.type === "list" ? confusion.f1 : confusion.accuracy);
+  const gateMetricName =
+    (stageGate?.gate_metric_name ?? (confusion?.type === "list" ? "f1" : "accuracy")) === "f1"
+      ? "F1"
+      : "accuracy";
+  // gate_passed comes from the backend (recall floor + judge applied). Only if
+  // there's no stage gate do we fall back to a bare metric>=threshold check.
+  const gatePassed: boolean | null =
+    stageGate?.gate_passed ??
+    (gateMetric != null && gateThreshold != null ? gateMetric >= gateThreshold : null);
 
   const [expanded, setExpanded] = useState(false);
   const shortName = summary.model_id.split("/").pop()?.replace(/^~/, "").replace(/-latest$/, "") ?? summary.model_id;
@@ -211,11 +223,9 @@ export function ModelCard({
               running
             </span>
           )}
-          {gateMetric != null && gateThreshold != null && (
-            <span className={`gate-chip ${gateMetric >= gateThreshold ? "pass" : "gated"}`}>
-              {gateMetric >= gateThreshold
-                ? `✅ ${pct(gateMetric)}`
-                : `${pct(gateMetric)}`}
+          {gateMetric != null && gatePassed != null && (
+            <span className={`gate-chip ${gatePassed ? "pass" : "gated"}`}>
+              {gatePassed ? `✅ ${pct(gateMetric)}` : pct(gateMetric)}
             </span>
           )}
           {gateMetric == null && (
@@ -261,11 +271,13 @@ export function ModelCard({
           <div className="stat-card highlight">
             <span className="stat-value">{gateMetric != null ? pct(gateMetric) : "—"}</span>
             <span className="stat-label">Quality — {gateMetricName}</span>
-            {gateMetric != null && gateThreshold != null && (
-              <span className={`gate-chip ${gateMetric >= gateThreshold ? "pass" : "gated"}`}>
-                {gateMetric >= gateThreshold
-                  ? `✅ Accurate enough to use (≥${Math.round(gateThreshold * 100)}%)`
-                  : `Not yet (${Math.round(gateThreshold * 100)}% needed)`}
+            {gateMetric != null && gatePassed != null && (
+              <span className={`gate-chip ${gatePassed ? "pass" : "gated"}`}>
+                {gatePassed
+                  ? `✅ Accurate enough to use (≥${Math.round((gateThreshold ?? 0.9) * 100)}%)`
+                  : gateMetricName === "F1"
+                    ? `Not yet (needs ≥${Math.round((gateThreshold ?? 0.9) * 100)}% F1 and ≥85% recall)`
+                    : `Not yet (${Math.round((gateThreshold ?? 0.9) * 100)}% needed)`}
               </span>
             )}
           </div>

@@ -45,7 +45,8 @@ function StageBadge({ s }: { s: StageStatus }) {
   const gatePct = Math.round(s.gate_threshold * 100);
   const leader =
     evaluated > 0 ? s.models.reduce((a, b) => (b.gate_metric > a.gate_metric ? b : a)) : null;
-  const bestPct = leader != null ? Math.round(leader.gate_metric * 100) : null;
+  // Round DOWN so a sub-gate leader (e.g. 0.895) never displays as "90%".
+  const bestPct = leader != null ? Math.floor(leader.gate_metric * 100) : null;
   const isList = s.models.length > 0 && s.models[0].gate_metric_name !== "accuracy";
   const metricName = isList ? "F1" : "accuracy";
   const gap = bestPct != null ? gatePct - bestPct : null;
@@ -64,7 +65,9 @@ function StageBadge({ s }: { s: StageStatus }) {
         <span className="muted"> {passing} of {evaluated} AIs clear the {gatePct}% bar.</span></span>
       ) : evaluated > 0 && leader && bestPct != null ? (
         <span>Best so far: <strong>{shortModel(leader.model_id)}</strong> at <strong>{bestPct}% {metricName}</strong>
-        <span className="muted"> — {gap} {gap === 1 ? "pt" : "pts"} below the {gatePct}% bar; not production-ready yet (0 of {evaluated} pass).</span></span>
+        <span className="muted"> — {gap != null && gap > 0
+          ? `${gap} ${gap === 1 ? "pt" : "pts"} below the ${gatePct}% bar`
+          : `clears the ${gatePct}% ${metricName} mark but not the full quality gate (recall floor / judge check)`}; not production-ready yet (0 of {evaluated} pass).</span></span>
       ) : (
         <span className="muted">Not yet evaluated (need {gatePct}% {metricName})</span>
       )}

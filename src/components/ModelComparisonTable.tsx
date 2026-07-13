@@ -123,9 +123,9 @@ export function ModelComparisonTable({
     { key: "judged", label: "Concordance", title: "Semantic accuracy from a cross-family LLM judge (\"same real-world value?\"). An independent corroboration of the gate.", numeric: true, get: (r) => r.judged, render: (r) => pct(r.judged) },
     { key: "accuracy", label: "Fuzzy-match", title: "Heuristic string-match rate (fuzzy matches count as correct). Superseded by the gate metric; shown for reference.", numeric: true, get: (r) => r.accuracy, render: (r) => pct(r.accuracy) },
     { key: "n_errors", label: "Errors", numeric: true, get: (r) => r.n_errors, render: (r) => <span className={r.n_errors > 0 ? "has-errors" : ""}>{r.n_errors}</span> },
-    { key: "mean_latency_ms", label: "Latency", numeric: true, get: (r) => r.mean_latency_ms, render: (r) => ms(r.mean_latency_ms) },
-    { key: "total_cost_usd", label: "Cost", numeric: true, get: (r) => r.total_cost_usd, render: (r) => usd(r.total_cost_usd) },
-    { key: "total_co2e_grams", label: "CO₂e", numeric: true, get: (r) => r.total_co2e_grams, render: (r) => co2(r.total_co2e_grams) },
+    { key: "mean_latency_ms", label: "Latency", title: "Mean per-call latency.", numeric: true, get: (r) => r.mean_latency_ms, render: (r) => ms(r.mean_latency_ms) },
+    { key: "total_cost_usd", label: "Total cost", title: "Total USD spent on this model's runs (summed over its # Refs) — not per-record; models with more refs cost more.", numeric: true, get: (r) => r.total_cost_usd, render: (r) => usd(r.total_cost_usd) },
+    { key: "total_co2e_grams", label: "Total CO₂e", title: "Total estimated CO₂e (summed over this model's # Refs) — not per-record.", numeric: true, get: (r) => r.total_co2e_grams, render: (r) => co2(r.total_co2e_grams) },
   ];
 
   const col = cols.find((c) => c.key === sortKey) ?? cols[0];

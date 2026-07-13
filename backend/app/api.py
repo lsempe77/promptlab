@@ -800,6 +800,14 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
         gm = analytics.gate_metrics(field_name, mrows)
         judged = judged_by_model.get(model_id)
         gate_passed = gm["metric"] >= scoring.GATE_THRESHOLD
+        # List fields must ALSO clear the recall floor: element-level F1 can pass
+        # by over-predicting while still missing >15% of true values (invisible in
+        # QA), so a model with F1>=0.90 but recall<0.85 is NOT production-ready.
+        # Categorical fields have recall=None, so the floor doesn't apply to them.
+        # This mirrors optimizer.py / supervisor.py so the dashboard's gate matches
+        # the gate the optimizer actually enforces (previously it did not).
+        if gate_passed and gm.get("recall") is not None and gm["recall"] < scoring.RECALL_FLOOR:
+            gate_passed = False
         # Judge companion gate (authors over-crediting fix): the element-level
         # F1 is too lenient on near-miss author lists — it accepts partial /
         # reordered / dropped-co-author matches a human would reject. When an

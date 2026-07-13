@@ -19,6 +19,9 @@ function pct(x: number | null) {
 }
 
 function cellClass(score: number | null, threshold: number): string {
+  // NOTE: the 0.78 band is a purely cosmetic "close vs far" cell-shading cutoff,
+  // NOT a gate constant — it is unrelated to scoring.RECALL_FLOOR (0.85). Only
+  // `score >= threshold` reflects the real gate metric passing.
   if (score == null) return "vprog-cell-na";
   if (score >= threshold) return "vprog-cell-pass";
   if (score >= threshold * 0.78) return "vprog-cell-close";
