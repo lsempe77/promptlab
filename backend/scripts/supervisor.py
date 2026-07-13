@@ -295,6 +295,7 @@ def main() -> None:
          f"{' | DRY RUN' if args.dry_run else ''}")
 
     run_no = 0
+    converged_count = 0  # consecutive convergences — used for exponential backoff
     while True:
         run_no += 1
         _log(f"===== supervisor run {run_no}{' (daemon)' if args.loop else ''} =====")
@@ -385,10 +386,11 @@ def main() -> None:
 
             if not any_action:
                 _log("Converged: no field has an actionable step this run.")
+                converged_count += 1
                 break
         else:
             _log(f"Reached max_cycles={args.max_cycles} (safety cap) for this run.")
-
+            converged_count = 0  # reset: a full cycle means there was work to do
         if args.dry_run or not args.loop:
             break
         if args.max_runs and run_no >= args.max_runs:
@@ -419,8 +421,17 @@ def main() -> None:
                     n_active = _active_after_requeue()
                 _log("Queue drained — starting next run.")
 
-        _log(f"Sleeping {args.interval}s before next run...")
-        time.sleep(args.interval)
+        # Exponential backoff when converged: if the system has nothing to do,
+        # sleep progressively longer (60s → 5min → 15min → 30min) instead of
+        # burning cycles every 60s. Reset to the base interval when work is found.
+        if converged_count > 0:
+            backoff_steps = [60, 300, 900, 1800]
+            sleep_secs = backoff_steps[min(converged_count - 1, len(backoff_steps) - 1)]
+            _log(f"Converged {converged_count}x in a row — sleeping {sleep_secs}s (backoff).")
+        else:
+            sleep_secs = args.interval
+            _log(f"Sleeping {sleep_secs}s before next run...")
+        time.sleep(sleep_secs)
 
     _log("Supervisor done.")
 
