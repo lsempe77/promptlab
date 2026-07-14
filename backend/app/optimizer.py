@@ -181,7 +181,7 @@ def evaluate_instruction(
             continue
         system_prompt, user_prompt = prompts.build_prompt(field_name, rec["title"] or "", md_text, instruction=instruction)
         usable_records.append(rec)
-        sources.append(md_text[: prompts.MAX_CHARS])
+        sources.append(md_text[: prompts.field_max_chars(field_name)])
         jobs.append({"model_id": model_id, "system_prompt": system_prompt, "user_prompt": user_prompt})
 
     responses = gateway.call_model_batch(jobs, max_workers=max_workers)

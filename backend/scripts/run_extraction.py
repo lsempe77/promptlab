@@ -212,7 +212,7 @@ def main() -> None:
             print(f"  [skip] record {rec['id']}: cannot read md ({exc})")
             skipped += len(needed_models)
             continue
-        source_cache[rec["id"]] = md_text[: prompts.MAX_CHARS]
+        source_cache[rec["id"]] = md_text[: prompts.field_max_chars(args.field)]
         for model_id in needed_models:
             # For sub_sector: look up the previously extracted sector_name for
             # this record (same model) so the prompt can narrow sub-sector

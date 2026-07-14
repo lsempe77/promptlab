@@ -21,7 +21,8 @@ from collections import Counter
 from typing import Any
 
 from .fields import FIELDS
-from .scoring import _fuzzy_equal, _norm
+from .normalize import authors_equal
+from .scoring import FUZZY_MATCH_THRESHOLD, _fuzzy_equal, _norm
 from .taxonomy import get_options
 
 MAX_CATEGORIES = 12  # most frequent ground-truth categories shown individually; rest -> "(other)"
@@ -127,15 +128,21 @@ def _as_list(v: Any) -> list[str]:
     return [] if not v else [str(v)]
 
 
-def _match_counts(predicted: list[str], truth: list[str], fuzzy: bool) -> tuple[int, int, int]:
-    """Greedy matching mirroring scoring._score_list. Returns (tp, fp, fn)."""
+def _match_counts(predicted: list[str], truth: list[str], fuzzy: bool, field_name: str = "") -> tuple[int, int, int]:
+    """Greedy matching mirroring scoring._score_list (same thresholds + the
+    authors matcher) so the gate F1 equals the per-run scores. Returns (tp, fp, fn)."""
+    threshold = 98 if field_name == "authors" else FUZZY_MATCH_THRESHOLD
     matched_truth: set[int] = set()
     matched_pred: set[int] = set()
     for pi, p in enumerate(predicted):
         for ti, t in enumerate(truth):
             if ti in matched_truth:
                 continue
-            if _norm(p) == _norm(t) or (fuzzy and _fuzzy_equal(p, t)):
+            if (
+                _norm(p) == _norm(t)
+                or (field_name == "authors" and authors_equal(p, t))
+                or (fuzzy and _fuzzy_equal(p, t, threshold=threshold))
+            ):
                 matched_truth.add(ti)
                 matched_pred.add(pi)
                 break
@@ -145,12 +152,12 @@ def _match_counts(predicted: list[str], truth: list[str], fuzzy: bool) -> tuple[
     return tp, fp, fn
 
 
-def _list_confusion(rows: list[dict[str, Any]], fuzzy: bool, universe_size: int | None) -> dict:
+def _list_confusion(rows: list[dict[str, Any]], fuzzy: bool, universe_size: int | None, field_name: str = "") -> dict:
     tp = fp = fn = 0
     tn = 0
     for r in rows:
         truth_list = _as_list(r["truth"])
-        a, b, c = _match_counts(_as_list(r["predicted"]), truth_list, fuzzy)
+        a, b, c = _match_counts(_as_list(r["predicted"]), truth_list, fuzzy, field_name)
         tp += a
         fp += b
         fn += c
@@ -184,7 +191,8 @@ def compute_confusion(field_name: str, rows: list[dict[str, Any]]) -> dict:
     if spec.value_type == "single_categorical":
         return _categorical_confusion(rows)
     universe_size = len(get_options(spec.taxonomy_key)) if spec.taxonomy_key else None
-    return _list_confusion(rows, fuzzy=(spec.value_type == "list_text"), universe_size=universe_size)
+    return _list_confusion(rows, fuzzy=(spec.value_type == "list_text"), universe_size=universe_size,
+                           field_name=field_name)
 
 
 def gate_metrics(field_name: str, rows: list[dict[str, Any]]) -> dict:

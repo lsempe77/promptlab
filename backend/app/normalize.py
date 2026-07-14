@@ -266,6 +266,59 @@ def normalize_institution(value: str) -> str:
     return value
 
 
+# ── Author names ─────────────────────────────────────────────────────────────
+# Author lists under-credit on FORMAT, not substance: ground truth uses initials
+# ("Black, R. E.") while models expand to full given names ("Black, Robert E.") —
+# the token scorer counts these as different people (~9 F1 pts on the production
+# set). The matcher below is format-robust but PRECISION-PRESERVING and is gated
+# so it does NOT re-introduce the over-crediting that the stricter fuzzy threshold
+# (see scoring._score_list) was added to remove:
+#   * surnames must match;
+#   * given names must be pairwise compatible (equal, or one is a single-letter
+#     initial of the other);
+#   * a match on a LONE bare first initial vs a full name (the ambiguous
+#     "Smith, J." vs "Smith, John" case) is NOT credited — corroboration is
+#     required: either >=2 agreeing given components, or an exact given match.
+# So "Black, R. E." == "Black, Robert E." (the E corroborates) but
+# "Smith, J." != "Smith, John" and "Smith, John" != "Smith, Jane".
+
+def _parse_author(name: str) -> tuple[str, list[str]]:
+    """(surname, [given-name tokens]) from 'Last, First M.' or 'First M. Last'.
+    Tokens are normalized; initials become single-letter tokens ('R. E.'->['r','e'])."""
+    s = (name or "").strip()
+    if "," in s:
+        last, _, given = s.partition(",")
+    else:
+        parts = s.split()
+        last, given = (parts[-1], " ".join(parts[:-1])) if len(parts) > 1 else (s, "")
+    return _norm_key(last), [t for t in _norm_key(given).split() if t]
+
+
+def _given_token_compatible(x: str, y: str) -> bool:
+    return x == y or (len(x) == 1 and y.startswith(x)) or (len(y) == 1 and x.startswith(y))
+
+
+def authors_equal(a: str, b: str) -> bool:
+    """Whether two author strings denote the same person, tolerating
+    initials-vs-full-given-name differences — but only with corroboration (see
+    module note), so a lone bare initial never matches a full first name."""
+    la, ga = _parse_author(a)
+    lb, gb = _parse_author(b)
+    if not la or la != lb:
+        return False
+    if not ga or not gb:
+        return True  # surname-only on one side: can't distinguish, accept
+    exact = 0
+    for x, y in zip(ga, gb):  # positional: first, middle, ...
+        if not _given_token_compatible(x, y):
+            return False
+        if x == y:
+            exact += 1
+    # All compatible. Require corroboration to avoid crediting a bare initial:
+    # >=2 shared given components, or at least one exact (identical) agreement.
+    return min(len(ga), len(gb)) >= 2 or exact >= 1
+
+
 # ── Field-aware dispatch ────────────────────────────────────────────────────
 
 def normalize_value(field_name: str, value: str) -> str:
