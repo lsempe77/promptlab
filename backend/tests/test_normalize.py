@@ -14,10 +14,44 @@ from backend.app.normalize import (
     _country_canonical_map,
     _is_university_alias,
     _norm_key,
+    authors_equal,
     normalize_country,
     normalize_institution,
     normalize_value,
 )
+
+
+class TestAuthorsEqual:
+    """Format-robust author matching (initials <-> full given name), gated so a
+    lone bare initial does not match a full first name (the 2c3756b concern)."""
+
+    def test_initials_vs_full_with_corroboration_match(self):
+        # >=2 given components agree (R->Robert, E==E) -> same person
+        assert authors_equal("Black, R. E.", "Black, Robert E.")
+        assert authors_equal("Osendarp, S. J. M.", "Osendarp, Saskia J. M.")
+
+    def test_punctuation_and_spacing_irrelevant(self):
+        assert authors_equal("Li, S", "Li, S.")
+
+    def test_first_last_order_vs_last_first(self):
+        assert authors_equal("Robert E. Black", "Black, Robert E.")
+
+    def test_lone_initial_vs_full_first_name_does_not_match(self):
+        # the deliberate 2c3756b exclusion: bare first initial is ambiguous
+        assert not authors_equal("Smith, J.", "Smith, John")
+        assert not authors_equal("Smith, John", "Smith, J.")
+
+    def test_different_full_given_names_do_not_match(self):
+        assert not authors_equal("Smith, John", "Smith, Jane")
+
+    def test_different_surnames_do_not_match(self):
+        assert not authors_equal("Black, Robert E.", "White, Robert E.")
+
+    def test_surname_only_one_side_accepts(self):
+        assert authors_equal("Smith", "Smith, John")
+
+    def test_conflicting_middle_initial_does_not_match(self):
+        assert not authors_equal("Black, Robert A.", "Black, Robert E.")
 
 
 # --------------------------------------------------------------------------- #

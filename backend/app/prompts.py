@@ -27,6 +27,23 @@ SYSTEM_PROMPT = (
 MAX_CHARS = 10000  # after corpus.read_md() strips Tika/HTML boilerplate, this covers ~90% of
                     # papers' full author/affiliation block (see corpus.py for the measurement)
 
+# Author fields need a WIDER window than categorical ones: co-authors and their
+# affiliations/countries often appear later (long abstracts, end-of-paper
+# affiliation footnotes) and were being truncated -> the "GT country/affiliation
+# no model found" misses in the disagreement analysis. Sector/sub_sector only
+# need the abstract+intro, so they stay at the cheaper default. Tune per field;
+# validate a change by re-running extraction (larger window costs more tokens).
+FIELD_MAX_CHARS: dict[str, int] = {
+    "authors": 20000,
+    "author_affiliation": 20000,
+    "author_country": 20000,
+}
+
+
+def field_max_chars(field_name: str) -> int:
+    """Char budget of the paper text shown for a field (see FIELD_MAX_CHARS)."""
+    return FIELD_MAX_CHARS.get(field_name, MAX_CHARS)
+
 _LIST_JSON_CONTRACT = """
 RESPOND IN VALID JSON FORMAT:
 {
@@ -137,7 +154,7 @@ def build_prompt(
     biggest accuracy lever for this field.
     """
     spec = FIELDS[field_name]
-    text = md_text[:MAX_CHARS]
+    text = md_text[:field_max_chars(field_name)]
     instruction = instruction if instruction is not None else BASELINE_INSTRUCTIONS[field_name]
 
     parts = [

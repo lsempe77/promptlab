@@ -20,7 +20,7 @@ from typing import Any
 from rapidfuzz import fuzz
 
 from .fields import FIELDS
-from .normalize import normalize_value
+from .normalize import authors_equal, normalize_value
 
 FUZZY_MATCH_THRESHOLD = 95  # rapidfuzz 0-100 scale
 CORRECT_THRESHOLD = 0.9  # score (0-1) at/above which a run counts as "correct"
@@ -248,7 +248,11 @@ def _score_list(predicted: Any, truth: Any, fuzzy: bool, field_name: str = "") -
         for ti, t in enumerate(truth_list):
             if ti in matched_truth:
                 continue
-            same = _norm(p) == _norm(t) or (fuzzy and _fuzzy_equal(p, t, threshold=fuzzy_threshold))
+            same = (
+                _norm(p) == _norm(t)
+                or (field_name == "authors" and authors_equal(p, t))
+                or (fuzzy and _fuzzy_equal(p, t, threshold=fuzzy_threshold))
+            )
             if same:
                 matched_truth.add(ti)
                 matched_pred.add(pi)
