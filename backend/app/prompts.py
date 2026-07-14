@@ -27,16 +27,18 @@ SYSTEM_PROMPT = (
 MAX_CHARS = 10000  # after corpus.read_md() strips Tika/HTML boilerplate, this covers ~90% of
                     # papers' full author/affiliation block (see corpus.py for the measurement)
 
-# Author fields need a WIDER window than categorical ones: co-authors and their
-# affiliations/countries often appear later (long abstracts, end-of-paper
-# affiliation footnotes) and were being truncated -> the "GT country/affiliation
-# no model found" misses in the disagreement analysis. Sector/sub_sector only
-# need the abstract+intro, so they stay at the cheaper default. Tune per field;
-# validate a change by re-running extraction (larger window costs more tokens).
+# Per-field paper-text budget. Reverted to the 10k default for `authors` and
+# `author_affiliation`: a re-extraction showed a 20k window gave ~0 F1 gain on
+# authors (author NAMES are front-loaded in the title block, so 10k already
+# covered them) — not worth ~2x the tokens.
+#
+# `author_country` keeps a wider window as a TARGETED TEST: the disagreement
+# analysis showed its misses were co-authors whose AFFILIATIONS appear later in
+# the paper (country is derived from affiliation), which 10k truncated. Validate
+# by re-extracting author_country and comparing old-10k vs new runs; revert to
+# 10k if it doesn't move recall.
 FIELD_MAX_CHARS: dict[str, int] = {
-    "authors": 20000,
-    "author_affiliation": 20000,
-    "author_country": 20000,
+    "author_country": 24000,
 }
 
 
