@@ -27,19 +27,13 @@ SYSTEM_PROMPT = (
 MAX_CHARS = 10000  # after corpus.read_md() strips Tika/HTML boilerplate, this covers ~90% of
                     # papers' full author/affiliation block (see corpus.py for the measurement)
 
-# Per-field paper-text budget. Reverted to the 10k default for `authors` and
-# `author_affiliation`: a re-extraction showed a 20k window gave ~0 F1 gain on
-# authors (author NAMES are front-loaded in the title block, so 10k already
-# covered them) — not worth ~2x the tokens.
-#
-# `author_country` keeps a wider window as a TARGETED TEST: the disagreement
-# analysis showed its misses were co-authors whose AFFILIATIONS appear later in
-# the paper (country is derived from affiliation), which 10k truncated. Validate
-# by re-extracting author_country and comparing old-10k vs new runs; revert to
-# 10k if it doesn't move recall.
-FIELD_MAX_CHARS: dict[str, int] = {
-    "author_country": 24000,
-}
+# Per-field paper-text budget override (empty = every field uses MAX_CHARS).
+# EXPERIMENT RESULT (2026-07): a wider window was tested by re-extraction on both
+# authors (20k) and author_country (24k) and gave ~0 F1 gain on either — author
+# names are front-loaded, and the country misses are genuine (unresolvable from
+# the text / GT-side), not truncation. Reverted to the 10k default everywhere to
+# avoid the extra token cost. Re-add a per-field entry only with evidence.
+FIELD_MAX_CHARS: dict[str, int] = {}
 
 
 def field_max_chars(field_name: str) -> int:
