@@ -47,6 +47,7 @@ analysis_data.txt
 *.png
 wrong_labels_report.txt
 gt_fixes_*.csv
+gt_fixes_backup_*.json
 test_fields.csv
 # Model-vs-GT disagreement exports (contain author names = PII; local only)
 analysis_disagreements/
