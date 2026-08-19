@@ -59,7 +59,7 @@ _HOLDOUT_REFERENCE_2 = "~google/gemini-flash-latest"
 # rate limit, unparseable response), try the next one.  Different families
 # also catch different blind spots in the diagnosis.  The supervisor passes
 # the first entry; the optimizer falls back to the rest automatically.
-DEFAULT_REFLECTOR_FALLBACKS = ["~openai/gpt-4o", "~google/gemini-pro-latest"]
+DEFAULT_REFLECTOR_FALLBACKS = ["~openai/gpt-latest", "~google/gemini-pro-latest"]
 DEFAULT_BOLD_AFTER = 2  # after this many consecutive rejections, switch the reflector to "bold"
                         # mode (structural rewrites) instead of small incremental edits.
 
