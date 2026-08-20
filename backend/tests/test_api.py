@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -168,3 +169,51 @@ class TestNotFound:
     def test_unknown_field_404(self):
         r = client.get(f"/api/projects/{PROJECT}/fields/not_a_field/confusion")
         assert r.status_code == 404
+
+
+class TestAgentStatus:
+    """Liveness: a dead supervisor must be visible, not silently assumed alive."""
+
+    def _set(self, status: str, updated_at: str, interval_s: int | None = 60) -> None:
+        with _db.get_conn(_DB_PATH) as conn:
+            conn.execute("DELETE FROM agent_heartbeat")
+            conn.execute(
+                "INSERT INTO agent_heartbeat (agent, project_slug, status, detail, cycle, "
+                "interval_s, updated_at) VALUES (?,?,?,?,?,?,?)",
+                ("supervisor", PROJECT, status, "d", 1, interval_s, updated_at),
+            )
+
+    def test_empty_when_no_agent_has_run(self):
+        with _db.get_conn(_DB_PATH) as conn:
+            conn.execute("DELETE FROM agent_heartbeat")
+        assert client.get("/api/agent-status").json() == []
+
+    def test_fresh_heartbeat_not_stale(self):
+        self._set("running", datetime.now(timezone.utc).isoformat())
+        row = client.get("/api/agent-status").json()[0]
+        assert row["agent"] == "supervisor"
+        assert row["stale"] is False
+        assert row["seconds_since"] < 60
+
+    def test_old_heartbeat_is_stale(self):
+        # 10 days old — the exact failure that went unnoticed in production.
+        self._set("running", (datetime.now(timezone.utc) - timedelta(days=10)).isoformat())
+        row = client.get("/api/agent-status").json()[0]
+        assert row["stale"] is True
+        assert row["seconds_since"] > 800_000
+
+    def test_stopped_is_never_stale(self):
+        # A clean exit is not a failure, however long ago it happened.
+        self._set("stopped", (datetime.now(timezone.utc) - timedelta(days=10)).isoformat())
+        assert client.get("/api/agent-status").json()[0]["stale"] is False
+
+    def test_missing_table_is_tolerated(self):
+        # A DB written before heartbeats existed must not 500 the endpoint.
+        with _db.get_conn(_DB_PATH) as conn:
+            conn.execute("DROP TABLE agent_heartbeat")
+        try:
+            r = client.get("/api/agent-status")
+            assert r.status_code == 200
+            assert r.json() == []
+        finally:
+            _db.init_db(_DB_PATH)  # restore for any later test

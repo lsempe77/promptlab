@@ -62,6 +62,33 @@ def _project_or_404(project_slug: str):
     return PROJECTS[project_slug]
 
 
+@app.get("/api/agent-status")
+def agent_status() -> list[dict]:
+    """Liveness of the background agents, so a dead supervisor is visible rather
+    than silently assumed alive. `stale` is judged against the agent's own
+    expected cycle interval (with a grace factor), not a fixed constant."""
+    grace_factor, floor_s = 3, 900
+    now_dt = datetime.now(timezone.utc)
+    out: list[dict] = []
+    with db.get_conn() as conn:
+        for row in db.get_heartbeats(conn):
+            d = dict(row)
+            try:
+                seen = datetime.fromisoformat(d["updated_at"])
+                if seen.tzinfo is None:
+                    seen = seen.replace(tzinfo=timezone.utc)
+                age = (now_dt - seen).total_seconds()
+            except (TypeError, ValueError):
+                age = None
+            interval = d.get("interval_s") or 0
+            limit = max(interval * grace_factor, floor_s)
+            d["seconds_since"] = age
+            # "stopped" is a clean exit, not a failure — never flag it as stale.
+            d["stale"] = bool(age is not None and age > limit and d.get("status") != "stopped")
+            out.append(d)
+    return out
+
+
 # ── Auth — JWT (HS256, stdlib only) ─────────────────────────────────────────
 # Tokens are signed with JWT_SECRET (Fly secret). No server-side storage →
 # survives machine restarts and redeploys without invalidating sessions.

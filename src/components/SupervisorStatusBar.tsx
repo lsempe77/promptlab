@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { StageStatus, Job, FieldInfo } from "../api";
+import type { StageStatus, Job, FieldInfo, AgentStatus } from "../api";
 
 interface FieldState {
   status: StageStatus | null;
@@ -28,12 +28,47 @@ function MiniBar({ passing, total }: { passing: number; total: number }) {
   );
 }
 
+function agoLabel(seconds: number | null): string {
+  if (seconds === null) return "unknown";
+  if (seconds < 90) return `${Math.round(seconds)}s ago`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)}m ago`;
+  if (seconds < 172800) return `${Math.round(seconds / 3600)}h ago`;
+  return `${Math.round(seconds / 86400)}d ago`;
+}
+
+/** Liveness of the supervisor process itself. Without this, a dead supervisor is
+ *  indistinguishable from an idle one — both simply show no running jobs. */
+function AgentLiveness({ agent }: { agent: AgentStatus | null }) {
+  if (!agent) {
+    return (
+      <span className="sbar-agent sbar-agent-off" title="No agent has ever checked in on this database.">
+        agent: never run
+      </span>
+    );
+  }
+  const cls = agent.stale ? "sbar-agent-stale" : agent.status === "stopped" ? "sbar-agent-off" : "sbar-agent-ok";
+  const label = agent.stale ? "agent: NOT RUNNING" : `agent: ${agent.status}`;
+  return (
+    <span
+      className={`sbar-agent ${cls}`}
+      title={
+        (agent.detail ?? "") +
+        `\nlast check-in: ${agoLabel(agent.seconds_since)}` +
+        (agent.stale ? "\nExpected to check in more often than this — it has probably died." : "")
+      }
+    >
+      {label} · {agoLabel(agent.seconds_since)}
+    </span>
+  );
+}
+
 export default function SupervisorStatusBar({ project }: { project: string }) {
   // Fields and the per-field model count are derived from the project itself, not
   // hardcoded — so this bar is correct for any project (extraction, screening, …),
   // not just the default extraction one.
   const [fieldList, setFieldList] = useState<FieldInfo[]>([]);
   const [states, setStates] = useState<Record<string, FieldState>>({});
+  const [agent, setAgent] = useState<AgentStatus | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
@@ -57,6 +92,12 @@ export default function SupervisorStatusBar({ project }: { project: string }) {
       if (cancelled) return;
       setStates(Object.fromEntries(results));
       setLastUpdated(new Date());
+      try {
+        const agents = await api.agentStatus();
+        if (!cancelled) setAgent(agents.find((a) => a.agent === "supervisor") ?? null);
+      } catch {
+        if (!cancelled) setAgent(null);
+      }
     };
 
     (async () => {
@@ -98,6 +139,7 @@ export default function SupervisorStatusBar({ project }: { project: string }) {
           <span className={`sbar-dot ${anyRunning ? "running" : "idle"}`} />
           Supervisor
         </span>
+        <AgentLiveness agent={agent} />
         <span className="sbar-overall">
           <strong>{totalPassing}</strong>/{totalPairs} model·field pairs pass gate
           <span className="sbar-pct"> ({overallPct}%)</span>

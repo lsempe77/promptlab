@@ -1155,6 +1155,19 @@ table.glossary .glossary-dir {
 }
 .sbar-dot.running { background: #16a34a; box-shadow: 0 0 0 2px #bbf7d0; animation: pulse 1.5s infinite; }
 .sbar-dot.idle    { background: #94a3b8; }
+
+/* Liveness of the supervisor PROCESS (distinct from the job dot above, which
+   only shows whether a job is currently running). */
+.sbar-agent {
+  font-size: 0.78rem;
+  padding: 1px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+  cursor: help;
+}
+.sbar-agent-ok    { background: #dcfce7; color: #166534; }
+.sbar-agent-off   { background: #e2e8f0; color: #475569; }
+.sbar-agent-stale { background: #fee2e2; color: #991b1b; font-weight: 600; }
 @keyframes pulse { 0%,100% { box-shadow: 0 0 0 2px #bbf7d0; } 50% { box-shadow: 0 0 0 5px #bbf7d0; } }
 .sbar-overall { flex: 1; text-align: center; font-size: 0.82rem; }
 .sbar-pct { color: var(--text-muted); }

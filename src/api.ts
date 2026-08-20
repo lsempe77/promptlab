@@ -219,6 +219,20 @@ export interface ActivityData {
   optimizer_health?: OptimizerHealth;
 }
 
+/** Liveness of a background agent (see /api/agent-status). `stale` means the
+ *  agent hasn't checked in within its own expected interval — i.e. it died. */
+export interface AgentStatus {
+  agent: string;
+  project_slug: string | null;
+  status: string;
+  detail: string | null;
+  cycle: number | null;
+  interval_s: number | null;
+  updated_at: string;
+  seconds_since: number | null;
+  stale: boolean;
+}
+
 export interface Job {
   id: number;
   field_name: string;
@@ -258,6 +272,7 @@ function qs(params: Record<string, string | number | undefined | null>): string 
 
 export const api = {
   projects: () => getJson<ProjectInfo[]>("/api/projects"),
+  agentStatus: () => getJson<AgentStatus[]>("/api/agent-status"),
   fields: (project: string) => getJson<FieldInfo[]>(`/api/projects/${project}/fields`),
   promptVersions: (project: string, field: string) =>
     getJson<PromptVersion[]>(`/api/projects/${project}/fields/${field}/prompt-versions`),

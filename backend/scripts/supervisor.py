@@ -288,6 +288,22 @@ def main() -> None:
 
     db.init_db()  # idempotent: ensures schema + migrations (e.g. prompt_versions.model_id) are applied
 
+    def _heartbeat(status: str, detail: str | None = None, cycle: int | None = None) -> None:
+        """Liveness ping so the dashboard can tell a dead supervisor from an idle one.
+        Never let a heartbeat failure kill the run."""
+        if args.dry_run:
+            return
+        try:
+            with db.get_conn() as conn:
+                db.record_heartbeat(
+                    conn, "supervisor", status, project_slug=args.project, detail=detail,
+                    cycle=cycle, interval_s=(args.interval if args.loop else None),
+                )
+        except Exception as exc:  # noqa: BLE001
+            _log(f"[warn] heartbeat write failed: {exc}")
+
+    _heartbeat("starting")
+
     _log(f"Supervisor start | project={args.project} | fields={fields} | models={len(models)} "
          f"| stages={config.PRODUCTION_ROLLOUT_STAGES} | gate={scoring.GATE_THRESHOLD:.0%} "
          f"| max_cycles={args.max_cycles} | parallelism={args.parallelism}"
@@ -302,6 +318,7 @@ def main() -> None:
 
         for cycle in range(1, args.max_cycles + 1):
             _log(f"--- cycle {cycle}/{args.max_cycles} ---")
+            _heartbeat("running", detail=f"run {run_no}, cycle {cycle}/{args.max_cycles}", cycle=cycle)
             any_action = False
 
             for field in fields:
@@ -431,8 +448,10 @@ def main() -> None:
         else:
             sleep_secs = args.interval
             _log(f"Sleeping {sleep_secs}s before next run...")
+        _heartbeat("idle", detail=f"sleeping {sleep_secs}s after run {run_no}")
         time.sleep(sleep_secs)
 
+    _heartbeat("stopped", detail=f"exited cleanly after {run_no} run(s)")
     _log("Supervisor done.")
 
 

@@ -143,6 +143,21 @@ CREATE TABLE IF NOT EXISTS self_consistency (
     UNIQUE (project_id, field_name, model_id, record_id),
     FOREIGN KEY (project_id, record_id) REFERENCES records(project_id, id)
 );
+
+-- Liveness for the background agents. One row per agent, upserted as it works,
+-- so the dashboard can show "supervisor last active X ago" instead of silently
+-- assuming it is alive (it died unnoticed for 10 days once). `interval_s` is the
+-- agent's own expected sleep between cycles, so staleness is judged against what
+-- the agent itself considers normal.
+CREATE TABLE IF NOT EXISTS agent_heartbeat (
+    agent TEXT PRIMARY KEY,
+    project_slug TEXT,
+    status TEXT NOT NULL,
+    detail TEXT,
+    cycle INTEGER,
+    interval_s INTEGER,
+    updated_at TEXT NOT NULL
+);
 """
 
 # Indexes are created separately from SCHEMA (and only AFTER
@@ -469,6 +484,30 @@ def add_run(conn: sqlite3.Connection, **kwargs: Any) -> int | None:
     placeholders = ", ".join("?" for _ in kwargs)
     cur = conn.execute(f"INSERT INTO runs ({cols}) VALUES ({placeholders})", tuple(kwargs.values()))
     return cur.lastrowid
+
+
+def record_heartbeat(
+    conn: sqlite3.Connection, agent: str, status: str, project_slug: str | None = None,
+    detail: str | None = None, cycle: int | None = None, interval_s: int | None = None,
+) -> None:
+    """Upsert this agent's liveness row (one row per agent)."""
+    conn.execute(
+        "INSERT INTO agent_heartbeat (agent, project_slug, status, detail, cycle, interval_s, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(agent) DO UPDATE SET project_slug=excluded.project_slug, status=excluded.status, "
+        "detail=excluded.detail, cycle=excluded.cycle, interval_s=excluded.interval_s, "
+        "updated_at=excluded.updated_at",
+        (agent, project_slug, status, detail, cycle, interval_s, now()),
+    )
+
+
+def get_heartbeats(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """All agent liveness rows. Returns [] if the table doesn't exist yet (a DB
+    written before heartbeats existed)."""
+    try:
+        return conn.execute("SELECT * FROM agent_heartbeat ORDER BY agent").fetchall()
+    except sqlite3.OperationalError:
+        return []
 
 
 def add_iteration(conn: sqlite3.Connection, **kwargs: Any) -> int | None:
