@@ -22,7 +22,7 @@ from typing import Any
 
 from .fields import FIELDS
 from .normalize import authors_equal
-from .scoring import FUZZY_MATCH_THRESHOLD, _fuzzy_equal, _norm
+from .scoring import FUZZY_MATCH_THRESHOLD, _fuzzy_equal, _norm, fold_category
 from .taxonomy import get_options
 
 MAX_CATEGORIES = 12  # most frequent ground-truth categories shown individually; rest -> "(other)"
@@ -42,7 +42,7 @@ def _cohens_kappa(rows: list[dict[str, Any]]) -> float | None:
     accuracy can look high just from an imbalanced class distribution; kappa
     discounts the agreement expected by chance. Returns None when undefined
     (no data, or chance agreement == 1)."""
-    pairs = [(_norm(r["predicted"] or ""), _norm(r["truth"])) for r in rows if r["truth"]]
+    pairs = [(fold_category(r["predicted"] or ""), fold_category(r["truth"])) for r in rows if r["truth"]]
     n = len(pairs)
     if n == 0:
         return None
@@ -54,7 +54,7 @@ def _cohens_kappa(rows: list[dict[str, Any]]) -> float | None:
 
 
 def _categorical_confusion(rows: list[dict[str, Any]]) -> dict:
-    truth_counts = Counter(_norm(r["truth"]) for r in rows if r["truth"])
+    truth_counts = Counter(fold_category(r["truth"]) for r in rows if r["truth"])
     top = [c for c, _ in truth_counts.most_common(MAX_CATEGORIES)]
     top_set = set(top)
     has_overflow = len(truth_counts) > len(top)
@@ -65,13 +65,13 @@ def _categorical_confusion(rows: list[dict[str, Any]]) -> dict:
     pred_index = {label: i for i, label in enumerate(pred_labels)}
 
     def bucket_truth(v: str | None) -> str:
-        n = _norm(v) if v else ""
+        n = fold_category(v) if v else ""
         return n if n in top_set else "(other)"
 
     def bucket_pred(v: str | None) -> str:
         if not v:
             return "(none)"
-        n = _norm(v)
+        n = fold_category(v)
         return n if n in top_set else "(other)"
 
     matrix = [[0] * len(pred_labels) for _ in truth_labels]
@@ -84,7 +84,7 @@ def _categorical_confusion(rows: list[dict[str, Any]]) -> dict:
         pj = pred_index[bucket_pred(r["predicted"])]
         matrix[ti][pj] += 1
         n_total += 1
-        if _norm(r["predicted"] or "") == _norm(r["truth"]):
+        if fold_category(r["predicted"] or "") == fold_category(r["truth"]):
             n_correct += 1
 
     # One-vs-rest sensitivity/specificity/F2 per visible truth class, then
