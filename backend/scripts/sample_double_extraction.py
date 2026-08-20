@@ -130,19 +130,20 @@ def main() -> None:
         "stratified_by": STRATIFY_FIELD, "record_ids": [r["id"] for r in records],
     }, indent=2), encoding="utf-8")
 
+    # The protocol has to travel with the sheet. A curator handed a bare CSV has
+    # no way to know the reading must be blind, which is the one rule that makes
+    # the measurement valid at all.
+    instructions = out.parent / "INSTRUCTIONS.md"
+    template = Path(__file__).with_name("curator_instructions.md")
+    instructions.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+
     print(f"Wrote {out} — {len(records)} records, stratified by {STRATIFY_FIELD}.")
     print(f"Wrote {opts} — allowed values for the categorical fields.")
-    print(f"Wrote {manifest} — records sampled, for reproducibility.\n")
-    print("PROTOCOL — give the curator these instructions:")
-    print("  1. Do NOT look at the existing ground truth, the dashboard, or any model")
-    print("     output before filling this in. The measurement is only valid if the")
-    print("     second reading is independent of the first.")
-    print("  2. Read each paper (md_file, in the corpus directory) and fill one row.")
-    print(f"  3. For list fields ({', '.join(f for f, s in FIELDS.items() if s.value_type != 'single_categorical')}),")
-    print(f"     separate multiple values with '{LIST_SEPARATOR.strip()}'.")
-    print("  4. For the categorical fields, use exactly one value from the options file.")
-    print("  5. Leave a cell EMPTY only if the paper genuinely does not state it.")
-    print("     Do not guess — a guess corrupts the ceiling we're trying to measure.\n")
+    print(f"Wrote {manifest} — records sampled, for reproducibility.")
+    print(f"Wrote {instructions} — give this to the curator along with the sheet.\n")
+    print("Send the curator: INSTRUCTIONS.md, the sheet, the options file, and the papers")
+    print("named in the md_file column. The reading MUST be blind — if they see the existing")
+    print("values or any model output first, the comparison measures nothing.\n")
     print("Then run:  python -m backend.scripts.human_agreement --sheet " + str(out))
 
 
