@@ -171,6 +171,32 @@ class TestNotFound:
         assert r.status_code == 404
 
 
+class TestPromptImprovementCount:
+    """`prompt_versions_accepted` drives the dashboard's headline
+    "N prompt improvements accepted". The v1 baseline is always accepted=1, so
+    counting it made every untouched field claim an improvement it never had."""
+
+    def test_baseline_only_counts_as_zero_improvements(self):
+        r = client.get(f"/api/projects/{PROJECT}/fields/authors/stage-status")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["prompt_versions"] == 1          # the v1 baseline exists
+        assert body["prompt_versions_accepted"] == 0  # but it is not an improvement
+
+    def test_accepted_revision_counts(self):
+        with _db.get_conn(_DB_PATH) as conn:
+            pid = _db.get_project_id(conn, PROJECT)
+            _db.add_prompt_version(conn, pid, "authors", 2, "revised", None, "opt", 1, None)
+            _db.add_prompt_version(conn, pid, "authors", 3, "rejected", None, "opt", 0, None)
+        try:
+            body = client.get(f"/api/projects/{PROJECT}/fields/authors/stage-status").json()
+            assert body["prompt_versions"] == 3
+            assert body["prompt_versions_accepted"] == 1  # v2 only; v1 baseline, v3 rejected
+        finally:
+            with _db.get_conn(_DB_PATH) as conn:
+                conn.execute("DELETE FROM prompt_versions WHERE field_name='authors' AND version > 1")
+
+
 class TestAgentStatus:
     """Liveness: a dead supervisor must be visible, not silently assumed alive."""
 

@@ -786,7 +786,11 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
             (project_id, field_name) + v_params,
         ).fetchall()
         pv = conn.execute(
-            "SELECT COUNT(*) AS total, SUM(CASE WHEN accepted = 1 THEN 1 ELSE 0 END) AS accepted "
+            # v1 is the hand-written baseline (generation 0) and is always accepted=1,
+            # so it is NOT an "improvement" — only accepted versions above it count,
+            # otherwise a field the optimizer never touched still reports "1 accepted".
+            "SELECT COUNT(*) AS total, "
+            "SUM(CASE WHEN accepted = 1 AND version > 1 THEN 1 ELSE 0 END) AS accepted "
             "FROM prompt_versions WHERE project_id = ? AND field_name = ?",
             (project_id, field_name),
         ).fetchone()
