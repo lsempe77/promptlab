@@ -135,7 +135,7 @@ def main() -> None:
             pass
     records = keep
 
-    gate = scoring.GATE_THRESHOLD
+    gate = scoring.gate_threshold_for(field)
     floor = scoring.RECALL_FLOOR
     print(f"Field={field}  records={len(records)}  gate>={gate}"
           f"{f' recall>={floor}' if FIELDS[field].value_type != 'single_categorical' else ''}\n")

@@ -33,6 +33,39 @@ GATE_THRESHOLD = 0.90  # per-(field, model) quality bar for production-readiness
                        # standard is itself noisy (benchmark bias), so 0.95 was chasing label noise;
                        # ~0.90 is a defensible bar (lit. often uses ~0.70-0.90). Per-user thresholds
                        # are a planned enhancement (see ROADMAP.md).
+
+# Per-field override of (gated metric, threshold). Anything not listed uses the
+# field-type default: element-level F1 @ GATE_THRESHOLD for list fields,
+# record-level accuracy @ GATE_THRESHOLD for single-categorical fields.
+#
+# Why the categorical fields are gated on Cohen's kappa instead of accuracy:
+# raw accuracy is not comparable across fields with different numbers of classes
+# (sector_name has 11 options, sub_sector 66, and sub_sector's options are further
+# narrowed by the known sector). A fixed 0.90 accuracy bar is therefore a much
+# harsher demand on one than the other, for no principled reason. Kappa is
+# chance-corrected, so one bar means the same thing on both. 0.80 is the
+# Landis & Koch boundary between "substantial" and "almost perfect" agreement —
+# an external, pre-existing standard rather than a number picked to fit our
+# current scores (at adoption neither categorical field passes it).
+FIELD_GATE: dict[str, tuple[str, float]] = {
+    "sector_name": ("kappa", 0.80),
+    "sub_sector": ("kappa", 0.80),
+}
+
+
+def gate_for(field_name: str) -> tuple[str | None, float]:
+    """(metric_name_override, threshold) for a field. A None metric means "use
+    the field-type default metric"."""
+    override = FIELD_GATE.get(field_name)
+    if override is None:
+        return None, GATE_THRESHOLD
+    return override[0], override[1]
+
+
+def gate_threshold_for(field_name: str) -> float:
+    """The production-readiness bar for this field."""
+    return gate_for(field_name)[1]
+
 RECALL_FLOOR = 0.85    # Hard-floor on recall for LIST fields alongside the F1 gate.
                        # A model that achieves F1=0.92 by over-predicting but only recalls 85% of
                        # true values is NOT production-ready — missing values are invisible in QA

@@ -22,6 +22,7 @@ from typing import Any
 
 from .fields import FIELDS
 from .normalize import authors_equal
+from . import scoring
 from .scoring import FUZZY_MATCH_THRESHOLD, _fuzzy_equal, _norm
 from .taxonomy import get_options
 
@@ -208,9 +209,14 @@ def gate_metrics(field_name: str, rows: list[dict[str, Any]]) -> dict:
     """
     conf = compute_confusion(field_name, rows)
     if conf["type"] == "categorical":
+        # A field may override which number is gated (see scoring.FIELD_GATE);
+        # the others stay in the payload as reported companions either way.
+        override, _ = scoring.gate_for(field_name)
+        metric_name = override or "accuracy"
+        metric = conf.get(metric_name, conf["accuracy"])
         return {
-            "metric_name": "accuracy",
-            "metric": conf["accuracy"],
+            "metric_name": metric_name,
+            "metric": metric,
             "accuracy": conf["accuracy"],
             "kappa": conf.get("kappa"),
             "precision": None,

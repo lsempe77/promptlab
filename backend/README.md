@@ -449,7 +449,8 @@ window — retry health before concluding failure.
   {field}/stage-status` derives, with no manual state, how many references a field has reached
   (the current stage vs `config.PRODUCTION_ROLLOUT_STAGES` 100→200→300) and evaluates the quality
   gate **per (field, model)** on a field-type-aware quality metric — **F1** for list fields,
-  **accuracy** for categorical — vs `scoring.GATE_THRESHOLD` (**0.90**), returning
+  **Cohen's κ** for categorical — vs the per-field threshold (`scoring.gate_threshold_for`:
+  F1 ≥ **0.90** for lists, κ ≥ **0.80** for categorical), returning
   `n_models_passing`/`n_models_evaluated` (LLM-judged accuracy is kept as a corroborating
   companion). The dashboard shows a field badge ("N/M models pass gate") with 95% Wilson CIs that
   narrow as the sample grows, plus a per-model gate chip. The gate is computed at read time from

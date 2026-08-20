@@ -123,7 +123,7 @@ of the codebase uses — just override the base URL / key.
 ## Success criterion
 
 The student **passes** if, on the 100 human GT:
-- categorical (`sector_name`/`sub_sector`): `accuracy ≥ scoring.GATE_THRESHOLD` (0.90);
+- categorical (`sector_name`/`sub_sector`): `kappa ≥ scoring.gate_threshold_for(field)` (0.80);
 - list fields: `f1 ≥ 0.90 AND recall ≥ scoring.RECALL_FLOOR` (0.85);
 
 **and** its cost/record and CO₂e/record are materially below the teacher's. If it passes, expand to

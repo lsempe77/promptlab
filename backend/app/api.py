@@ -835,7 +835,7 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
     for model_id, mrows in rows_by_model.items():
         gm = analytics.gate_metrics(field_name, mrows)
         judged = judged_by_model.get(model_id)
-        gate_passed = gm["metric"] >= scoring.GATE_THRESHOLD
+        gate_passed = gm["metric"] >= scoring.gate_threshold_for(field_name)
         # List fields must ALSO clear the recall floor: element-level F1 can pass
         # by over-predicting while still missing >15% of true values (invisible in
         # QA), so a model with F1>=0.90 but recall<0.85 is NOT production-ready.
@@ -866,7 +866,7 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
             opt_status, opt_reason = "passed", ""
         else:
             _ok, opt_status, opt_reason = optimization_policy.decide(
-                n_cand, since_accept, gm["metric"], scoring.GATE_THRESHOLD
+                n_cand, since_accept, gm["metric"], scoring.gate_threshold_for(field_name)
             )
         models.append(
             {
@@ -901,7 +901,7 @@ def stage_status(project_slug: str, field_name: str, prompt_version: int | None 
         "stages": stages,
         "stage_target": next_target,
         "final_stage": stages[-1] if stages else references,
-        "gate_threshold": scoring.GATE_THRESHOLD,
+        "gate_threshold": scoring.gate_threshold_for(field_name),
         "models": models,
         "n_models_evaluated": len(models),
         "n_models_judged": sum(1 for m in models if m["llm_judged_accuracy"] is not None),
