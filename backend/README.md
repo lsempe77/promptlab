@@ -377,6 +377,30 @@ server — bumped to 1024mb in `fly.toml` to fix. A plain `nohup ... &` backgrou
 survive a Fly machine restart (restarts wipe the whole container; only `/data` persists) — unlike
 a local crash, there's no automatic resume, so just re-run the command if a restart happens again.
 
+### Current deployment state & robustness (2026-08-20)
+
+The deployed image is a **read-only SQLite observability API**. An earlier partial migration to a
+Neon **Postgres** worker/supervisor queue is now dormant (the Neon free tier is quota-exhausted).
+Three rules keep the API alive regardless of that dead branch:
+
+- **Agents are OFF by default.** `entrypoint.sh` starts the `worker` + `supervisor` only when
+  `DEP_ENABLE_AGENTS=1`; a normal deploy runs *only* uvicorn. (They used to auto-start on every
+  boot, and a dead Postgres made the worker busy-loop forever, pinning the always-on machine.)
+- **Postgres is optional and non-fatal.** `api.py` startup calls `db_pg.init_pg()` only when
+  `DATABASE_URL` is set, wrapped in try/except — a dead Postgres logs a warning and the API keeps
+  serving SQLite instead of crash-looping (exit 3). `DATABASE_URL` is currently **unset** on Fly.
+- `worker.py --max-failures N` (default 20) exits after N consecutive errors instead of looping.
+
+Uploading a refreshed DB to the live volume (the read-only API recreates an empty DB if the file
+is missing, so upload to a temp name and swap):
+```
+fly ssh sftp put backend/deploy/promptlab.db /data/upload.db --app <app>   # one-shot put; no interactive shell needed
+fly ssh console -C "mv -f /data/upload.db /data/promptlab.db" --app <app>   # run BARE — piping via | Out-String breaks it ("handle is invalid")
+```
+`*.sh` files must stay LF (`.gitattributes` enforces `*.sh text eol=lf`) — a CRLF `entrypoint.sh`
+breaks the Linux container. A 503 immediately after `fly deploy` is a transient rolling-restart
+window — retry health before concluding failure.
+
 ## Roadmap
 
 > Forward-looking plans live in the repo-root [`ROADMAP.md`](../ROADMAP.md) (the canonical

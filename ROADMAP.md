@@ -62,6 +62,18 @@ distribution, and the precision/recall trade-off — so the choice is informed b
 error-cost preference (is a *wrong* value worse than a *missing* one?). Store thresholds per
 `(project, field)`; treat a change as an eval-policy decision (human-gated, see Loop B).
 
+**Evidence for per-field thresholds (2026-08-20):** cleaning the ground truth (curator-reviewed
+`apply_gt_fixes.py`, 49 corrections) lifted every model on the two gate-failing fields — confirming
+they were *label-limited, not model- or prompt-limited* (`sub_sector` mean accuracy +0.17,
+`author_affiliation` mean F1 +0.08 across all 10 models). But even after cleanup, prompt
+optimization, and benchmarking frontier **open- and closed-weight** models at n up to 100,
+**`sub_sector` tops out ~0.80–0.87** (best: Kimi-K3 0.80 @ n=100). An "any-of / same-parent-sector"
+relaxation adds only +0–7 pts, because most remaining errors are genuine *cross-sector*
+disagreements, not sibling confusion. Conclusion: **0.90 is the wrong target for `sub_sector`** — its
+label is inherently one-of-several — which strengthens the per-field-threshold plan (a lower bar
+and/or Cohen's κ for categorical). Best per-field models found: `sub_sector` → **Kimi-K3**,
+`author_affiliation` → **GLM-5.2** (open weights match/beat the closed frontier here, at lower cost).
+
 **Done (2026-07-06) — optimizer acceptance aligned with the gate:** the optimizer now accepts a
 rewrite on the **same field-type-aware gate metric** (`analytics.gate_metrics` — F1 for lists,
 accuracy for categorical) on both the val set and the cross-model holdout, so "what the optimizer
@@ -78,6 +90,12 @@ A second autonomous loop alongside the prompt-optimizer supervisor ("Loop A"), f
 - On a **signed one-click approval** (NOT raw email-reply parsing), scoped to a hash of that exact
   changeset, it applies the approved **data** edits to the DB / `taxonomy.json` with an old→new
   audit log (reversible). The next extraction round picks up the corrected data automatically.
+
+**Done (2026-08-20) — the apply half is built:** `scripts/apply_gt_fixes.py` reads the
+curator-decided review CSVs (`keep` / `accept` / `edit: X`) and applies them to `ground_truth` with
+a reversible `gt_audit_log` table + a timestamped JSON backup (dry-run by default; `--apply` to
+write). Used it to land the 49-fix cleanup on `sector_name`/`sub_sector`/`author_affiliation`. Still
+to build: the scheduled read-only audit run + emailed diff + signed one-click approval trigger.
 - **Hard rule:** Loop B only applies **data** changes (ground truth, taxonomy, eval-policy toggles).
   **Code / eval-logic changes always go through a GitHub PR → human review → `fly deploy`** — an
   agent must not be able to edit its own scoring code or answer key (reward-hacking surface).
