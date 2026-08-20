@@ -141,6 +141,9 @@ def main() -> None:
     ap.add_argument("--loop", action="store_true", help="Run forever, polling for tasks")
     ap.add_argument("--project", default=None, help="Filter tasks by project slug (optional)")
     ap.add_argument("--poll-interval", type=int, default=POLL_INTERVAL_S)
+    ap.add_argument("--max-failures", type=int, default=20,
+                    help="exit after this many CONSECUTIVE errors (0 = never exit). Prevents a "
+                         "dead/unreachable Postgres from busy-looping forever and pinning the machine.")
     args = ap.parse_args()
 
     if not db_pg.pg_enabled():
@@ -150,16 +153,24 @@ def main() -> None:
     _log(f"Worker starting (loop={args.loop}, poll={args.poll_interval}s)")
 
     if args.loop:
+        consecutive_failures = 0
         while True:
             try:
                 did_work = run_once()
+                consecutive_failures = 0  # any successful poll resets the breaker
                 if not did_work:
                     time.sleep(args.poll_interval)
             except KeyboardInterrupt:
                 _log("Shutting down.")
                 break
             except Exception as exc:
-                _log(f"Unexpected error: {exc}. Retrying in {args.poll_interval}s.")
+                consecutive_failures += 1
+                _log(f"Unexpected error ({consecutive_failures}/{args.max_failures}): {exc}. "
+                     f"Retrying in {args.poll_interval}s.")
+                if args.max_failures > 0 and consecutive_failures >= args.max_failures:
+                    _log("Too many consecutive failures (Postgres unreachable?) — exiting so a "
+                         "dead loop doesn't pin the machine. Relaunch once the DB is healthy.")
+                    sys.exit(1)
                 time.sleep(args.poll_interval)
     else:
         run_once()
