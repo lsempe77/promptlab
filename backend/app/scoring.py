@@ -13,6 +13,7 @@ when none existed) get no such credit.
 """
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Any
@@ -181,6 +182,26 @@ def _norm(s: str) -> str:
     return " ".join(s.strip().lower().split())
 
 
+def fold_category(s: str) -> str:
+    """Normalise a CLOSED-TAXONOMY category for comparison.
+
+    `_norm` deliberately keeps punctuation, because free-text list fields need it
+    ("Smith, John" is Last, First — dropping that comma invites false author
+    matches). But for a single-categorical field the value must come from a fixed
+    option list, and there punctuation carries no meaning: an Oxford comma or an
+    "&" cannot make a category a different category.
+
+    This mattered in production. The taxonomy handed to the model says
+    "Agriculture fishing and forestry" while the ground truth says
+    "Agriculture, fishing, and forestry", so 22 of 100 sector_name records were
+    unwinnable — models were marked wrong for obeying our own option list.
+    Folding punctuation lifted mean kappa across 11 models by +0.24.
+
+    Scoped to categorical comparison only; never apply it to list_text values.
+    """
+    return " ".join(re.sub(r"[^\w\s]", " ", _norm(s)).split())
+
+
 def _fuzzy_equal(a: str, b: str, threshold: int = FUZZY_MATCH_THRESHOLD) -> bool:
     na, nb = _norm(a), _norm(b)
     if fuzz.token_set_ratio(na, nb) >= threshold:
@@ -274,7 +295,7 @@ def _score_single_categorical(predicted: Any, truth: Any) -> ScoreResult:
     # (curators tagged the paper with >1 equally-valid label); predicting any
     # one of them is correct.
     alternatives = split_alternatives(truth_s)
-    if any(_norm(pred) == _norm(a) for a in alternatives):
+    if any(fold_category(pred) == fold_category(a) for a in alternatives):
         return ScoreResult(1.0, 1.0 >= CORRECT_THRESHOLD, "exact match", outcome=OUTCOME_HIT, honesty_score=1.0)
     if any(_fuzzy_equal(pred, a) for a in alternatives):
         return ScoreResult(0.9, 0.9 >= CORRECT_THRESHOLD, f"fuzzy match ({pred!r} ~ {truth_s!r})",
