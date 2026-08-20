@@ -66,12 +66,50 @@ def gate_threshold_for(field_name: str) -> float:
     """The production-readiness bar for this field."""
     return gate_for(field_name)[1]
 
+
+def safety_floor_ok(gate_metrics: dict) -> bool:
+    """Does this `analytics.gate_metrics` payload clear its miss-rate floor?
+
+    Passing the headline gate is not sufficient: a model can hit the bar while
+    systematically missing values (list fields) or rare classes (categorical).
+    Returns True when the floor does not apply — an absent metric means "not
+    enough data to judge", which must not fail a model on its own.
+    """
+    recall = gate_metrics.get("recall")
+    if recall is not None:
+        return recall >= RECALL_FLOOR
+    if gate_metrics.get("sensitivity_gateable"):
+        return gate_metrics["sensitivity"] >= SENSITIVITY_FLOOR
+    return True
+
 RECALL_FLOOR = 0.85    # Hard-floor on recall for LIST fields alongside the F1 gate.
                        # A model that achieves F1=0.92 by over-predicting but only recalls 85% of
                        # true values is NOT production-ready — missing values are invisible in QA
-                       # while extra values are visible and fixable. Categorical fields (sector,
-                       # sub_sector) have no meaningful precision/recall split so this floor is
-                       # not applied to them.
+                       # while extra values are visible and fixable.
+
+# The categorical counterpart of RECALL_FLOOR. A single-categorical field has no
+# precision/recall split per record, but it has the same failure mode one level up:
+# a model can score well on accuracy/kappa while systematically collapsing onto the
+# common classes and almost never emitting the rare ones. For an evidence GAP MAP
+# that is the worst error we can make — under-detecting a rare sub-sector invents a
+# gap that does not exist, which inverts the product's core claim. Macro-averaged
+# one-vs-rest sensitivity (each class weighted equally, regardless of frequency) is
+# what catches it.
+SENSITIVITY_FLOOR = 0.70
+
+# ...but macro-sensitivity is only trustworthy with enough examples PER CLASS, not
+# just enough records overall. With 66 sub-sectors over 100 records most classes have
+# one or two instances, where per-class sensitivity can only be 0.0 or 1.0 — noise
+# that a macro average launders into a plausible-looking number.
+#
+# Note the trap: we must NOT fix this by averaging over only the well-sampled classes,
+# because those are the common ones — exactly the classes a collapsing model gets right.
+# That would hide the failure this metric exists to catch. So the metric keeps every
+# class, and instead the FLOOR is only enforced once every class is adequately sampled.
+# The practical consequence is a concrete data requirement: gating sub_sector on
+# rare-class coverage needs ~5 examples of each sub-sector, far beyond today's n=100.
+MIN_CLASS_SUPPORT = 5
+MIN_SUPPORTED_CLASSES = 2  # a macro over 2 classes is balanced accuracy — meaningful
 ABSTENTION_CREDIT = 0.5  # honesty-adjusted credit for an honest abstention (null/empty output)
                          # when a value actually existed -- rewards "I don't know" over a
                          # confident wrong guess. Only affects `honesty_score` (the optimizer's

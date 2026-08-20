@@ -41,7 +41,6 @@ except Exception:
 
 from backend.app import analytics, config, db, optimization_policy, prompt_store, scoring  # noqa: E402
 from backend.app.optimizer import FIELD_IMPROVEMENT_EPSILON, DEFAULT_IMPROVEMENT_EPSILON  # noqa: E402
-from backend.app.scoring import RECALL_FLOOR  # noqa: E402
 from backend.app import db_pg  # noqa: E402 -- Phase 2: task-queue mode
 from backend.app.prompts import BASELINE_INSTRUCTIONS  # noqa: E402
 
@@ -140,9 +139,10 @@ def _field_state(conn, project_id: int, field: str, models: list[str]) -> dict:
             mrows = [{"predicted": json.loads(x["parsed_value_json"]), "truth": json.loads(x["value_json"])}
                      for x in grows]
             gm = analytics.gate_metrics(field, mrows)
-            # gate[m] = (primary_metric, n, recall_or_None)
-            # recall is only meaningful for list fields; None for categorical.
-            gate[m] = (gm["metric"], gm["n"], gm.get("recall"))
+            # gate[m] = (primary_metric, n, safety_floor_ok)
+            # The floor is recall for list fields and macro-sensitivity over
+            # adequately-sampled classes for categorical ones; scoring picks.
+            gate[m] = (gm["metric"], gm["n"], scoring.safety_floor_ok(gm))
         # per-model persistent exhaustion: a rejected candidate off THIS model's
         # current prompt means don't re-optimize this model on this prompt.
         exhausted[m] = conn.execute(
@@ -194,14 +194,11 @@ def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str],
         return "judge", None, [], "runs exist but no gate metric yet -> judge"
 
     def _passes_gate(m: str) -> bool:
-        """True if model passes both F1/accuracy gate AND the recall floor (list fields only)."""
-        metric, _n, recall = gate[m]
+        """True if model clears the headline gate AND its field's miss-rate floor."""
+        metric, _n, safety_ok = gate[m]
         if metric < gate_threshold:
             return False
-        # Recall floor applies only to list fields (recall is None for categorical)
-        if recall is not None and recall < RECALL_FLOOR:
-            return False
-        return True
+        return safety_ok
 
     # Gate on the runs-based quality metric (F1 for list fields, accuracy for
     # categorical) -- same metric the dashboard shows -- not judged accuracy.
@@ -329,8 +326,8 @@ def main() -> None:
                     state = _field_state(conn, project_id, field, models)
                 action, arg, opt_models, reason = _decide(state, models)
                 passing = sum(
-                    1 for _m, (score, _n, recall) in state["gate"].items()
-                    if score >= scoring.gate_threshold_for(field) and (recall is None or recall >= RECALL_FLOOR)
+                    1 for _m, (score, _n, safety_ok) in state["gate"].items()
+                    if score >= scoring.gate_threshold_for(field) and safety_ok
                 )
                 _log(f"[{field}] refs={state['refs']} unjudged={state['unjudged']} "
                      f"judged={len(state['judged'])} passing={passing}/{len(models)} "

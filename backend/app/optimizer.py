@@ -19,7 +19,6 @@ from dataclasses import dataclass, field as dataclass_field
 from typing import Any
 
 from . import analytics, db, gateway, prompt_store, prompts, scoring
-from .scoring import RECALL_FLOOR
 from . import carbon
 from . import db_pg as _db_pg  # Phase 2: Postgres routing
 from .exemplars import Exemplar, parse_exemplars, serialize_exemplars, merge_exemplars
@@ -85,15 +84,16 @@ def _default_holdout_models(model_id: str) -> list[str]:
     return models
 
 
-def _gate_score(field_name: str, predictions: list[tuple[Any, Any]]) -> tuple[float, int, float | None]:
-    """The production gate metric (F1 for list fields, accuracy for categorical)
+def _gate_score(field_name: str, predictions: list[tuple[Any, Any]]) -> tuple[float, int, bool]:
+    """The production gate metric (F1 for list fields, Cohen's kappa for categorical)
     computed over (predicted, truth) pairs -- the SAME metric the dashboard and
     supervisor gate on, so "what the optimizer chases" == "what the gate checks".
-    Returns (metric, n, recall_or_None). recall is None for categorical fields.
+    Returns (metric, n, safety_floor_ok) where the floor is recall for list fields
+    and macro-sensitivity over adequately-sampled classes for categorical ones.
     """
     rows = [{"predicted": p, "truth": t} for p, t in predictions]
     gm = analytics.gate_metrics(field_name, rows)
-    return gm["metric"], gm["n"], gm.get("recall")
+    return gm["metric"], gm["n"], scoring.safety_floor_ok(gm)
 
 
 @dataclass
@@ -623,7 +623,7 @@ def _holdout_generalization(
             field_name, instruction, holdout, m, conn=conn, project_id=project_id,
             prompt_version_id=prompt_version_id, batch_id=batch_id, max_workers=max_workers,
         )
-        metric, _n, _recall = _gate_score(field_name, outcome.predictions)
+        metric, _n, _safety_ok = _gate_score(field_name, outcome.predictions)
         per_model[m] = metric
     avg = sum(per_model.values()) / len(per_model) if per_model else 0.0
     return avg, per_model
@@ -675,7 +675,7 @@ def _run_optimization(
                 project_id=project_id, prompt_version_id=best_pv_id, batch_id=batch_id, max_workers=max_workers,
             )
         best_score = baseline_outcome.mean_score
-        best_gate, best_gate_n, best_gate_recall = _gate_score(field_name, baseline_outcome.predictions)
+        best_gate, best_gate_n, best_gate_safety_ok = _gate_score(field_name, baseline_outcome.predictions)
         best_holdout_avg = 0.0
         if gen_gate:
             with db.get_conn(autocommit=True) as conn:
@@ -766,12 +766,13 @@ def _run_optimization(
                 # Accept on the production gate metric (F1 for lists / accuracy for
                 # categorical) -- the SAME metric the dashboard/supervisor gate on --
                 # computed on the winning candidate's val predictions.
-                cand_gate, cand_gate_n, cand_gate_recall = _gate_score(field_name, candidate_outcome.predictions)
-                # Candidate must beat incumbent on the gate metric AND not regress recall
-                # below the RECALL_FLOOR (list fields only; categorical recall=None).
+                cand_gate, cand_gate_n, cand_safety_ok = _gate_score(field_name, candidate_outcome.predictions)
+                # Candidate must beat the incumbent on the gate metric AND still clear
+                # its field's miss-rate floor, so the optimizer can never buy a headline
+                # gain by dropping values (lists) or abandoning rare classes (categorical).
                 passes_val = (
                     cand_gate > best_gate + improvement_epsilon
-                    and (cand_gate_recall is None or cand_gate_recall >= RECALL_FLOOR)
+                    and cand_safety_ok
                 )
                 # Cross-model generalization gate: a candidate that beats val must also
                 # not regress the mean gate metric on the untouched holdout set across

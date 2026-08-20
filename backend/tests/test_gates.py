@@ -65,3 +65,71 @@ class TestGateMetricSelection:
         assert gm["accuracy"] is not None
         assert gm["kappa"] is not None
         assert gm["n"] == 2
+
+
+class TestSafetyFloor:
+    """The miss-rate floor: passing the headline gate must not be enough when a
+    model buys that score by dropping values (lists) or abandoning rare classes."""
+
+    def test_list_field_below_recall_floor_fails(self):
+        assert scoring.safety_floor_ok({"recall": scoring.RECALL_FLOOR - 0.01}) is False
+
+    def test_list_field_at_recall_floor_passes(self):
+        assert scoring.safety_floor_ok({"recall": scoring.RECALL_FLOOR}) is True
+
+    def test_categorical_below_sensitivity_floor_fails(self):
+        gm = {"recall": None, "sensitivity_gateable": True,
+              "sensitivity": scoring.SENSITIVITY_FLOOR - 0.01}
+        assert scoring.safety_floor_ok(gm) is False
+
+    def test_categorical_at_sensitivity_floor_passes(self):
+        gm = {"recall": None, "sensitivity_gateable": True,
+              "sensitivity": scoring.SENSITIVITY_FLOOR}
+        assert scoring.safety_floor_ok(gm) is True
+
+    def test_insufficient_data_never_fails_a_model(self):
+        # Not gateable means "can't judge yet", which must not read as "failed".
+        gm = {"recall": None, "sensitivity_gateable": False, "sensitivity": 0.1}
+        assert scoring.safety_floor_ok(gm) is True
+        assert scoring.safety_floor_ok({}) is True
+
+
+class TestSupportedSensitivity:
+    def _rows(self, pairs):
+        return [{"predicted": p, "truth": t} for p, t in pairs]
+
+    def test_undersampled_classes_withhold_the_floor(self):
+        # Three classes with a single example each: per-class sensitivity can only
+        # be 0 or 1, so the floor must not be enforced on that noise.
+        gm = gate_metrics("sector_name", self._rows([
+            ("Health", "Health"), ("Education", "Education"), ("Energy", "Energy"),
+        ]))
+        assert gm["sensitivity_gateable"] is False
+        assert gm["n_classes_undersampled"] == 3
+        assert gm["sensitivity"] is not None  # still reported for the dashboard
+        assert scoring.safety_floor_ok(gm) is True
+
+    def test_well_sampled_classes_are_gateable(self):
+        pairs = [("Health", "Health")] * 5 + [("Education", "Education")] * 5 + \
+                [("Energy", "Energy")] * 5
+        gm = gate_metrics("sector_name", self._rows(pairs))
+        assert gm["sensitivity_gateable"] is True
+        assert gm["n_classes_undersampled"] == 0
+        assert gm["sensitivity"] == pytest.approx(1.0)
+
+    def test_collapsing_onto_the_common_class_is_caught(self):
+        # 20 Health + 5 Education, model always answers Health: accuracy 0.80
+        # looks acceptable, but it never once finds Education.
+        pairs = [("Health", "Health")] * 20 + [("Health", "Education")] * 5
+        gm = gate_metrics("sector_name", self._rows(pairs))
+        assert gm["accuracy"] == pytest.approx(0.80)
+        assert gm["sensitivity_gateable"] is True
+        assert gm["sensitivity"] == pytest.approx(0.5)  # 1.0 on Health, 0.0 on Education
+        assert scoring.safety_floor_ok(gm) is False
+
+    def test_rare_class_is_not_dropped_from_the_average(self):
+        # The guard must not be implemented by averaging over well-sampled classes
+        # only -- that would exclude the rare class and hide the collapse.
+        pairs = [("Health", "Health")] * 20 + [("Health", "Education")] * 5
+        gm = gate_metrics("sector_name", self._rows(pairs))
+        assert gm["sensitivity"] < gm["accuracy"]

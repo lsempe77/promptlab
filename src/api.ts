@@ -89,10 +89,17 @@ export interface Calibration {
 // accuracy kept as a reported concordance companion.
 export interface StageModelGate {
   model_id: string;
-  gate_metric_name: string; // "f1" | "accuracy"
+  gate_metric_name: string; // "f1" | "kappa" | "accuracy"
   gate_metric: number;
   precision: number | null;
   recall: number | null;
+  /** Categorical fields: macro-averaged one-vs-rest sensitivity across classes.
+   *  Optional: absent from responses served by a backend older than the
+   *  per-field-gate change. */
+  sensitivity?: number | null;
+  /** False when some class has too few examples for `sensitivity` to gate on. */
+  sensitivity_gateable?: boolean | null;
+  n_classes_undersampled?: number | null;
   f1: number | null;
   accuracy: number | null;
   kappa: number | null;

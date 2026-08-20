@@ -102,6 +102,28 @@ gate on **Cohen's κ ≥ 0.80**; list fields keep **F1 ≥ 0.90**.
   `sub_sector` candidates are narrowed to ~8 by the known parent sector, so its effective choice
   set is far smaller than 66 and its κ is flattered by the chance correction.
 
+**Done (2026-08-20) — miss-rate safety floor for categorical fields.** List fields already had
+`RECALL_FLOOR` (0.85) enforced alongside the F1 gate; categorical fields computed macro-sensitivity
+and then discarded it. They now have the equivalent guard, via one shared
+`scoring.safety_floor_ok()` used by the dashboard gate, the supervisor and optimizer acceptance
+(previously three near-duplicate checks that could drift apart).
+
+- *The failure it catches:* a model can post a good κ while collapsing onto the common classes and
+  almost never emitting rare ones. For an evidence **gap map** that is the worst available error —
+  under-detecting a rare sub-sector manufactures a gap that does not exist, inverting the product's
+  central claim. Macro-averaged one-vs-rest sensitivity (every class weighted equally) is what
+  detects it; accuracy and κ do not.
+- *Design trap avoided:* the obvious noise fix — averaging only over well-sampled classes — is
+  wrong, because the well-sampled classes are precisely the common ones a collapsing model gets
+  right. It would hide the failure the metric exists to catch. Instead the metric keeps every class
+  and the **floor is withheld** until every class has ≥ `MIN_CLASS_SUPPORT` (5) examples
+  (`sensitivity_gateable`). "Not enough data to judge" never fails a model.
+- *Status on current data: the floor is inert*, and that is the point. `sector_name` has 7
+  undersampled classes and `sub_sector` 8, so neither is gateable at n=100. Enforcing rare-class
+  coverage on `sub_sector` needs roughly 5 examples per sub-sector — a concrete argument for
+  scaling past the 100-record pilot toward the 7,675 available records.
+- Reported in the leaderboard as a "Sensitivity" column (greyed when not yet enforceable).
+
 **Done (2026-07-06) — optimizer acceptance aligned with the gate:** the optimizer now accepts a
 rewrite on the **same field-type-aware gate metric** (`analytics.gate_metrics` — F1 for lists,
 accuracy for categorical) on both the val set and the cross-model holdout, so "what the optimizer
