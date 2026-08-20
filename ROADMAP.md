@@ -96,6 +96,43 @@ curator-decided review CSVs (`keep` / `accept` / `edit: X`) and applies them to 
 a reversible `gt_audit_log` table + a timestamped JSON backup (dry-run by default; `--apply` to
 write). Used it to land the 49-fix cleanup on `sector_name`/`sub_sector`/`author_affiliation`. Still
 to build: the scheduled read-only audit run + emailed diff + signed one-click approval trigger.
+
+## Prompt optimization — research grounding & the exemplar gap
+
+Reference: **Li, Wang, Li & Jin (2025), _A Survey of Automatic Prompt Engineering: An Optimization
+Perspective_** ([arXiv:2502.11560](https://arxiv.org/abs/2502.11560)). It formalises prompt
+optimization as `P* = argmax_P E_(x,y)~D_val [ g(f(P(x)), y) ]` — exactly our loop (`g` =
+`analytics.gate_metrics`, `D_val` = the fixed val set).
+
+**Where we sit.** A discrete prompt decomposes as `P(x) = [I, T, e_1..e_k ; x]` — instruction,
+thoughts (CoT), exemplars. Our optimizer mutates **only `I`**; `T` and `e_i` are unused. Method-wise
+we're in the *FM-based / heuristic-meta-prompt* family (OPRO, StraGo, ProTeGi).
+
+**Choices the survey independently supports** (keep these):
+- **Per-model prompt lineages** — matches MAPO (model-adaptive prompt optimization).
+- **Reflector sees successes *and* failures** — matches StraGo's success/failure meta-context.
+- **`IMPROVEMENT_EPSILON` + cross-model holdout gate** — the survey cites Sclar et al. (ICLR 2024):
+  trivial punctuation/phrasing changes cause real score swings, so sub-epsilon "improvements" are
+  often **spurious format sensitivity**. Refusing them is correct, not a malfunction.
+
+**Planned upgrades, highest value first:**
+1. **Optimize exemplars, not just the instruction** (the biggest gap). Co-optimizing instructions +
+   exemplars is reported as more robust than either alone (PhaseEvo, Promptbreeder, PromptWizard,
+   Mixture-of-Prompts). **Hard constraint: exemplars MUST come from corpus records outside the
+   eval/val sets** — drawing them from the scored 100 would leak the answer key and inflate every
+   metric. Exemplar **order** is also a variable (Lu et al. 2022, order sensitivity).
+2. **OPRO-style meta-prompt**: show the reflector previous candidates *with their scores* (the
+   trajectory), not just a reject list — cheap, no new infrastructure.
+3. **Prompt compression as a constrained objective** (`‖P‖_length ≤ κ`): trim the accreted, verbose
+   baseline instructions without losing accuracy. This is the principled version of "these prompts
+   are bloated".
+4. Later / heavier: beam search or bandit candidate selection (ProTeGi), MCTS (PromptAgent).
+
+**Note on structure:** the dashboard displays only the `TASK:` slot, which makes prompts look far
+cruder than they are — `prompts.py` already supplies role+context, delimited `<paper>` data, an
+injection guard, taxonomy/definition constraints, and a typed JSON output contract with an explicit
+null convention. A UI change to show the *assembled* prompt would avoid this misreading.
+
 - **Hard rule:** Loop B only applies **data** changes (ground truth, taxonomy, eval-policy toggles).
   **Code / eval-logic changes always go through a GitHub PR → human review → `fly deploy`** — an
   agent must not be able to edit its own scoring code or answer key (reward-hacking surface).

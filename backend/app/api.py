@@ -942,8 +942,12 @@ def confusion(project_slug: str, field_name: str, model_id: str | None = None, p
         project_id = db.get_project_id(conn, project_slug)
         params: list = [project_id, field_name]
         pvid = _resolve_pvid(conn, project_id, field_name, prompt_version)
-        q += " AND r.prompt_version_id = ?"
-        params.append(pvid)
+        # pvid is None only when no specific version was requested -> don't filter
+        # by version (SQL `prompt_version_id = NULL` matches no rows). pvid == -1
+        # (unknown requested version) still filters -> correctly empty.
+        if pvid is not None:
+            q += " AND r.prompt_version_id = ?"
+            params.append(pvid)
         if model_id:
             q += " AND r.model_id = ?"
             params.append(model_id)
