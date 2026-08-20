@@ -236,6 +236,28 @@ def apply_changes(conn, project_id: int, changes: list[dict], source: str) -> No
         )
 
 
+def invalidate_stale_judgments(conn, project_id: int, changes: list[dict]) -> int:
+    """Delete LLM judgments for records whose ground truth just changed.
+
+    A judgment is a verdict of "prediction vs ground truth". Once the ground
+    truth changes, any earlier verdict was decided against a value that no
+    longer exists, so it is not merely outdated but wrong — and because
+    `llm_judge` only picks up runs with NO judgment, a stale row would never be
+    revisited. Deleting lets the next judge pass regenerate it (judgments are
+    derived data; `runs` and `ground_truth` are untouched).
+    """
+    deleted = 0
+    for ch in changes:
+        cur = conn.execute(
+            "DELETE FROM llm_judgments WHERE run_id IN ("
+            "  SELECT id FROM runs WHERE project_id = ? AND record_id = ? AND field_name = ?"
+            ")",
+            (project_id, ch["record_id"], ch["field"]),
+        )
+        deleted += cur.rowcount or 0
+    return deleted
+
+
 def _fmt(v) -> str:
     s = json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v
     return s if len(s) <= 140 else s[:137] + "..."
@@ -321,7 +343,12 @@ def main() -> int:
                 backup_path = db_path.parent / f"gt_fixes_backup_{stamp}.json"
                 backup_path.write_text(json.dumps(backup, ensure_ascii=False, indent=2), encoding="utf-8")
                 apply_changes(conn, project_id, all_changes, source)
+                n_judgments = invalidate_stale_judgments(conn, project_id, all_changes)
                 print(f"  -> APPLIED {len(all_changes)} change(s); backup written to {backup_path.name}")
+                if n_judgments:
+                    print(f"  -> invalidated {n_judgments} LLM judgment(s) decided against the OLD "
+                          f"ground truth (they will be re-judged on the next judge pass)")
+                print("  -> NOTE: run `rescore_runs.py` to refresh runs.score/is_correct for these records.")
             elif args.apply:
                 print("  -> nothing to apply")
             grand_total += len(all_changes)
