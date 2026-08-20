@@ -80,8 +80,14 @@ DEP, scores every model against human-curated ground truth, and improves prompts
 - Optimizer: `no_improve_limit` default **4**, `bold_after` **2**, `val_size` **50** (clamped to
   ~35 on 100 GT records), `holdout_size` **30**, `IMPROVEMENT_EPSILON` **0.03** (list fields) /
   **0.01** (categorical). Deterministic (`seed=42`), self-terminating batch jobs.
-- `scoring.GATE_THRESHOLD = 0.90` (primary); `scoring.RECALL_FLOOR = 0.85` (hard floor for list
-  fields — prevents F1 gaming at the expense of recall).
+- `scoring.GATE_THRESHOLD = 0.90` is the **default**; `scoring.FIELD_GATE` overrides it per field
+  (categorical `sector_name`/`sub_sector` gate on **Cohen's κ ≥ 0.80** instead of accuracy). Always
+  read the gate via `scoring.gate_for()` / `scoring.gate_threshold_for(field)`, never the bare
+  constant.
+- Miss-rate floor: use `scoring.safety_floor_ok(gate_metrics)` — never re-implement it. It applies
+  `RECALL_FLOOR` (0.85) to list fields and `SENSITIVITY_FLOOR` (0.70) to categorical ones, the
+  latter only when `sensitivity_gateable` (every class has ≥ `MIN_CLASS_SUPPORT` examples). Absent
+  data means "can't judge", which must never fail a model.
 
 ## Metrics quick reference
 - **Gate metric** (`app/analytics.gate_metrics`): **F1** for list fields (`authors`,

@@ -22,6 +22,7 @@ from typing import Any
 
 from .fields import FIELDS
 from .normalize import authors_equal
+from . import scoring
 from .scoring import FUZZY_MATCH_THRESHOLD, _fuzzy_equal, _norm, fold_category
 from .taxonomy import get_options
 
@@ -108,6 +109,16 @@ def _categorical_confusion(rows: list[dict[str, Any]]) -> dict:
     def macro(values: list[float]) -> float:
         return sum(values) / len(values) if values else 0.0
 
+    # The floor may only be enforced once EVERY real class is adequately sampled
+    # (see scoring.MIN_CLASS_SUPPORT). Averaging over just the well-sampled classes
+    # would quietly drop the rare ones this metric exists to protect. "(other)" is
+    # a catch-all bucket of unrelated categories, not a class, so it doesn't count.
+    real_classes = [c for c, label in enumerate(truth_labels) if label != "(other)"]
+    undersampled = [c for c in real_classes if sum(matrix[c]) < scoring.MIN_CLASS_SUPPORT]
+    sensitivity_gateable = (
+        not undersampled and len(real_classes) >= scoring.MIN_SUPPORTED_CLASSES
+    )
+
     return {
         "type": "categorical",
         "truth_labels": truth_labels,
@@ -116,6 +127,8 @@ def _categorical_confusion(rows: list[dict[str, Any]]) -> dict:
         "accuracy": (n_correct / n_total) if n_total else 0.0,
         "kappa": _cohens_kappa(rows),
         "sensitivity": macro(sensitivities),
+        "sensitivity_gateable": sensitivity_gateable,
+        "n_classes_undersampled": len(undersampled),
         "specificity": macro(specificities),
         "f2": macro(f2s),
         "n": n_total,
@@ -202,24 +215,34 @@ def gate_metrics(field_name: str, rows: list[dict[str, Any]]) -> dict:
     Field-type aware, matching the systematic-review evaluation literature:
       * list fields (authors/affiliation/country) -> element-level micro F1
         (balances precision & recall; the standard for multi-value extraction);
-      * single-categorical (sector/sub_sector) -> record-level accuracy, with
-        Cohen's kappa reported alongside (chance-corrected).
-    `metric` is the number compared against scoring.GATE_THRESHOLD.
+      * single-categorical (sector/sub_sector) -> Cohen's kappa (chance-corrected,
+        so one bar means the same thing on an 11-class and a 66-class field),
+        with raw accuracy reported alongside.
+    `metric` is the number compared against `scoring.gate_threshold_for(field)`.
+    Each type also carries a miss-rate companion enforced via
+    `scoring.safety_floor_ok`: `recall` for lists, macro-`sensitivity` for
+    categorical (the latter only once `sensitivity_gateable`).
     """
     conf = compute_confusion(field_name, rows)
     if conf["type"] == "categorical":
+        # A field may override which number is gated (see scoring.FIELD_GATE);
+        # the others stay in the payload as reported companions either way.
+        override, _ = scoring.gate_for(field_name)
+        metric_name = override or "accuracy"
+        metric = conf.get(metric_name, conf["accuracy"])
         return {
-            "metric_name": "accuracy",
-            "metric": conf["accuracy"],
+            "metric_name": metric_name,
+            "metric": metric,
             "accuracy": conf["accuracy"],
             "kappa": conf.get("kappa"),
             "precision": None,
-            # recall is None for categorical: the RECALL_FLOOR is a list-field
-            # guard only. Macro-sensitivity (averaged over rare classes) is
-            # exposed separately so the dashboard can still surface it, but it
-            # must NOT feed the gate/optimizer floor.
+            # recall stays None for categorical so the list-field RECALL_FLOOR
+            # never fires here; the categorical miss-rate guard is
+            # sensitivity_supported (macro over adequately-sampled classes only).
             "recall": None,
             "sensitivity": conf.get("sensitivity"),
+            "sensitivity_gateable": conf.get("sensitivity_gateable"),
+            "n_classes_undersampled": conf.get("n_classes_undersampled"),
             "f1": None,
             "n": conf["n"],
         }

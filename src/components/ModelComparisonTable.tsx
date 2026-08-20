@@ -34,6 +34,8 @@ type Row = ModelSummary & {
   precision: number | null;
   recall: number | null;
   kappa: number | null;
+  sensitivity: number | null;
+  sensitivity_gateable: boolean | null;
   judged: number | null;
   prompt_version: number | null;
 };
@@ -57,7 +59,7 @@ export function ModelComparisonTable({
   valueType?: string;
 }) {
   const isList = valueType !== "single_categorical";
-  const qualityLabel = isList ? "Quality (F1)" : "Quality (acc.)";
+  const qualityLabel = isList ? "Quality (F1)" : "Quality (κ)";
   const [sortKey, setSortKey] = useState<string>("gate_metric");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
@@ -75,6 +77,8 @@ export function ModelComparisonTable({
       precision: g?.precision ?? null,
       recall: g?.recall ?? null,
       kappa: g?.kappa ?? null,
+      sensitivity: g?.sensitivity ?? null,
+      sensitivity_gateable: g?.sensitivity_gateable ?? null,
       judged: g?.llm_judged_accuracy ?? null,
       prompt_version: g?.prompt_version ?? null,
     };
@@ -119,6 +123,29 @@ export function ModelComparisonTable({
         ]
       : [
           { key: "kappa", label: "Cohen's κ", title: "Chance-corrected agreement — accuracy discounted for how often the categories would match by luck.", numeric: true, get: (r: Row) => r.kappa, render: (r: Row) => num3(r.kappa) },
+          {
+            key: "sensitivity",
+            label: "Sensitivity",
+            title:
+              "Macro-averaged recall across categories — every category counts equally, however rare. Catches a model that scores well by always picking the common categories while never finding the rare ones. Greyed out when some category has too few examples to judge it reliably.",
+            numeric: true,
+            get: (r: Row) => r.sensitivity,
+            render: (r: Row) =>
+              r.sensitivity == null ? (
+                <span className="muted">—</span>
+              ) : (
+                <span
+                  className={r.sensitivity_gateable === false ? "muted" : undefined}
+                  title={
+                    r.sensitivity_gateable === false
+                      ? "Reported but not enforced: some category has too few examples."
+                      : undefined
+                  }
+                >
+                  {pct(r.sensitivity)}
+                </span>
+              ),
+          },
         ]),
     { key: "judged", label: "Concordance", title: "Semantic accuracy from a cross-family LLM judge (\"same real-world value?\"). An independent corroboration of the gate.", numeric: true, get: (r) => r.judged, render: (r) => pct(r.judged) },
     { key: "accuracy", label: "Fuzzy-match", title: "Heuristic string-match rate (fuzzy matches count as correct). Superseded by the gate metric; shown for reference.", numeric: true, get: (r) => r.accuracy, render: (r) => pct(r.accuracy) },

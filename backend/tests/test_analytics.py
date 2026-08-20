@@ -310,14 +310,16 @@ class TestComputeConfusion:
 # --------------------------------------------------------------------------- #
 
 class TestGateMetrics:
-    def test_categorical_returns_accuracy(self):
+    def test_categorical_gates_on_kappa(self):
+        # sector_name/sub_sector are gated on Cohen's kappa (chance-corrected), not
+        # raw accuracy — see scoring.FIELD_GATE. Accuracy is still reported.
         rows = [
             {"predicted": "Health", "truth": "Health"},
             {"predicted": "Education", "truth": "Education"},
         ]
         gm = gate_metrics("sector_name", rows)
-        assert gm["metric_name"] == "accuracy"
-        assert gm["metric"] == 1.0
+        assert gm["metric_name"] == "kappa"
+        assert gm["metric"] == 1.0  # perfect agreement -> kappa 1.0
         assert gm["accuracy"] == 1.0
         assert gm["f1"] is None
         assert gm["recall"] is None
@@ -329,7 +331,10 @@ class TestGateMetrics:
             {"predicted": "Health", "truth": "Education"},
         ]
         gm = gate_metrics("sector_name", rows)
-        assert gm["metric"] == 0.5
+        assert gm["accuracy"] == 0.5
+        # kappa is chance-corrected, so it is at or below accuracy here.
+        assert gm["metric"] == gm["kappa"]
+        assert gm["metric"] <= 0.5
 
     def test_list_returns_f1(self):
         rows = [{"predicted": ["a", "b"], "truth": ["a", "b"]}]

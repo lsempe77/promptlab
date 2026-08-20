@@ -41,7 +41,6 @@ except Exception:
 
 from backend.app import analytics, config, db, optimization_policy, prompt_store, scoring  # noqa: E402
 from backend.app.optimizer import FIELD_IMPROVEMENT_EPSILON, DEFAULT_IMPROVEMENT_EPSILON  # noqa: E402
-from backend.app.scoring import RECALL_FLOOR  # noqa: E402
 from backend.app import db_pg  # noqa: E402 -- Phase 2: task-queue mode
 from backend.app.prompts import BASELINE_INSTRUCTIONS  # noqa: E402
 
@@ -140,9 +139,10 @@ def _field_state(conn, project_id: int, field: str, models: list[str]) -> dict:
             mrows = [{"predicted": json.loads(x["parsed_value_json"]), "truth": json.loads(x["value_json"])}
                      for x in grows]
             gm = analytics.gate_metrics(field, mrows)
-            # gate[m] = (primary_metric, n, recall_or_None)
-            # recall is only meaningful for list fields; None for categorical.
-            gate[m] = (gm["metric"], gm["n"], gm.get("recall"))
+            # gate[m] = (primary_metric, n, safety_floor_ok)
+            # The floor is recall for list fields and macro-sensitivity over
+            # adequately-sampled classes for categorical ones; scoring picks.
+            gate[m] = (gm["metric"], gm["n"], scoring.safety_floor_ok(gm))
         # per-model persistent exhaustion: a rejected candidate off THIS model's
         # current prompt means don't re-optimize this model on this prompt.
         exhausted[m] = conn.execute(
@@ -172,13 +172,14 @@ def _field_state(conn, project_id: int, field: str, models: list[str]) -> dict:
             ).fetchone()["c"]
         opt_stats[m] = (n_iters, since_accept)
     refs = min((per_model_refs.get(m, 0) for m in models), default=0) if models else 0
-    return {"pv_of": pv_of, "refs": refs, "per_model_refs": per_model_refs,
+    return {"field": field, "pv_of": pv_of, "refs": refs, "per_model_refs": per_model_refs,
             "unjudged": unjudged, "judged": judged, "gate": gate, "exhausted": exhausted,
             "opt_stats": opt_stats}
 
 
 def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str], str]:
     """Return (action, arg, optimize_models, reason)."""
+    gate_threshold = scoring.gate_threshold_for(state.get("field", ""))
     stages = list(config.PRODUCTION_ROLLOUT_STAGES)
     final = stages[-1]
     refs, unjudged, gate = state["refs"], state["unjudged"], state["gate"]
@@ -193,14 +194,11 @@ def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str],
         return "judge", None, [], "runs exist but no gate metric yet -> judge"
 
     def _passes_gate(m: str) -> bool:
-        """True if model passes both F1/accuracy gate AND the recall floor (list fields only)."""
-        metric, _n, recall = gate[m]
-        if metric < scoring.GATE_THRESHOLD:
+        """True if model clears the headline gate AND its field's miss-rate floor."""
+        metric, _n, safety_ok = gate[m]
+        if metric < gate_threshold:
             return False
-        # Recall floor applies only to list fields (recall is None for categorical)
-        if recall is not None and recall < RECALL_FLOOR:
-            return False
-        return True
+        return safety_ok
 
     # Gate on the runs-based quality metric (F1 for list fields, accuracy for
     # categorical) -- same metric the dashboard shows -- not judged accuracy.
@@ -217,7 +215,7 @@ def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str],
     for m in below:
         n_iters, since_accept = opt_stats.get(m, (0, 0))
         ok, status, reason = optimization_policy.decide(
-            n_iters, since_accept, gate[m][0], scoring.GATE_THRESHOLD
+            n_iters, since_accept, gate[m][0], gate_threshold
         )
         if not ok:
             flagged.append((m, status, reason))
@@ -226,14 +224,14 @@ def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str],
         # else: exhausted this round but policy still allows -> retry after its prompt changes
     if optimizable:
         return "optimize", None, optimizable, (
-            f"{len(optimizable)} model(s) below gate {scoring.GATE_THRESHOLD:.0%} -> optimize each on its own prompt"
+            f"{len(optimizable)} model(s) below gate {gate_threshold:.0%} -> optimize each on its own prompt"
         )
 
     # Advance when the BEST model passes gate (not "all must pass").
     # Weaker models continue to be optimized at the next stage level.
     # This prevents a single broken/weak model from blocking field progression.
     best_metric = max((gate[m][0] for m in evaluated if _passes_gate(m)), default=0.0)
-    if best_metric >= scoring.GATE_THRESHOLD:
+    if best_metric >= gate_threshold:
         next_stage = next((s for s in stages if s > refs), None)
         if next_stage is not None:
             return "extract", next_stage, [], (
@@ -256,7 +254,7 @@ def _decide(state: dict, models: list[str]) -> tuple[str, int | None, list[str],
 
     if below:
         return "stuck", None, [], (
-            f"{len(below)} model(s) below gate {scoring.GATE_THRESHOLD:.0%}, each already has a rejected "
+            f"{len(below)} model(s) below gate {gate_threshold:.0%}, each already has a rejected "
             "candidate this round -> waiting (will retry after prompts change)"
         )
 
@@ -305,7 +303,8 @@ def main() -> None:
     _heartbeat("starting")
 
     _log(f"Supervisor start | project={args.project} | fields={fields} | models={len(models)} "
-         f"| stages={config.PRODUCTION_ROLLOUT_STAGES} | gate={scoring.GATE_THRESHOLD:.0%} "
+         f"| stages={config.PRODUCTION_ROLLOUT_STAGES} | gates="
+         f"{ {f: scoring.gate_threshold_for(f) for f in fields} } "
          f"| max_cycles={args.max_cycles} | parallelism={args.parallelism}"
          f"{' | LOOP every %ds' % args.interval if args.loop else ''}"
          f"{' | DRY RUN' if args.dry_run else ''}")
@@ -327,8 +326,8 @@ def main() -> None:
                     state = _field_state(conn, project_id, field, models)
                 action, arg, opt_models, reason = _decide(state, models)
                 passing = sum(
-                    1 for _m, (score, _n, recall) in state["gate"].items()
-                    if score >= scoring.GATE_THRESHOLD and (recall is None or recall >= RECALL_FLOOR)
+                    1 for _m, (score, _n, safety_ok) in state["gate"].items()
+                    if score >= scoring.gate_threshold_for(field) and safety_ok
                 )
                 _log(f"[{field}] refs={state['refs']} unjudged={state['unjudged']} "
                      f"judged={len(state['judged'])} passing={passing}/{len(models)} "

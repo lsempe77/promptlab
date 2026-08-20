@@ -46,17 +46,17 @@ categorical):
 
 - **List fields** (`authors`, `author_affiliation`, `author_country`) gate on **element-level F1**
   (balances precision & recall).
-- **Single-categorical fields** (`sector_name`, `sub_sector`) gate on **accuracy**, with **Cohen's
-  κ** (chance-corrected) reported alongside.
+- **Single-categorical fields** (`sector_name`, `sub_sector`) gate on **Cohen's κ** (chance-corrected),
+  with raw accuracy reported alongside — see "Done (2026-08-20)" below.
 - **LLM-judged accuracy** is kept as a reported *concordance* companion, not the gate.
 - Threshold lowered **0.95 → 0.90** (the human reference standard is itself noisy — "benchmark
   bias", up to ~63% of human extractions contain ≥1 error per Mathes 2017 — so 0.95 was chasing
   label noise; the literature commonly uses ~0.70–0.90). See `scoring.GATE_THRESHOLD`,
   `analytics.gate_metrics`.
 
-**Planned — user-selectable, evidence-supported thresholds:** let the user set the gate
-threshold (and possibly the gated *metric*) **per field**, rather than a single global 0.90. The UI
-should support the choice with evidence — show the literature ranges (screening favours
+**Planned — user-selectable thresholds in the UI:** the per-field gate is currently set in code
+(`scoring.FIELD_GATE`). The remaining work is to let the *user* set the threshold and gated metric
+per field from the UI, supported by evidence — show the literature ranges (screening favours
 recall/sensitivity ≥ ~0.95; extraction commonly ~0.70–0.90 F1), the current per-model
 distribution, and the precision/recall trade-off — so the choice is informed by the user's own
 error-cost preference (is a *wrong* value worse than a *missing* one?). Store thresholds per
@@ -73,6 +73,56 @@ disagreements, not sibling confusion. Conclusion: **0.90 is the wrong target for
 label is inherently one-of-several — which strengthens the per-field-threshold plan (a lower bar
 and/or Cohen's κ for categorical). Best per-field models found: `sub_sector` → **Kimi-K3**,
 `author_affiliation` → **GLM-5.2** (open weights match/beat the closed frontier here, at lower cost).
+
+**Done (2026-08-20) — per-field gates implemented (`scoring.FIELD_GATE`):** categorical fields now
+gate on **Cohen's κ ≥ 0.80**; list fields keep **F1 ≥ 0.90**.
+
+- *Why κ for categorical:* raw accuracy is not comparable across fields with different numbers of
+  classes. `sector_name` has 11 classes (chance ≈ 0.091), `sub_sector` has 66 (chance ≈ 0.015), so
+  the same accuracy represents very different amounts of real skill. κ corrects for chance and puts
+  both fields on one scale. 0.80 is the Landis & Koch "substantial" → "almost perfect" boundary.
+- *Why F1 ≥ 0.90 stays for list fields:* all three already sit at 0.863–0.911, i.e. essentially at
+  the bar. Lowering it would be moving the goalposts to manufacture a pass.
+- *Honesty check — at adoption only 1 of 5 fields passes*, so these thresholds are demonstrably not
+  fitted to current scores:
+
+  | field | gated on | threshold | best | verdict |
+  |---|---|---|---|---|
+  | `authors` | F1 | 0.90 | 0.889 | fail (−0.011) |
+  | `author_affiliation` | F1 | 0.90 | 0.863 | fail (−0.037) |
+  | `author_country` | F1 | 0.90 | 0.911 | **pass** |
+  | `sector_name` | κ | 0.80 | 0.605 | fail (−0.195) |
+  | `sub_sector` | κ | 0.80 | 0.748 | fail (−0.052) |
+
+- *Open eval-policy question for the user:* κ ≥ **0.61** (Landis & Koch "substantial") would let
+  `sub_sector` pass today. 0.80 vs 0.61 is a judgement about acceptable error, not a technical
+  question — hence this shipped as a PR rather than straight to `main`.
+- *Surprise:* on κ, `sub_sector` (66 classes, κ 0.748) **outperforms** `sector_name` (11 classes,
+  κ 0.605), reversing the earlier assumption that `sub_sector` is the hardest field. Caveat:
+  `sub_sector` candidates are narrowed to ~8 by the known parent sector, so its effective choice
+  set is far smaller than 66 and its κ is flattered by the chance correction.
+
+**Done (2026-08-20) — miss-rate safety floor for categorical fields.** List fields already had
+`RECALL_FLOOR` (0.85) enforced alongside the F1 gate; categorical fields computed macro-sensitivity
+and then discarded it. They now have the equivalent guard, via one shared
+`scoring.safety_floor_ok()` used by the dashboard gate, the supervisor and optimizer acceptance
+(previously three near-duplicate checks that could drift apart).
+
+- *The failure it catches:* a model can post a good κ while collapsing onto the common classes and
+  almost never emitting rare ones. For an evidence **gap map** that is the worst available error —
+  under-detecting a rare sub-sector manufactures a gap that does not exist, inverting the product's
+  central claim. Macro-averaged one-vs-rest sensitivity (every class weighted equally) is what
+  detects it; accuracy and κ do not.
+- *Design trap avoided:* the obvious noise fix — averaging only over well-sampled classes — is
+  wrong, because the well-sampled classes are precisely the common ones a collapsing model gets
+  right. It would hide the failure the metric exists to catch. Instead the metric keeps every class
+  and the **floor is withheld** until every class has ≥ `MIN_CLASS_SUPPORT` (5) examples
+  (`sensitivity_gateable`). "Not enough data to judge" never fails a model.
+- *Status on current data: the floor is inert*, and that is the point. `sector_name` has 7
+  undersampled classes and `sub_sector` 8, so neither is gateable at n=100. Enforcing rare-class
+  coverage on `sub_sector` needs roughly 5 examples per sub-sector — a concrete argument for
+  scaling past the 100-record pilot toward the 7,675 available records.
+- Reported in the leaderboard as a "Sensitivity" column (greyed when not yet enforceable).
 
 **Done (2026-07-06) — optimizer acceptance aligned with the gate:** the optimizer now accepts a
 rewrite on the **same field-type-aware gate metric** (`analytics.gate_metrics` — F1 for lists,
