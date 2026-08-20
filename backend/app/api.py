@@ -32,11 +32,16 @@ logger = logging.getLogger("promptlab.api")
 
 app = FastAPI(title="Agentic 3ie Prompt Lab API")
 
-# Phase 2: init Postgres schema on startup (idempotent)
+# Phase 2: init Postgres schema on startup (idempotent). Postgres is OPTIONAL —
+# this API serves the read-only SQLite DB, so a dead/quota-exhausted Postgres
+# must NEVER crash startup (it used to exit code 3 -> machine crash-loop).
 @app.on_event("startup")
 async def _startup():
     if db_pg.pg_enabled():
-        db_pg.init_pg()
+        try:
+            db_pg.init_pg()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Postgres init failed (%s); serving SQLite only.", exc)
 
 app.add_middleware(
     CORSMiddleware,
