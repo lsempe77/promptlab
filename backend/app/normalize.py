@@ -294,6 +294,31 @@ def _parse_author(name: str) -> tuple[str, list[str]]:
     return _norm_key(last), [t for t in _norm_key(given).split() if t]
 
 
+def _split_runon_initials(tokens: list[str], other: list[str]) -> list[str]:
+    """Split 'ma' -> ['m','a'] when the other side is spelled as separate
+    initials and that makes the two line up.
+
+    Papers print "Wahed, MA" where the reference data has "Wahed, M. A.".
+    Without this, 'ma' is a single token that never lines up positionally with
+    ['m','a'], so one author counts as two people. Deliberately asymmetric: a
+    token is only split when the other side gives positive evidence it is
+    run-together initials, never speculatively.
+
+    Restricted to TWO letters because that is the only run-on length actually
+    observed in this data ("MA", "JM"). Allowing three would make "Ana" match
+    an unrelated "A. N. A.", trading a real precision loss for a case we have
+    no evidence occurs.
+    """
+    if len(tokens) != 1 or len(other) < 2:
+        return tokens
+    t = tokens[0]
+    if not (t.isalpha() and len(t) == 2):
+        return tokens
+    if all(len(o) == 1 for o in other[: len(t)]) and list(t) == other[: len(t)]:
+        return list(t)
+    return tokens
+
+
 def _given_token_compatible(x: str, y: str) -> bool:
     return x == y or (len(x) == 1 and y.startswith(x)) or (len(y) == 1 and x.startswith(y))
 
@@ -308,6 +333,8 @@ def authors_equal(a: str, b: str) -> bool:
         return False
     if not ga or not gb:
         return True  # surname-only on one side: can't distinguish, accept
+    ga = _split_runon_initials(ga, gb)
+    gb = _split_runon_initials(gb, ga)
     exact = 0
     for x, y in zip(ga, gb):  # positional: first, middle, ...
         if not _given_token_compatible(x, y):
@@ -321,6 +348,34 @@ def authors_equal(a: str, b: str) -> bool:
 
 # ── Field-aware dispatch ────────────────────────────────────────────────────
 
+# The 3ie extraction protocol tells curators to record a missing value as
+# "Not reported" (Author Affiliation Country) or "999" (Author Affiliation
+# Institution). In practice the accumulated ground truth uses whichever wording
+# the curator reached for: author_country holds "Not reported" (99),
+# "Not specified" (60) and "Not applicable" (29); author_affiliation holds
+# "Not specified" (79), "999" (55), "Not reported" (9), "Unspecified" (1).
+# These all assert the same thing — the paper does not say — so scoring a model
+# wrong for picking a different synonym measures vocabulary, not extraction.
+# Folded to one token on BOTH sides, symmetrically.
+_MISSING_SENTINEL = "not reported"
+# Split by match rule. Prefixes catch trailing commentary such as the real value
+# "Not specifies (Independent Consultant/Researcher)" — the parenthetical explains
+# an absent value rather than naming a different one. ("not specifie" also absorbs
+# the "specifies"/"specified" typo present in the data.) Short, ambiguous tokens
+# must match exactly, so an institution like "Nonesuch University" is never read
+# as a missing value.
+_MISSING_PREFIXES = (
+    "not reported", "not specified", "not specifie", "not applicable",
+    "not stated", "not available", "not mentioned",
+)
+_MISSING_EXACT = {"unspecified", "unknown", "none", "n a", "na", "999"}
+
+
+def _is_missing(value: str) -> bool:
+    v = _norm_key(value).strip()
+    return v in _MISSING_EXACT or v.startswith(_MISSING_PREFIXES)
+
+
 def normalize_value(field_name: str, value: str) -> str:
     """Apply field-specific name normalization to a scalar string value.
 
@@ -328,6 +383,8 @@ def normalize_value(field_name: str, value: str) -> str:
     norm/fuzzy comparison, so both prediction and truth are canonicalized
     symmetrically.  Unknown fields pass through unchanged.
     """
+    if _is_missing(value):
+        return _MISSING_SENTINEL
     if field_name == "author_country":
         return normalize_country(value)
     if field_name == "author_affiliation":
