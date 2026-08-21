@@ -116,10 +116,13 @@ FIELDS: dict[str, FieldSpec] = {
     "sub_sector": FieldSpec(
         name="sub_sector",
         label="Sub-sector",
-        value_type="single_categorical",
+        value_type="list_categorical",
         taxonomy_key="sub_sectors_flat",
         description=(
-            "Select the most specific World Bank sub-sector using a two-step approach:\n\n"
+            "Select EVERY World Bank sub-sector that applies, using a two-step approach. Most papers\n"
+            "have exactly one, but report all of them when a paper genuinely spans several (e.g. a\n"
+            "school-feeding trial is both an Education and a Health sub-sector question). Do not pad\n"
+            "the list: only include a sub-sector the paper actually evaluates.\n\n"
             "STEP 1 — Identify the main sector from the 11 options: Agriculture fishing and forestry | "
             "Education | Energy and extractives | Financial sector | Health | Social protection | "
             "Industry trade and services | Information and communications technologies | "
@@ -155,7 +158,8 @@ FIELDS: dict[str, FieldSpec] = {
             "Other - Water, sanitation and waste management\n\n"
             "Rules: Use 'Other - [Sector]' only when no specific sub-sector fits. "
             "Use 'Public admin - [Sector]' only when the paper is about managing the sector's "
-            "administration, not evaluating service delivery."
+            "administration, not evaluating service delivery. All values must come from the SAME "
+            "sector identified in step 1."
         ),
     ),
 }

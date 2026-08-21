@@ -136,9 +136,9 @@ def _categorical_confusion(rows: list[dict[str, Any]]) -> dict:
 
 
 def _as_list(v: Any) -> list[str]:
-    if isinstance(v, list):
-        return [str(x) for x in v]
-    return [] if not v else [str(v)]
+    # Shared with the scorer so the gate F1 and the per-run scores agree, and so
+    # pipe-joined multi-value reference data is split identically in both.
+    return scoring.as_value_list(v)
 
 
 def _match_counts(predicted: list[str], truth: list[str], fuzzy: bool, field_name: str = "") -> tuple[int, int, int]:
@@ -215,7 +215,7 @@ def gate_metrics(field_name: str, rows: list[dict[str, Any]]) -> dict:
     Field-type aware, matching the systematic-review evaluation literature:
       * list fields (authors/affiliation/country) -> element-level micro F1
         (balances precision & recall; the standard for multi-value extraction);
-      * single-categorical (sector/sub_sector) -> Cohen's kappa (chance-corrected,
+      * single-categorical (sector_name) -> Cohen's kappa (chance-corrected,
         so one bar means the same thing on an 11-class and a 66-class field),
         with raw accuracy reported alongside.
     `metric` is the number compared against `scoring.gate_threshold_for(field)`.

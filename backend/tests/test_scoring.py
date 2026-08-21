@@ -261,13 +261,15 @@ class TestScoreSingleCategorical:
         assert r.outcome == OUTCOME_HALLUCINATION
 
     def test_alternatives_match(self):
-        # Ground truth with pipe-delimited alternatives
-        r = score_field("sub_sector", "Health", "Health|Social protection")
+        # Pipe-delimited alternatives on a SINGLE-valued field mean "any one of
+        # these is acceptable". (sub_sector is multi-valued -- see
+        # test_sub_sector_multilabel -- where a pipe means "all of these".)
+        r = score_field("sector_name", "Health", "Health|Social protection")
         assert r.score == 1.0
         assert r.outcome == OUTCOME_HIT
 
     def test_alternatives_second_match(self):
-        r = score_field("sub_sector", "Social protection", "Health|Social protection")
+        r = score_field("sector_name", "Social protection", "Health|Social protection")
         assert r.score == 1.0
         assert r.outcome == OUTCOME_HIT
 
