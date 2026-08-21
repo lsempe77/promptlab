@@ -41,8 +41,10 @@ Leave `record_id`, `title` and `md_file` untouched — they link your reading ba
 
 - **Multiple values** (`authors`, `author_affiliation`, `author_country`): separate with a
   vertical bar, e.g. `Smith, John | Okonkwo, A. M.`
-- **Single value** (`sector_name`, `sub_sector`): exactly one value, copied from
+- **Single value** (`sector_name`): exactly one value, copied from
   `curator2_taxonomy_options.csv`. Please match the spelling in that file.
+- **`sub_sector`**: one or more values from the options file, separated with a vertical bar, the
+  same as the other multi-value fields. Most papers have exactly one.
 - **Blank cells**: leave a cell empty only if the paper genuinely does not state the information.
   Please do not guess — a guess corrupts the ceiling we are trying to measure. A blank is a
   useful, honest answer.
@@ -97,10 +99,9 @@ spelling in the options file. Three recurring judgement calls:
 **sub_sector** — choose the sub-sector that applies, from within the sector you just chose. The
 `parent_sector` column in the options file shows which sub-sectors belong to which sector.
 
-Note: the protocol allows curators to record **more than one** sub-sector, and about 2% of the
-existing records do. Our pipeline currently stores only one, so **please give a single value**,
-and if a second genuinely applies, mention it in an email. Those notes are valuable — they tell us
-how often the single-value assumption is wrong.
+Record **every** sub-sector that applies, separated with a vertical bar, exactly as the protocol
+directs. Most papers have one. Where a paper genuinely spans two — a school-feeding trial is both
+an education and a nutrition question — record both rather than choosing.
 
 ## When you are done
 
@@ -117,5 +118,5 @@ follow, but adherence varies — the reversed author names are one visible examp
 measures agreement between one careful fresh reading and the database as it stands. That is the
 number we need, but it is not the same as two readers working simultaneously from a clean brief.
 
-Two deliberate departures from the protocol are flagged above: no online name lookup, and a single
-sub-sector. Both exist to keep the comparison with the model fair.
+One deliberate departure from the protocol is flagged above: no online name lookup. It exists to
+keep the comparison with the model fair, since the model cannot browse.
