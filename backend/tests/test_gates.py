@@ -19,10 +19,11 @@ class TestGateLookup:
         assert threshold == scoring.GATE_THRESHOLD
 
     def test_categorical_fields_are_gated_on_kappa(self):
-        for field in ("sector_name", "sub_sector"):
-            metric, threshold = scoring.gate_for(field)
-            assert metric == "kappa"
-            assert threshold == 0.80
+        # sub_sector is deliberately absent: the protocol makes it multi-valued,
+        # so it is gated on F1 like the other list fields.
+        metric, threshold = scoring.gate_for("sector_name")
+        assert metric == "kappa"
+        assert threshold == 0.80
 
     def test_unknown_field_falls_back_to_default(self):
         assert scoring.gate_threshold_for("not_a_field") == scoring.GATE_THRESHOLD
@@ -46,8 +47,9 @@ class TestGateMetricSelection:
         assert gm["metric"] != gm["accuracy"]
 
     def test_perfect_agreement_gives_kappa_one(self):
-        gm = gate_metrics("sub_sector", self._rows([
-            ("Crops", "Crops"), ("Health", "Health"), ("Crops", "Crops"), ("Health", "Health"),
+        gm = gate_metrics("sector_name", self._rows([
+            ("Health", "Health"), ("Education", "Education"),
+            ("Health", "Health"), ("Education", "Education"),
         ]))
         assert gm["metric_name"] == "kappa"
         assert gm["metric"] == pytest.approx(1.0)

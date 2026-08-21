@@ -37,7 +37,7 @@ IMPROVEMENT_EPSILON = DEFAULT_IMPROVEMENT_EPSILON  # backwards-compat alias
 # Per-field minimum improvement thresholds.  List fields (authors,
 # author_affiliation) have high F1 variance on ~35 val records (100 GT records
 # limits the split), so a small epsilon causes false-positive acceptances.
-# Categorical fields (sector_name, sub_sector) can stay at the default.
+# Categorical fields (sector_name) can stay at the default.
 FIELD_IMPROVEMENT_EPSILON: dict[str, float] = {
     "authors": 0.03,
     "author_affiliation": 0.03,

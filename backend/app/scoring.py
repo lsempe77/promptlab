@@ -27,10 +27,11 @@ FUZZY_MATCH_THRESHOLD = 95  # rapidfuzz 0-100 scale
 CORRECT_THRESHOLD = 0.9  # score (0-1) at/above which a run counts as "correct"
 GATE_THRESHOLD = 0.90  # per-(field, model) quality bar for production-readiness. The gated metric is
                        # field-type aware (see analytics.gate_metrics): element-level F1 for the
-                       # list fields (authors/affiliation/country) and record-level accuracy for the
-                       # single-categorical fields (sector/sub_sector), matching the systematic-
-                       # review evaluation literature (F1 for multi-value extraction; accuracy +
-                       # kappa for categorical). Lowered from 0.95 -> 0.90: the human reference
+                       # multi-valued fields (authors/affiliation/country/sub_sector) and
+                       # record-level accuracy for the single-valued ones (sector_name), matching
+                       # the systematic-review evaluation literature (F1 for multi-value
+                       # extraction; accuracy + kappa for categorical). Lowered from 0.95 -> 0.90:
+                       # the human reference
                        # standard is itself noisy (benchmark bias), so 0.95 was chasing label noise;
                        # ~0.90 is a defensible bar (lit. often uses ~0.70-0.90). Per-user thresholds
                        # are a planned enhancement (see ROADMAP.md).
@@ -39,18 +40,19 @@ GATE_THRESHOLD = 0.90  # per-(field, model) quality bar for production-readiness
 # field-type default: element-level F1 @ GATE_THRESHOLD for list fields,
 # record-level accuracy @ GATE_THRESHOLD for single-categorical fields.
 #
-# Why the categorical fields are gated on Cohen's kappa instead of accuracy:
-# raw accuracy is not comparable across fields with different numbers of classes
-# (sector_name has 11 options, sub_sector 66, and sub_sector's options are further
-# narrowed by the known sector). A fixed 0.90 accuracy bar is therefore a much
-# harsher demand on one than the other, for no principled reason. Kappa is
-# chance-corrected, so one bar means the same thing on both. 0.80 is the
+# Why sector_name is gated on Cohen's kappa instead of accuracy: raw accuracy is
+# not comparable across categorical fields with different numbers of classes, so
+# a fixed 0.90 accuracy bar would demand very different amounts of real skill
+# depending only on how many options a field happens to have. Kappa is
+# chance-corrected, so one bar means the same thing regardless. 0.80 is the
 # Landis & Koch boundary between "substantial" and "almost perfect" agreement —
 # an external, pre-existing standard rather than a number picked to fit our
-# current scores (at adoption neither categorical field passes it).
+# current scores (it did not pass at adoption).
+#
+# sub_sector is deliberately absent: the 3ie protocol makes it multi-valued, so
+# it is a list field gated on F1 like the others.
 FIELD_GATE: dict[str, tuple[str, float]] = {
     "sector_name": ("kappa", 0.80),
-    "sub_sector": ("kappa", 0.80),
 }
 
 
@@ -107,8 +109,8 @@ SENSITIVITY_FLOOR = 0.70
 # because those are the common ones — exactly the classes a collapsing model gets right.
 # That would hide the failure this metric exists to catch. So the metric keeps every
 # class, and instead the FLOOR is only enforced once every class is adequately sampled.
-# The practical consequence is a concrete data requirement: gating sub_sector on
-# rare-class coverage needs ~5 examples of each sub-sector, far beyond today's n=100.
+# The practical consequence is a concrete data requirement: gating sector_name on
+# rare-class coverage needs ~5 examples of each sector, beyond today's n=100.
 MIN_CLASS_SUPPORT = 5
 MIN_SUPPORTED_CLASSES = 2  # a macro over 2 classes is balanced accuracy — meaningful
 ABSTENTION_CREDIT = 0.5  # honesty-adjusted credit for an honest abstention (null/empty output)
@@ -256,6 +258,22 @@ def split_alternatives(value: str) -> list[str]:
     return [value]
 
 
+def as_value_list(value: Any) -> list[str]:
+    """Coerce a stored value into the list of values it represents.
+
+    Multi-valued reference data is recorded two ways: as a JSON array, and — for
+    fields that were once modelled as single-valued — as one string with the
+    values joined by '|' ("Primary education | Secondary education"). Without
+    splitting, that whole string is compared as if it were one sub-sector and
+    can never match anything, so a correct two-value answer scores zero.
+    """
+    if isinstance(value, list):
+        return [str(x) for x in value]
+    if value is None or value == "":
+        return []
+    return [p.strip() for p in str(value).split("|") if p.strip()]
+
+
 def verify_excerpt(excerpt: Any, source_text: str | None) -> bool | None:
     """Whether the model's cited `excerpt` actually appears in `source_text` (a
     lightweight fabricated-evidence check). Returns True/False, or None when
@@ -311,8 +329,8 @@ def _score_list(predicted: Any, truth: Any, fuzzy: bool, field_name: str = "") -
     # here).  Applied symmetrically to both sides; unknown values pass through
     # unchanged and fall back to the existing fuzzy/exact logic.
     norm = lambda v: normalize_value(field_name, str(v)) if field_name else str(v)
-    pred_list = [norm(x) for x in predicted] if isinstance(predicted, list) else ([] if not predicted else [norm(predicted)])
-    truth_list = [norm(x) for x in truth] if isinstance(truth, list) else ([] if not truth else [norm(truth)])
+    pred_list = [norm(x) for x in as_value_list(predicted)]
+    truth_list = [norm(x) for x in as_value_list(truth)]
 
     if not truth_list:
         if not pred_list:
