@@ -15,8 +15,9 @@ wrong — it may be doing exactly what a second human would do.
 
 Right now we cannot tell those two situations apart, so every quality target we have set is a
 number borrowed from published convention rather than measured on this evidence base. We have
-already been caught out by this once: a review of 49 records found errors in the recorded values
-that were being counted against the model.
+already been caught out by this: a review of 49 records found errors in the recorded values that
+were being counted against the model, and a separate check found around 190 author names entered
+in the wrong order.
 
 Your independent reading of these 40 papers gives us the missing number — how much two careful
 readers agree on this task. That becomes the realistic ceiling. If the model reaches it, the
@@ -50,24 +51,39 @@ Leave `record_id`, `title` and `md_file` untouched — they link your reading ba
 
 ## What each field means
 
-**authors** — every author, in the order printed. Format `Last name, First name Middle name`
-(e.g. `Sabet, Shayda Mae`). If the paper gives only initials, keep the initials as printed
-(`Miranda, J. M.`). Check for co-authors listed in footnotes, not just the title block.
+These definitions are taken from the **DEP extraction protocol for IE v4 (Admin panel)** — the
+same protocol used to produce the existing records — so that your reading and the database follow
+one standard. Where the protocol assumes the admin panel's dropdowns, the equivalent instruction
+for this spreadsheet is given instead.
 
-**author_affiliation** — the institution each author belongs to, **parent organisation only**.
-Report `Harvard University`, not `Department of Economics, Harvard University`. List each distinct
-institution once, even if several authors share it. Use the full name with any abbreviation in
-brackets, e.g. `International Initiative for Impact Evaluation (3ie)`. Do not invent an
-affiliation that the paper does not state.
+**authors** — enter all authors, one per entry, in the order printed. The format is
+`Last name/s, First name Second name`, e.g. `Sabet, Shayda`, `Sabet, Shayda M.`,
+`Sabet, Shayda Mae`.
 
-**author_country** — the country of each distinct institution. Use standard names
-(`United States`, not `USA`). For an organisation with offices worldwide and no office specified,
-use its headquarters country (`World Bank` → `United States`; `JPAL Africa` → `South Africa`).
-Use `Not specified` rather than guessing.
+The protocol asks you, where a publication gives only initials, to do a cursory online search on
+the name plus paper title to find the full name. **For this exercise, please do not do that** —
+record what the paper prints, e.g. `Miranda, J.` or `Miranda, J. M.`. The model cannot search the
+web, so looking names up would measure your internet access rather than the difficulty of reading
+the paper. This is a deliberate departure from the protocol, and the only one of substance.
 
-**sector_name** — the single World Bank sector that is the **primary** focus. Most papers touch
-several; choose the one most central to the intervention evaluated. Three recurring judgement
-calls:
+Take care with the surname/given-name split: `Ryman, Tove K.`, not `Tove, K. Ryman`. This is the
+single most common error we have found in the existing data.
+
+**author_affiliation** — the institution each author is affiliated with, *as stated in the
+article*. Give the full name with any abbreviation in brackets, e.g.
+`International Initiative for Impact Evaluation (3ie)`. Capture all of them if there are several.
+
+Per the protocol the department, faculty, lab or centre is a **separate** field and is not wanted
+here: record `Harvard University`, not `Department of Economics, Harvard University`. Do not spend
+time looking for an affiliation elsewhere if the paper does not report it — write `Not reported`.
+
+**author_country** — the country in which each author's institution sits, where specified or
+obvious. If an organisation has offices worldwide and no particular office is named, use the
+headquarters country: `JPAL` → `United States`, `JPAL Africa` → `South Africa`. Write
+`Not reported` if the country is not easily determined.
+
+**sector_name** — select the ONE sector that captures the intervention being evaluated. Use the
+spelling in the options file. Three recurring judgement calls:
 
 - *Health vs Social protection* — a deworming campaign is Health; a cash transfer conditional on
   health check-ups is Social protection. The test is whether the core of the intervention is
@@ -78,9 +94,13 @@ calls:
 - *Agriculture vs Industry trade and services* — growing maize is Agriculture; marketing or
   processing maize is Industry trade and services.
 
-**sub_sector** — work in two steps. First decide the sector, then choose a sub-sector **from
-within that sector only**. The `parent_sector` column in the options file shows which sub-sectors
-belong to which sector.
+**sub_sector** — choose the sub-sector that applies, from within the sector you just chose. The
+`parent_sector` column in the options file shows which sub-sectors belong to which sector.
+
+Note: the protocol allows curators to record **more than one** sub-sector, and about 2% of the
+existing records do. Our pipeline currently stores only one, so **please give a single value**,
+and if a second genuinely applies, mention it in an email. Those notes are valuable — they tell us
+how often the single-value assumption is wrong.
 
 ## When you are done
 
@@ -89,10 +109,13 @@ code that scores the models, so the two are directly comparable.
 
 Your individual answers are not being assessed. We are measuring the task, not the reader.
 
-## A limitation we are aware of
+## Limitations we are aware of
 
-The existing values come from the 3ie IER database, accumulated over time rather than produced in
-a single documented extraction pass, and we no longer have the original coding guidance. So this
-exercise measures agreement between a fresh reader working from the definitions above and the
-historical database — not two readers following an identical codebook. That is still the most
-useful number available to us, but it is worth stating plainly when the result is reported.
+The existing values come from the 3ie IER database, accumulated over time by many hands rather
+than produced in a single documented pass. The protocol above is the standard they were meant to
+follow, but adherence varies — the reversed author names are one visible example. So this exercise
+measures agreement between one careful fresh reading and the database as it stands. That is the
+number we need, but it is not the same as two readers working simultaneously from a clean brief.
+
+Two deliberate departures from the protocol are flagged above: no online name lookup, and a single
+sub-sector. Both exist to keep the comparison with the model fair.

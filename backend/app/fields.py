@@ -74,7 +74,7 @@ FIELDS: dict[str, FieldSpec] = {
             "the country of that organization's headquarters (e.g. 'JPAL' alone -> United States; 'JPAL Africa' "
             "-> South Africa; 'World Bank' -> United States). Use standard country names (e.g. 'United States', "
             "not 'USA' or 'US'). If a country cannot be determined from the paper, output "
-            "'Not specified' rather than guessing."
+            "'Not reported' rather than guessing."
         ),
     ),
     "sector_name": FieldSpec(
