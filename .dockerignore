@@ -15,3 +15,18 @@ node_modules/
 dist/
 src/
 public/
+
+# Local working material merged in from the old DEP workspace (2026-08-21).
+# None of it is COPYed by the Dockerfile; excluding it keeps the upload context
+# from growing by ~350MB.
+archive/
+backups/
+double-extraction/
+docs/
+paper/
+*.xlsx
+*.docx
+*.pdf
+*.zip
+.mypy_cache/
+*.db

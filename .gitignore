@@ -51,3 +51,23 @@ gt_fixes_backup_*.json
 test_fields.csv
 # Model-vs-GT disagreement exports (contain author names = PII; local only)
 analysis_disagreements/
+
+# Local working material merged in from the old DEP workspace (2026-08-21).
+# Kept on disk, deliberately out of git: large binaries and source data that
+# would bloat the repo and the Docker build context.
+*.xlsx
+*.docx
+*.pdf
+*.zip
+archive/
+backups/
+# Curator hand-off packs: contain full paper text + author names (PII).
+double-extraction/
+backend/data/curator2_*
+
+# OneDrive folder-metadata junk
+desktop.ini
+**/desktop.ini
+# Quarto render output — regenerable from the .md/.qmd sources beside it
+docs/*_files/
+docs/*.html
