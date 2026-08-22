@@ -40,13 +40,25 @@ output and Fly API integration are the next engineering tasks for this branch.
 
 ## Evaluation metrics & the quality gate
 
+> **Standing caveat — every threshold below is a borrowed constant, not a measurement of this
+> corpus.** F1 ≥ 0.90, κ ≥ 0.80 and sensitivity ≥ 0.70 come from the systematic-review literature.
+> The project's premise is "extract as well as a person", which makes the correct reference *human
+> inter-rater agreement*, and nobody has measured it here. Our ground truth is one reading, from a
+> database accumulated by many hands; cleaning 49 records lifted every model on every field, and a
+> separate check found ~190 author names entered surname-first. So a model "failing" by 0.01 may
+> simply be disagreeing the way a second curator would.
+>
+> The blind double-extraction pack (`backend/scripts/sample_double_extraction.py` →
+> `human_agreement.py`) exists to produce that missing number. **Until it lands, do not defend any
+> specific threshold as correct** — say it is provisional, because it is.
+
 **Done (2026-07-06):** the production gate is now field-type-aware and matches the
 systematic-review evaluation literature (F1 for multi-value extraction; accuracy + kappa for
 categorical):
 
-- **List fields** (`authors`, `author_affiliation`, `author_country`) gate on **element-level F1**
-  (balances precision & recall).
-- **Single-categorical fields** (`sector_name`, `sub_sector`) gate on **Cohen's κ** (chance-corrected),
+- **List fields** (`authors`, `author_affiliation`, `author_country`, and `sub_sector` since
+  2026-08-21) gate on **element-level F1** (balances precision & recall).
+- **Single-categorical fields** (`sector_name`) gate on **Cohen's κ** (chance-corrected),
   with raw accuracy reported alongside — see "Done (2026-08-20)" below.
 - **LLM-judged accuracy** is kept as a reported *concordance* companion, not the gate.
 - Threshold lowered **0.95 → 0.90** (the human reference standard is itself noisy — "benchmark
@@ -146,6 +158,52 @@ curator-decided review CSVs (`keep` / `accept` / `edit: X`) and applies them to 
 a reversible `gt_audit_log` table + a timestamped JSON backup (dry-run by default; `--apply` to
 write). Used it to land the 49-fix cleanup on `sector_name`/`sub_sector`/`author_affiliation`. Still
 to build: the scheduled read-only audit run + emailed diff + signed one-click approval trigger.
+
+## Decided (2026-08-22) — `sub_sector` is multi-valued in the DATA MODEL, single-valued in the PROMPT
+
+Two separate decisions that are easy to conflate, so they are recorded together.
+
+**The data model is multi-valued, and that is settled.** The 3ie extraction protocol says "Select all
+sub-sectors that apply... Multiple answers, as necessary", and 183 of 7,617 master records carry two
+or more. `sub_sector` is therefore `list_categorical`, scored on element-level F1, with
+`scoring.as_value_list` splitting the pipe-joined form the reference data uses. Keep this.
+
+**The production prompt still asks for a single value, deliberately.** A one-variable A/B (kimi-k3,
+80 targeted records, identical wording except cardinality) measured:
+
+| ground truth | "the single..." | "every... that applies" | delta |
+|---|---|---|---|
+| multi-valued (n=36) | F1 0.422 | 0.645 | **+0.223** |
+| single-valued (n=38) | F1 0.684 | 0.617 | **−0.067** |
+
+The capability is real where it applies — and precision rose (+0.145), so it is not merely "emit more
+values". But the test sample was deliberately enriched to 49% multi-valued, whereas the corpus is
+**2.4%**. Weighted to true prevalence:
+
+```
+0.024 × (+0.223)  +  0.976 × (−0.067)  =  −0.060 F1
+```
+
+So a blanket multi-value instruction is **net negative in production**: the gain reaches 1 record in
+40, the precision cost reaches the other 39.
+
+- *Methodological warning worth keeping:* the unweighted "overall" figure for that experiment was
+  **+0.104**, which points to the opposite conclusion. Any evaluation run on a deliberately enriched
+  sample must be reweighted to true prevalence before it is used to decide anything.
+- *Confidence:* 36/38 records per cell. The −0.067 single-value penalty is the less certain half and
+  it is the half driving the negative verdict — worth a larger control arm before treating it as final.
+- *Next lever, untested:* wording that permits a second value only under a strong condition, or
+  routing by predicted sector, rather than an unconditional invitation.
+
+**Related trap (cost us a wasted run):** editing a field description in `fields.py` does NOT change
+what production extracts. `run_extraction` sends the stored `prompt_versions.template`;
+`BASELINE_INSTRUCTIONS` is read once, to create v1. Use
+`python -m backend.scripts.set_manual_prompt --field <f>` to install a changed instruction. A new
+prompt version also defeats the incremental skip, so re-extraction actually re-runs.
+
+**Unexplained, watch for it:** a prompt version installed as accepted was later observed with
+`accepted=0`, with no optimizer run. Only `optimizer.py` demotes prompts. It happened to protect
+production, but a silently changing acceptance flag is dangerous in either direction.
 
 ## Prompt optimization — research grounding & the exemplar gap
 
