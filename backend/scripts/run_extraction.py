@@ -104,6 +104,10 @@ def main() -> None:
     ap.add_argument("--project", default="dep-extraction", help="project slug (see backend/app/projects.py)")
     ap.add_argument("--field", required=True, choices=list(prompts.BASELINE_INSTRUCTIONS.keys()))
     ap.add_argument("--n", type=int, default=50, help="number of records to sample (capped at %d)" % config.MAX_PRODUCTION_RECORDS)
+    ap.add_argument("--record-ids", type=str, default=None,
+                    help="comma-separated record ids to run INSTEAD of a random sample. For "
+                         "evaluating a specific subset (e.g. the records whose ground truth has "
+                         "several values) where a random draw would not reliably include them.")
     ap.add_argument("--models", type=str, default=None, help="comma-separated OpenRouter model ids")
     ap.add_argument("--tiers", type=str, default=None, help="comma-separated model tiers from models.yaml")
     ap.add_argument("--seed", type=int, default=SEED)
@@ -125,14 +129,25 @@ def main() -> None:
         args.n = config.MAX_PRODUCTION_RECORDS
 
     models = select_models(args)
+    wanted_ids: set[int] | None = None
+    if args.record_ids:
+        wanted_ids = {int(x) for x in args.record_ids.split(",") if x.strip()}
     with db.get_conn() as conn:
         project_id = db.get_project_id(conn, args.project)
         records = db.get_records_with_field(conn, project_id, args.field)
+        if wanted_ids is not None:
+            records = [r for r in records if r["id"] in wanted_ids]
+            missing = wanted_ids - {r["id"] for r in records}
+            if missing:
+                print(f"  [warn] {len(missing)} requested record(s) have no ground truth for "
+                      f"{args.field} and were skipped: {sorted(missing)[:10]}")
         # For sub_sector: re-order records so those that already have a
         # sector_name extraction for the target model come first.  This lets
         # the context-narrowing kick in immediately (66 options → ~8) instead
         # of running sub_sector blindly on records where no sector_name exists.
-        if args.field == "sub_sector":
+        # An explicit --record-ids set is already the intended sample, so this
+        # context prefilter must not silently drop any of it.
+        if args.field == "sub_sector" and wanted_ids is None:
             # For sub_sector: filter to ONLY records that already have a
             # sector_name extraction for at least one target model.  This
             # guarantees the context-narrowing (66 → ~8 options) applies to
@@ -180,8 +195,9 @@ def main() -> None:
         print(f"No ground-truth records found for field={args.field}. Run build_ground_truth first.")
         return
 
-    random.Random(args.seed).shuffle(records)
-    records = records[: args.n]
+    if wanted_ids is None:
+        random.Random(args.seed).shuffle(records)
+        records = records[: args.n]
     batch_id = uuid.uuid4().hex[:8]
 
     ver_summary = ", ".join(f"{m.split('/')[-1]}=v{model_pv[m]['version']}" for m in models)
